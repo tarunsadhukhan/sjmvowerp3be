@@ -1,65 +1,25 @@
-# src/main.py
+from fastapi import FastAPI, Request
+from src.common.routers import router as common_router  # ✅ Absolute import
+from src.hrms.routers import router as hrms_router  # ✅ Absolute import
+from src.common.master import router as master_router  # ✅ Absolute import
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from fastapi import FastAPI
-from .database import Base, engine  # We'll create these soon
+app = FastAPI(title="Vowerp3b API")
 
-# For demonstration, ensure that our models are recognized so SQLAlchemy can create tables
-# If you have models in models.py, import them here
-from . import models
-
-app = FastAPI()
-
-# # Create database tables at startup (only for local dev/test usage)
-# @app.on_event("startup")
-# def on_startup():
-#     Base.metadata.create_all(bind=engine)
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to our FastAPI application!"}
-
-@app.get("/health")
-def read_health():
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
     try:
-        with engine.connect() as connection:
-            connection.execute("SELECT 1")
-        return {"status": "ok", "database": "connected"}
-    except Exception:
-        return {"status": "error", "database": "not connected"}
-
-@app.get("/debug-database-url")
-def debug_database_url():
-    from .database import SQLALCHEMY_DATABASE_URL
-    return {"database_url": SQLALCHEMY_DATABASE_URL}
-
-# main.py
-
-from fastapi import FastAPI
-from .database import Base, engine, test_db_connection
-
-app = FastAPI()
-
-@app.on_event("startup")
-def on_startup():
-    # Optional: create tables if needed (for development/testing)
-    Base.metadata.create_all(bind=engine)
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to our FastAPI application!"}
-
-@app.get("/testdbconnection")
-def test_db_connection_route():
-    result = test_db_connection()
-    if result["success"]:
-        return {"message": "DB connection is successful."}
-    else:
-        return {
-            "message": "DB connection failed.",
-            "reason": result["error"]
-        }
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        print(f"Global API Error: {e}")
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
 
 
-# @app.get("/items/{item_id}")
-# def read_item(item_id: int):
-#     return {"item_id": item_id, "description": "An example item."}
+app.include_router(common_router, prefix="/api/common", tags=["Common"])
+app.include_router(hrms_router, prefix="/api/hrms", tags=["HRMS"])
+app.include_router(master_router, prefix="/api/master", tags=["Master"])
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)

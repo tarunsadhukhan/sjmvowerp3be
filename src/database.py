@@ -1,22 +1,21 @@
-# database.py
-
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
 import os
+from dotenv import load_dotenv
 
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:password@localhost:3306/mydb")
+load_dotenv()
 
-engine = create_engine(DATABASE_URL, echo=False)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is not set")
+
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+metadata = MetaData()
 
-def test_db_connection():
+def get_db():
+    db = SessionLocal()
     try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-        return {"success": True, "error": None}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
+        yield db
+    finally:
+        db.close()
