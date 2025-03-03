@@ -3,21 +3,20 @@ name: Deploy
 on:
   pull_request:
     branches:
-      - dev
       - main
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}                  # set this to your preferred AWS region, e.g. us-west-1
-  ECR_REPOSITORY: my-next-app-dev           # set this to your Amazon ECR repository name
-  ECS_SERVICE: vowerp3ui-dev-service                 # set this to your Amazon ECS service name
+  ECR_REPOSITORY: my-next-app-main          # set this to your Amazon ECR repository name
+  ECS_SERVICE: vowerp3ui-main-service                 # set this to your Amazon ECS service name
   ECS_CLUSTER: default                 # set this to your Amazon ECS cluster name
   ECS_TASK_DEFINITION: .aws/task-definition.json # set this to the path to your Amazon ECS task definition
                                                # file, e.g. .aws/task-definition.json
-  CONTAINER_NAME: vowerp3ui-dev 
+  CONTAINER_NAME: vowerp3ui-main 
 
 jobs:
   test-and-deploy-dev:
-    if: github.ref == 'refs/heads/dev' || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
