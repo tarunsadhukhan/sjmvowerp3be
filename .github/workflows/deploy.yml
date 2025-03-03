@@ -53,8 +53,8 @@ jobs:
 
       - name: Push image to Amazon ECR
         run: |
-          docker tag vowerp3be:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be:latest
+          docker tag vowerp3be-main:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:latest
 
 #update task definition
       - name: Update ECS Task Definition
