@@ -1,0 +1,66 @@
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
+from fastapi import HTTPException
+from typing import Optional
+from datetime import datetime
+
+def create_response(data=None, master=None, message="Success", status="success"):
+    """
+    Standardized API response format.
+    
+    Example Responses:
+    - create_response(data=some_data) -> { "data": [...] }
+    - create_response(data=some_data, master=some_master_data) -> { "data": [...], "master": [...] }
+    
+    """
+    response = {"data": data if data else []}  # ✅ Ensures 'data' is always a list
+    if master is not None:
+        response["master"] = master  # ✅ Adds 'master' only if provided
+    return response
+
+
+
+
+def execute_query(db: Session, query: str, params: dict = None, commit: bool = False):
+    """
+    Executes a SQL query safely with parameter binding.
+    
+    - `db`: Database session
+    - `query`: SQL query (use parameterized queries)
+    - `params`: Dictionary of parameters for query execution
+    - `commit`: If `True`, commits the transaction (for INSERT/UPDATE/DELETE)
+
+    Returns:
+    - Query result (list of dicts for SELECT)
+    - None for INSERT/UPDATE/DELETE
+    """
+    try:
+        result = db.execute(text(query), params or {}).mappings().all()
+        
+        if commit:
+            db.commit()
+
+        return result
+    except Exception as e:
+        db.rollback()  # Rollback in case of failure
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+ 
+
+def validate_headers(authorization: Optional[str], xtenantid: Optional[str]):
+    """
+    Validates Authorization and X_TENANT_ID headers.
+    Raises HTTP 400/401 if missing.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid or missing Authorization header")
+    if not xtenantid:
+        raise HTTPException(status_code=400, detail="Missing X_TENANT_ID header")
+
+
+
+def get_current_timestamp():
+    """
+    Returns the current timestamp in 'YYYY-MM-DD HH:MM:SS' format.
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
