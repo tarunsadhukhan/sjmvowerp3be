@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException,Request
+#from fastapi import Column, Integer, String, Text, DateTime, Boolean, JSON
 import json
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
@@ -6,6 +7,7 @@ from src.database import get_db
 from src.common.schemas import CountrySchema,StateSchema,CountryResponseSchema,ModuleSchema
 from src.common.schemas import ModuleResponseSchema,StateResponseSchema,ContactFormSchema
 from src.common.utils import execute_query, create_response
+from src.common.models import ConOrgMaster
 import logging
 router = APIRouter()
 
@@ -63,7 +65,7 @@ def submit_contact_form(form: ContactFormSchema, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error submitting form: {str(e)}")
   
     
-@router.post("/savecontactform")
+@router.post("/savecontactform_1")
 async def submit_contact_form(request: Request, db: Session = Depends(get_db)):
     """
     Receives form submission from frontend and saves it to the database.
@@ -115,4 +117,43 @@ async def submit_contact_form(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()  # ✅ Rollback in case of an error
         logger.error(f"🚨 Database Error: {e}")  # ✅ Log error
+        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
+    
+    
+    
+    
+@router.post("/savecontactform")
+async def submit_contact_form(form_data: ContactFormSchema, db: Session = Depends(get_db)):
+    """
+    Receives form submission from frontend and saves it to the database using ORM.
+    """
+    try:
+        # ✅ Convert input to ORM model
+        new_contact = ConOrgMaster(
+            con_org_name=form_data.name,
+            con_org_address=form_data.address,
+            con_org_pincode=form_data.pincode,
+            con_org_state_id=form_data.state,
+            con_org_country_id=form_data.country,
+            con_org_email_id=form_data.email,
+            con_org_mobile=form_data.mobile,
+            con_org_contact_person=form_data.contactPerson,
+            con_org_shortname=form_data.orgshrname,
+            con_org_remarks=form_data.message,
+            active=1,
+            con_org_master_status=1,
+            con_modules_selected=form_data.modules,  # ✅ Store as JSON
+            custom_modules=form_data.custommodules,
+        )
+
+        db.add(new_contact)  # ✅ Add to DB session
+        db.commit()  # ✅ Commit changes
+        db.refresh(new_contact)  # ✅ Refresh to get the saved record
+
+        logger.info(f"✅ Form submitted successfully: {new_contact.id}")
+        return {"message": "Form submitted successfully!", "id": new_contact.id}
+
+    except Exception as e:
+        db.rollback()  # ✅ Rollback in case of an error
+        logger.error(f"🚨 Database Error: {e}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")

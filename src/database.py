@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine, MetaData
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 from dotenv import load_dotenv
 
@@ -21,8 +21,9 @@ else:  # Only execute if the 'try' block completes without errors
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     metadata = MetaData()
 
-
-    def get_db():
+    Base = declarative_base()
+    
+    def get_db():   
         db = SessionLocal()
         try:
             yield db
