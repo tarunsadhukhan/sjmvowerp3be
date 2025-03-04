@@ -20,7 +20,6 @@ except Exception as e:
 else:  # Only execute if the 'try' block completes without errors
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     metadata = MetaData()
-
     Base = declarative_base()
     
     def get_db():   
