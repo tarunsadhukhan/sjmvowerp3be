@@ -1,96 +1,82 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy.sql import text
-from src.database import get_db
-from src.common.schemas import CountrySchema,StateSchema,CountryResponseSchema,StateResponseSchema
-from src.common.utils import execute_query, create_response
+from fastapi import APIRouter, Request, HTTPException
+from sqlmodel import select, Session
+from src.db import get_db_names
+from src.common.models import Academic_years ,DailyDrawingTransaction,MachineMaster
+
 router = APIRouter()
 
-# ✅ Fetch All Countries API
-
- 
-
-@router.get("/countries",response_model=CountryResponseSchema)
-def get_countries(db: Session = Depends(get_db)):
+@router.get("/fetch_joined_data")
+def fetch_joined_data(request: Request):
     """
-    Fetch all countries.
+    Dynamically fetches academic_years data from the assigned database.
     """
     try:
-        query = "SELECT country_id, country_name FROM con_country_master"
-        #countries = db.execute(text(query)).mappings().all()
-        #return create_response(data=countries)  # ✅ Standardized response
-    
-        countries = execute_query(db, query)
-        return {"data": countries}
+        # Get dynamically assigned database engines
+        db_engines = get_db_names(request)
+        db1_engine = db_engines.get("db1")  # Select first dynamic database (vowsls3)
+        
+        if not db1_engine:
+            raise HTTPException(status_code=500, detail="Database 'db1' not found")
+
+        # Create a session for db1 (vowsls3)
+        with Session(db1_engine) as session:
+            query = select(Academic_years)  # ORM Query
+            print("Executing Query on db1.academic_years:", query)
+
+            result = session.exec(query)
+            data = result.all()  # Fetch all records
+
+        return {"data": data}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-    
-# ✅ Fetch All States API
-@router.get("/states", response_model=StateResponseSchema)
-def get_states(
-    db: Session = Depends(get_db),
-    country_id: int = Query(None, description="Filter by Country ID")
-):
-    
-    try:
-        query = """SELECT state_id, state_name FROM 
-        con_state_master WHERE 1=1"""
-        
-        params = {}
-
-        # ✅ Dynamically build the query based on provided filters
-        if country_id is not None:
-            query += " AND country_id = :country_id"
-            params["country_id"] = country_id
-        
-        print('query',query,params)
-       
-        
-
-       
-        states = execute_query(db, query,params)
-        print('states',states)
-        return {"data": states}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-@router.get("/countries1", response_model=list[CountrySchema])
-def get_states(
-    db: Session = Depends(get_db),
-    country_id: int = Query(None, description="Filter by Country ID")
-):
+@router.get("/fetch_joined_datas")
+def fetch_joined_data(request: Request):
     """
-    Fetch states based on multiple optional query parameters:
-    - country_id: Filter by country ID
-    - is_active: Filter by active/inactive states
-    - status: Filter by state status (e.g., "approved", "pending")
+    Fetches data from `db1.daily_drawing_transaction` and `db2.machine_master` 
+    with a filter for `tran_date = '2025-02-28'`.
     """
     try:
-        query = (
-            "SELECT  country_id,country_name "
-            "FROM con_country_master WHERE 1=1"
-        )
-        params = {}
+        # Get dynamically assigned database engines
+        db_engines = get_db_names(request)
+        db1_engine = db_engines.get("db1")  # First database (vowsls3)
+        db2_engine = db_engines.get("db2")  # Second database
 
-        # ✅ Dynamically build the query based on provided filters
-        if country_id is not None:
-            query += " AND country_id = :country_id"
-            params["country_id"] = country_id
-        
-      
-        # ✅ Execute query with safe parameter binding
-        #result = db.execute(text(query), params).fetchall()
-        
+        if not db1_engine or not db2_engine:
+            raise HTTPException(status_code=500, detail="Databases 'db1' or 'db2' not found")
 
-        # ✅ Convert result into JSON-compatible format
-        #states = [{"state_id": row[0], "state_name": row[1], "country_id": row[2], "state_code": row[3]} for row in result]
+        # Query data from `db1.daily_drawing_transaction` with date filter
+        with Session(db2_engine) as session_db2:
+            query_db2 = select(DailyDrawingTransaction).where(DailyDrawingTransaction.tran_date == "2025-02-28")
+            print("Executing Query on db1.daily_drawing_transaction:", query_db2)
+            result_db2 = session_db2.exec(query_db2)
+            data_db2 = result_db2.all()  # Fetch filtered records
 
-        #countries = db.execute(text(query), params).mappings().all()
-        
-        #return create_response(data:countries)
+        # Query data from `db2.machine_master`
+        with Session(db1_engine) as session_db1:
+            query_db1 = select(MachineMaster)
+            print("Executing Query on db2.machine_master:", query_db1)
+            result_db1 = session_db1.exec(query_db1)
+            data_db1 = result_db1.all()  # Fetch all records
+
+        # Convert machine master data into a lookup dictionary
+        machine_dict = {mm.mechine_id: mm for mm in data_db1}
+
+        # Perform a manual LEFT JOIN in Python
+        joined_data = []
+        for ddt in data_db2:
+            machine_data = machine_dict.get(ddt.drg_mc_id)  # Match drg_mc_id with mechine_id
+            joined_data.append({
+                "tran_date": ddt.tran_date,
+                "spell": ddt.spell,
+                "drg_mc_id": ddt.drg_mc_id,
+                "diff_meter": ddt.diff_meter,
+                "mech_code": machine_data.mech_code if machine_data else None,
+                "mechine_name": machine_data.mechine_name if machine_data else None,
+            })
+
+        return {"data": joined_data}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

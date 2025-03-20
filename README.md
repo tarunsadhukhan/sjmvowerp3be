@@ -24,3 +24,6 @@ docker run --rm -it vowerp3be-docker pytest
 Alternatively, you can use a command in your Dockerfile or Docker Compose to handle tests, but the simplest approach is to run a container that executes pytest.
 
 
+
+
+using db.py against database.py for sqlmodel
