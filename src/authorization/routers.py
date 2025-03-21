@@ -1,7 +1,6 @@
-#routers.py
-from fastapi import APIRouter, Request,  Form, Header,HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from src.authorization.auth import login_user,login_user_console # ✅ Correct import
-from pydantic import BaseModel
+
 
 from src.authorization.models import LoginRequest
 common_router = APIRouter()
