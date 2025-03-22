@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from sqlmodel import select, Session
-from src.db import get_db_names
+from src.config.db import get_db_names
 from src.common.models import Academic_years ,DailyDrawingTransaction,MachineMaster
 
 router = APIRouter()

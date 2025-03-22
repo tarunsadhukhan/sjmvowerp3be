@@ -6,7 +6,7 @@ import os
 from fastapi import Depends, Query, Request, HTTPException,APIRouter, Header
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
-from src.db import get_db_names,default_engine
+from src.config.db import get_db_names,default_engine
 from src.authorization.auth import verify_token
 from collections import defaultdict
 

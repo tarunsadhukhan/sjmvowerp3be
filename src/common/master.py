@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException,Request
 import json
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
-from src.database import get_db
+from src.config.database import get_db
 from src.common.schemas import CountrySchema,StateSchema,CountryResponseSchema,ModuleSchema
 from src.common.schemas import ModuleResponseSchema,StateResponseSchema,ContactFormSchema
 from src.common.utils import execute_query, create_response

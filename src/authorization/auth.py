@@ -5,7 +5,7 @@ import jwt
 import os
 from fastapi import Depends, Request, HTTPException
 from sqlalchemy.sql import text
-from src.db import get_db_names,default_engine  # ✅ Ensure correct import
+from src.config.db import get_db_names,default_engine  # ✅ Ensure correct import
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Password Hashing

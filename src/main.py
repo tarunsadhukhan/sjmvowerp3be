@@ -8,22 +8,16 @@ from src.authorization.routers import common_router as auth_router
 #from src.hrms.routers import router as hrms_router  # ✅ Absolute import
 #from src.common.master import router as master_router  # ✅ Absolute import
 from src.common.companydata import router as company_router
+from src.config.cors import add_cors_middleware  # Import CORS configuration
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
-
 
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Vowerp3b API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # ✅ Allows requests from any frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],  # ✅ Allows all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],  # ✅ Allows all headers
-)
+# Add CORS middleware
+add_cors_middleware(app)
 
 @app.middleware("http")
 async def catch_exceptions_middleware(request: Request, call_next):
@@ -52,9 +46,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application is shutting down...")
-
-
-
 
 if __name__ == "__main__":
     import uvicorn
