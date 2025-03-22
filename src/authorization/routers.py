@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Header  # Add Header to the imports
+from src.authorization.auth import decode_access_token  # ✅ Import decode_access_token
 from src.authorization.auth import login_user,login_user_console # ✅ Correct import
 
 
@@ -43,12 +44,12 @@ def login(request: Request, login_data: LoginRequest):
 
 
 
-@common_router.get("/protected")
-def protected_route(request: Request, authorization: str = Header(None)):
-    """Protected Route"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
+# @common_router.get("/protected")
+# def protected_route(request: Request, authorization: str = Header(None)):
+#     """Protected Route"""
+#     if not authorization or not authorization.startswith("Bearer "):
+#         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
-    token = authorization.split(" ")[1]
-    username = decode_access_token(token)
-    return {"message": f"Hello, {username}"}
+#     token = authorization.split(" ")[1]
+#     # username = decode_access_token(token)
+#     return {"message": f"Hello, {username}"}
