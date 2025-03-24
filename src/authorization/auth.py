@@ -247,4 +247,18 @@ def login_user_console (
         "user_id": user_id
     }
         
-   
+def decode_access_token(token: str) -> str:
+        # Example implementation
+        # Decode the token and return the username or relevant data
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid token: Missing username")
+        return username
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+# Removed invalid return statement outside of a function
+    

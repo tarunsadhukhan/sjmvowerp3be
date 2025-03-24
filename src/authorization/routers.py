@@ -44,12 +44,12 @@ def login(request: Request, login_data: LoginRequest):
 
 
 
-# @common_router.get("/protected")
-# def protected_route(request: Request, authorization: str = Header(None)):
-#     """Protected Route"""
-#     if not authorization or not authorization.startswith("Bearer "):
-#         raise HTTPException(status_code=401, detail="Missing or invalid token")
+@common_router.get("/protected")
+def protected_route(request: Request, authorization: str = Header(None)):
+    """Protected Route"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
 
-#     token = authorization.split(" ")[1]
-#     # username = decode_access_token(token)
-#     return {"message": f"Hello, {username}"}
+    token = authorization.split(" ")[1]
+    username = decode_access_token(token)  # Decode the token to get the username
+    return {"message": f"Hello, {username}"}
