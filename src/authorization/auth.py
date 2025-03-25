@@ -1,12 +1,13 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import Session, select
 from passlib.context import CryptContext
 import jwt
 import os
-from fastapi import Depends, Request, HTTPException
+from fastapi import Depends, Request, HTTPException, Response  # ✅ Import Response
 from sqlalchemy.sql import text
 from src.config.db import get_db_names,default_engine  # ✅ Ensure correct import
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse  # ✅ Import JSONResponse
 
 # Password Hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -38,13 +39,23 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
  
+
+def create_refresh_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(days=30)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 
 
@@ -154,98 +165,117 @@ def login_user(
         token = create_access_token({"user_id": user.con_user_id})
 
         user_id=user.con_user_id
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "status_code": 200,  # Success
-        "message": "Login successful",
-        "user_id": user_id
-    }
+
+    response = Response(
+        content="Login successful",
+        status_code=200  # Success
+    )
+    response.set_cookie(key="access_token", value=token, httponly=True, secure=True)
+    return response
         
-   
 
 
-def login_user_console (
+def login_user_console(
     request: Request,
     username: str,
     password: str,
     logintype: str,
     subdomain: str,
-    #dbs: dict = Depends(get_db_names),  # ✅ Ensure `Depends` is resolved correctly
 ):
-    """Login logic - Queries usertable where user_name, password, and mainurl (subdomain) match"""
-  
+    """Login logic - Queries user table where username, password, and subdomain match"""
 
-    db_data = get_db_names(request)  # ✅ Fetch the full dictionary
-    print('DEBUG: db_data =', db_data)  # ✅ Print full response for debugging
+    # 1. Get database connections
+    db_data = get_db_names(request)
+    print('DEBUG: db_data =', db_data)
 
-    dbs = db_data["db_engines"]  # ✅ Extract database engines
-    dbn = db_data["db_names_array"]  # ✅ Extract database names
+    dbs = db_data["db_engines"]
+    dbn = db_data["db_names_array"]
 
-    print("DEBUG: db_engines =", dbs)  # ✅ Debugging
-    print("DEBUG: db_names_array =", dbn)  # ✅ Debugging
+    print("DEBUG: db_engines =", dbs)
+    print("DEBUG: db_names_array =", dbn)
 
-    # ✅ Assign dynamic variables based on available database names
     dbfl1 = dbn[0] if len(dbn) > 0 else None
     dbfl2 = dbn[1] if len(dbn) > 1 else None
 
-    print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")  # ✅ Debugging
-    print(request)
-    
-    
- 
-    
-    print('2nd ',request)
-    if "default" not in dbs:
-        return {
-            "access_token": "",
-            "token_type": "",
-            "status_code": 500,  # Internal Server Error
-            "message": "Database connection failed: Default database missing"
-        }
-        
-        
-      
-        #raise HTTPException(status_code=400, detail="Invalid subdomain")
-    
-    
-   
-    #engine = create_engine(dbs["default"])
-    with Session(default_engine) as session:
-        query = text("""select * from vowconsole3.con_user_master cum
-        	where con_user_login_email_id = :username and cum.con_user_id =1
-        	and cum.con_user_type =0
-        """)
-        print('querr', query)
-        user = session.execute(query, { "username": username}).fetchone()
-        print('queruserr', query, user)
+    print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")
 
-        if not user or not verify_password(password, user.con_user_login_password):
-            return {
+    # 2. Check for default DB
+    if "default" not in dbs:
+        return JSONResponse(
+            content={
                 "access_token": "",
                 "token_type": "",
-                "status_code": 401,  # Unauthorized
-                "message": "Invalid username or password"
-            }
-        
-        
-        print('ff', user.con_user_login_password)
+                "status": 500,
+                "message": "Database connection failed: Default database missing",
+            },
+            status_code=500,
+        )
 
-        if not verify_password(password, user.con_user_login_password):
-            raise HTTPException(status_code=401, detail="Invalid username or credentials")
+    # 3. Authenticate user
+    with Session(default_engine) as session:
+        query = text("""
+            SELECT * FROM vowconsole3.con_user_master cum
+            WHERE con_user_login_email_id = :username 
+              AND cum.con_user_id = 1
+              AND cum.con_user_type = 0
+        """)
+        print('Query:', query)
 
-        #token = create_access_token({"sub": username})
-        #token = create_access_token({"sub": username, "user_id": user.con_user_id})
+        user = session.execute(query, {"username": username}).fetchone()
+        print('User result:', user)
+
+        if not user or not verify_password(password, user.con_user_login_password):
+            return JSONResponse(
+                content={
+                    "access_token": "",
+                    "token_type": "",
+                    "status": 401,
+                    "message": "Invalid username or password",
+                },
+                status_code=401,
+            )
+
+        # 4. Create tokens
         token = create_access_token({"user_id": user.con_user_id})
+        refresh_token = create_refresh_token({"user_id": user.con_user_id})
 
-        user_id=user.con_user_id
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "status_code": 200,  # Success
-        "message": "Login successful",
-        "user_id": user_id
-    }
+        # 5. Update refresh token in DB
+        try:
+            query = text("""
+                UPDATE vowconsole3.con_user_master 
+                SET refresh_token = :refresh_token 
+                WHERE con_user_login_email_id = :username
+            """)
+            session.execute(query, {
+                "username": username,
+                "refresh_token": refresh_token
+            })
+            session.commit()
+            print('Refresh token updated for:', username)
+        except Exception as e:
+            print('Error updating refresh token:', str(e))
+            raise HTTPException(status_code=500, detail="Failed to update refresh token")
+
+    # 6. Send cookie with response
+    response = JSONResponse(
+        content={
+            "message": "Login successful",
+            "status": 200,
+        },
+        status_code=200
+    )
+
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=False,        # True in prod (HTTPS)
+        samesite="lax",      # Use 'none' if needed and secure=True
+        path="/",
+        domain=".localhost"   # Required for admin.localhost subdomain
+    )
+
+    return response  # Ensure this is inside the appropriate function
         
 def decode_access_token(token: str) -> str:
         # Example implementation
@@ -261,4 +291,4 @@ def decode_access_token(token: str) -> str:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 # Removed invalid return statement outside of a function
-    
+

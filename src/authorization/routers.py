@@ -53,3 +53,9 @@ def protected_route(request: Request, authorization: str = Header(None)):
     token = authorization.split(" ")[1]
     username = decode_access_token(token)  # Decode the token to get the username
     return {"message": f"Hello, {username}"}
+
+@common_router.get("/verify-session")
+async def verify_session(request: Request):
+    access_token = request.cookies.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail="No access token")
