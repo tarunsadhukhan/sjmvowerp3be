@@ -7,7 +7,7 @@ from fastapi import Depends, Query, Request, HTTPException,APIRouter, Header
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
 from src.config.db import get_db_names,default_engine
-from src.authorization.auth import verify_token
+from src.authorization.utils import verify_token
 from collections import defaultdict
 
 router = APIRouter()

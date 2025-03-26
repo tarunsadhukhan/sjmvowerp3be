@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, HTTPException, Header  # Add Header to the imports
-from src.authorization.auth import decode_access_token  # ✅ Import decode_access_token
+from src.authorization.utils import decode_access_token  # ✅ Import decode_access_token
 from src.authorization.auth import login_user,login_user_console # ✅ Correct import
 
 
