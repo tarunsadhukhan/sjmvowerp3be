@@ -262,8 +262,7 @@ def login_user_console(
             "message": "Login successful",
             "status": 200,
             "access_token": token,
-            "refresh_token": refresh_token,
-        },
+                    },
         status_code=200
     )
 
