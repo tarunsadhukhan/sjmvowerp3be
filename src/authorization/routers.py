@@ -57,5 +57,18 @@ def protected_route(request: Request, authorization: str = Header(None)):
 @common_router.get("/verify-session")
 async def verify_session(request: Request):
     access_token = request.cookies.get("access_token")
+    print("Headers:", request.headers)
+
+    # View cookies
+    print("Cookies:", request.cookies)
+
+    # Optional: read specific cookie
+    access_token = request.cookies.get("access_token")
+    print("Access Token:", access_token)
     if not access_token:
         raise HTTPException(status_code=401, detail="No access token")
+    return {
+        "ok": True,
+        "message": "Session is valid",
+        "token": access_token  # Optional, only for debug—not recommended in prod
+    }
