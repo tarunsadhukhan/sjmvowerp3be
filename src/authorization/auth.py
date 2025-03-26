@@ -261,6 +261,8 @@ def login_user_console(
         content={
             "message": "Login successful",
             "status": 200,
+            "access_token": token,
+            "refresh_token": refresh_token,
         },
         status_code=200
     )
@@ -268,11 +270,11 @@ def login_user_console(
     response.set_cookie(
         key="access_token",
         value=token,
-        httponly=True,
+        httponly=False,
         secure=False,        # True in prod (HTTPS)
         samesite="lax",      # Use 'none' if needed and secure=True
         path="/",
-        domain=".localhost"   # Required for admin.localhost subdomain
+        # domain="admin.localhost"   # Required for admin.localhost subdomain
     )
 
     return response  # Ensure this is inside the appropriate function
