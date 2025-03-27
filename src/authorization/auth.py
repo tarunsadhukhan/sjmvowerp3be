@@ -102,7 +102,7 @@ def login_user_console(
     response.set_cookie(
         key="access_token",
         value=token,
-        httponly=False,
+        httponly=True,
         secure=False,        # True in prod (HTTPS)
         samesite="lax",      # Use 'none' if needed and secure=True
         path="/",

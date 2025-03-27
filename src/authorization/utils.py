@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Cookie
 import jwt
 
 
@@ -74,3 +74,21 @@ def decode_access_token(token: str) -> str:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 # Removed invalid return statement outside of a function
+
+
+def verify_access_token(access_token: str = Cookie(None, alias="access_token")) -> dict:
+    print(f"Received access_token: {access_token}")  # Debug
+    if not access_token:
+        raise HTTPException(status_code=403, detail="No access token cookie provided")
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+        print(f"Decoded payload: {payload}")  # Debug
+        exp = payload.get("exp")
+        if exp and datetime.utcnow() > datetime.utcfromtimestamp(exp):
+            raise HTTPException(status_code=401, detail="Token has expired")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError as e:
+        print(f"Token verification failed: {str(e)}")  # Debug
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
