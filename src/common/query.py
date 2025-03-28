@@ -1,7 +1,7 @@
 from sqlalchemy.sql import text
 
 def get_menu_for_user1_query():
-    return text("""WITH RECURSIVE MenuHierarchy AS (
+    sql="""WITH RECURSIVE MenuHierarchy AS (
         SELECT
           mm.control_desk_menu_id AS id,
           mm.control_desk_menu_name AS title,
@@ -27,7 +27,8 @@ def get_menu_for_user1_query():
         )
         SELECT mh.id, title,
         CASE WHEN parent_id = 66 THEN concat('store/', path) ELSE path END path, icon, parent_id, mmenu_id,
-        null company_id, :userid user_id FROM MenuHierarchy mh ORDER BY mmenu_id""")
+        null company_id, :userid user_id FROM MenuHierarchy mh ORDER BY mmenu_id"""
+    return text(sql)
     
     
 def get_menu_for_othuser_query():

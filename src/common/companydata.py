@@ -64,25 +64,25 @@ def compmenuitems(
         sql_query = get_menu_for_othuser_query()
         params = {"userid": user_id} 
  
-    print(sql_query,params)
+    # print(sql_query,params)
         
         
     
     with Session(default_engine) as session:
         # user = session.execute(text(sql_query), params if params else {}).fetchall()
         user = session.execute(sql_query, params if params else {}).fetchall()
-        print('queruserr', sql_query, user)
+        # print('queruserr', sql_query, user)
 
 
     column_names = ['id', 'title', 'path', 'icon', 'parent_id', 'mmenu_id', 'company_id', 'user_id']
     results = [dict(zip(column_names, row)) for row in user]
-    print('results', results)
+    # print('results', results)
 
     mainMenus = [item for item in results if item['parent_id'] == 0]
     subMenus = [item for item in results if item['parent_id'] != 0]
 
-    print('main', mainMenus)
-    print('sub', subMenus)
+    # print('main', mainMenus)
+    # print('sub', subMenus)
 
     menuData = []
     for main in mainMenus:

@@ -19,15 +19,25 @@ def login_user_console(
     # 1. Get database connections
  
   
-     
+    print('dhshdshdsd',subdomain)
     # 3. Authenticate user
     with Session(default_engine) as session:
         query = get_admin_login_query()   
         print('Query:', query)
         user = session.execute(query, {"username": username}).fetchone()
         print('User result:', user)
+        if not user:
+            return JSONResponse(
+                content={
+                    "access_token": "",
+                    "token_type": "",
+                    "status": 401,
+                    "message": "Invalid username or password",
+                },
+                status_code=401,
+            )
         userid=user.con_user_id
-        print('User id:', userid)
+        print('User id:', userid,subdomain)
 
         if not user or not verify_password(password, user.con_user_login_password):
             return JSONResponse(
@@ -115,7 +125,7 @@ def login_user(
     dbfl2 = dbn[1] if len(dbn) > 1 else None
 
     print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")  # ✅ Debugging
-    print(request)
+    print(request,subdomain)
     
     
     

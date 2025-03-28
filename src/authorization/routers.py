@@ -32,7 +32,7 @@ def login(request: Request, login_data: LoginRequest):
     # ✅ Extract `X-Subdomain` before calling `login_user()`
     subdomain = request.headers.get("X-Subdomain", "default")
     print(f"DEBUG: Extracted Subdomain = {subdomain}")  # Debugging
-    print('hhhsub',subdomain)
+    print('hhhsub=====',subdomain)
     return login_user_console(
         request,
         login_data.username,

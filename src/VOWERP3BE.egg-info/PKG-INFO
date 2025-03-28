@@ -1,0 +1,47 @@
+Metadata-Version: 2.4
+Name: VOWERP3BE
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: bcrypt==3.2.0
+Requires-Dist: dotenv>=0.9.9
+Requires-Dist: fastapi>=0.115.11
+Requires-Dist: passlib>=1.7.4
+Requires-Dist: pyjwt>=2.10.1
+Requires-Dist: pymysql>=1.1.1
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: python-multipart>=0.0.20
+Requires-Dist: sqlalchemy>=2.0.38
+Requires-Dist: sqlmodel>=0.0.24
+Requires-Dist: uvicorn>=0.34.0
+
+# vowerp3be
+
+This is the backend for a webapp which will be a multitenant app for an erp solution, using nextjs for frontend and python for backend.
+
+VOW ERP3 Backend python
+
+
+docker build command 
+docker build -t vowerp3be-docker .
+
+run command 
+docker run -d -p 8000:8000 --env-file .env --name vowerp3be vowerp3be-docker
+
+stop container command
+docker stop vowerp3be
+
+remove container command
+docker rm vowerp3be-docker
+
+
+ run tests inside the container, you can override the default Docker CMD:
+docker build -t vowerp3be-docker .
+docker run --rm -it vowerp3be-docker pytest
+Alternatively, you can use a command in your Dockerfile or Docker Compose to handle tests, but the simplest approach is to run a container that executes pytest.
+
+
+
+
+using db.py against database.py for sqlmodel

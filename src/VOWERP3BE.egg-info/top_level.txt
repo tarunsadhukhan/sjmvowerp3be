@@ -1,0 +1,11 @@
+__init__
+accounting
+authorization
+common
+config
+hrms
+inventory
+jute
+main
+sales
+test
