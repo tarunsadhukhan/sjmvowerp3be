@@ -28,20 +28,6 @@ def get_db_names(request: Request):
     db_engines = {"default": default_engine}
     db_names_array = []  # ✅ Array to store database names
 
-    db_names_array.append(db_name)  # ✅ Add to array
-
-
-
-    for idx, row in enumerate(db_data, start=1):
-        db_name = row[1]  # Extract database name
-        print(f"Assigning db{idx}: {db_name}")
-        db_names_array.append(db_name)  # ✅ Add to array
-        print(f"Assigning db{idx}: {db_name}")
-
-        # Create a database connection for each fetched DB
-        db_url = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
-                 f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{db_name}"
-        db_engines[f"db{idx}"] = get_engine(db_url)
 
     print("Final Database Mappings:", db_engines)
     print("Final Database Names Array:", db_names_array)
