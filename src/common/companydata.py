@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from src.config.db import get_db_names,default_engine
 from src.authorization.utils import verify_access_token
 from collections import defaultdict
+from src.common.query import get_menu_for_user1_query, get_menu_for_othuser_query
+# Example definition for get_menu_for_othuser_query (replace with actual implementation)
 
 router = APIRouter()
 
@@ -52,73 +54,25 @@ def compmenuitems(
     host = subdomain.strip()
     print(host)
 
-    db_data = get_db_names(request)  # Fetch the full dictionary
-    print('DEBUG: db_data =', db_data)
-
-    dbs = db_data["db_engines"]
-    dbn = db_data["db_names_array"]
-
-    print("DEBUG: db_engines =", dbs)
-    print("DEBUG: db_names_array =", dbn)
-
-    dbfl1 = dbn[0] if len(dbn) > 0 else None
-    dbfl2 = dbn[1] if len(dbn) > 1 else None
-
-    print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")
     print(request)
     params = {}
-    print('starting ', user_id)
-
+    print('starting ', user_id)  
     if int(user_id) == 1:
-        print('query for ', user_id)
-        sqlQuery1 = """WITH RECURSIVE MenuHierarchy AS (
-        SELECT
-          mm.control_desk_menu_id AS id,
-          mm.control_desk_menu_name AS title,
-          mm.menu_path AS path,
-          null AS icon,
-          mm.parent_id, mm.control_desk_menu_id mmenu_id
-        FROM
-          vowconsole3.control_desk_menu mm
-        WHERE
-          mm.parent_id = 0
-        UNION ALL
-        SELECT
-          mm.control_desk_menu_id AS id,
-          mm.control_desk_menu_name AS title,
-          mm.menu_path AS path,
-          null AS icon,
-          mm.parent_id,
-          mm.parent_id mmenu_id
-        FROM
-          vowconsole3.control_desk_menu mm
-        INNER JOIN
-          MenuHierarchy mh ON mm.parent_id = mh.id
-        )
-        SELECT mh.id, title,
-        CASE WHEN parent_id = 66 THEN concat('store/', path) ELSE path END path, icon, parent_id, mmenu_id,
-        2 company_id, 26586 user_id FROM MenuHierarchy mh ORDER BY mmenu_id"""
+        sql_query = get_menu_for_user1_query()
+        params = {"userid": user_id} 
     else:
-        sqlQuery1 = """select * from (
-      select menu_id id, menu_name name, case when parent_id=0 then 0 else parent_id end parent_id, mmenu_id
-      from (
-        SELECT menu_id, menu menu_name,
-        parent_id, menu_path path, menu_state component_name, report_path component_path, menu_id mmenu_id,
-        menu_icon_name icon FROM menu_master where parent_id=0
-        union all
-        SELECT menu_id, menu menu_name,
-        parent_id, menu_path path, menu_state component_name, report_path component_path, parent_id mmenu_id,
-        menu_icon_name icon FROM menu_master where menu_id in
-        (select menu_id from menu_master where parent_id>0)) g ORDER BY menu_id
-        ) g join
-        (select menu_id from user_grp_menu_master ugmm
-        join user_group_map_master ugmm2 on ugmm.user_grp_id = ugmm2.user_grp_id
-        where ugmm2.user_id = :userid and ugmm.is_enable = 1) v on g.id = v.menu_id order by mmenu_id limit 3290"""
-        params = {"userid": user_id}
-
+        sql_query = get_menu_for_othuser_query()
+        params = {"userid": user_id} 
+ 
+    print(sql_query,params)
+        
+        
+    
     with Session(default_engine) as session:
-        user = session.execute(text(sqlQuery1), params if params else {}).fetchall()
-        print('queruserr', sqlQuery1, user)
+        # user = session.execute(text(sql_query), params if params else {}).fetchall()
+        user = session.execute(sql_query, params if params else {}).fetchall()
+        print('queruserr', sql_query, user)
+
 
     column_names = ['id', 'title', 'path', 'icon', 'parent_id', 'mmenu_id', 'company_id', 'user_id']
     results = [dict(zip(column_names, row)) for row in user]

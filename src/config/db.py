@@ -25,22 +25,12 @@ def get_db_names(request: Request):
     subdomain = host.split(".")[0] if "." in host else "default"
     print(f"Extracted subdomain: {subdomain}")  # Debugging
 
-    print("Host:", host)
-
-    with Session(default_engine) as session:
-        query = text("""select * from vowconsole3.con_db_master cdm 
-        left join vowconsole3.con_org_master com on com.con_org_id =cdm.con_org_id
-        where com.active =1 and com.con_org_master_status =3 and con_org_main_url
-        = :host   order by cdm.con_db_sl """)
-        db_data = session.execute(query, {"host": host}).fetchall()
-    
-    print('query',query)    
-
-    print("Raw Query Results:", db_data)  
-
-    database_names = {"maindatabase": os.getenv('DATABASE_DEFAULT')}
     db_engines = {"default": default_engine}
     db_names_array = []  # ✅ Array to store database names
+
+    db_names_array.append(db_name)  # ✅ Add to array
+
+
 
     for idx, row in enumerate(db_data, start=1):
         db_name = row[1]  # Extract database name

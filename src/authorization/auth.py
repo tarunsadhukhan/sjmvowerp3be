@@ -5,7 +5,8 @@ from sqlalchemy.sql import text
 from src.config.db import get_db_names,default_engine  # ✅ Ensure correct import
 from src.config.db import Session  # ✅ Import default_engine
 from fastapi.responses import JSONResponse  # ✅ Import JSONResponse
-
+from src.authorization.query import get_admin_login_query
+import os
 
 def login_user_console(
     request: Request,
@@ -16,40 +17,12 @@ def login_user_console(
 ):
     """Login logic - Queries user table where username, password, and subdomain match"""
     # 1. Get database connections
-    db_data = get_db_names(request)
-    print('DEBUG: db_data =', db_data)
-
-    dbs = db_data["db_engines"]
-    dbn = db_data["db_names_array"]
-
-    print("DEBUG: db_engines =", dbs)
-    print("DEBUG: db_names_array =", dbn)
-
-    dbfl1 = dbn[0] if len(dbn) > 0 else None
-    dbfl2 = dbn[1] if len(dbn) > 1 else None
-
-    print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")
-
-    # 2. Check for default DB
-    if "default" not in dbs:
-        return JSONResponse(
-            content={
-                "access_token": "",
-                "token_type": "",
-                "status": 500,
-                "message": "Database connection failed: Default database missing",
-            },
-            status_code=500,
-        )
-
+ 
+  
+     
     # 3. Authenticate user
     with Session(default_engine) as session:
-        query = text("""
-            SELECT * FROM vowconsole3.con_user_master cum
-            WHERE con_user_login_email_id = :username 
-              AND cum.con_user_id = 1
-              AND cum.con_user_type = 0
-        """)
+        query = get_admin_login_query()   
         print('Query:', query)
         user = session.execute(query, {"username": username}).fetchone()
         print('User result:', user)
@@ -99,15 +72,20 @@ def login_user_console(
         status_code=200
     )
 
+    ENV = os.getenv("ENV", "development")  # Set ENV=production in production
+    COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None  # None in dev (set by proxy)
+    SECURE = True if ENV == "production" else False
+    SAMESITE = "None" if ENV == "production" else "Lax"
+ 
     response.set_cookie(
         key="access_token",
         value=token,
-        httponly=True,
-        secure=False,        # True in prod (HTTPS)
-        samesite="lax",      # Use 'none' if needed and secure=True
+        httponly=True,       # Changed: Set to True for security (middleware can still read it)
+        secure=SECURE,       # True in prod (HTTPS), False in dev
+        samesite=SAMESITE,   # 'None' in prod (cross-subdomain), 'Lax' in dev
         path="/",
-        # domain="admin.localhost"   # Required for admin.localhost subdomain
-    )
+        domain=COOKIE_DOMAIN # .vowerp.co.in in prod, None in dev (set by proxy)
+)
     return response  # Ensure this is inside the appropriate function
         
 
