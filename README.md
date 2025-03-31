@@ -6,7 +6,7 @@ VOW ERP3 Backend python
 
 
 docker build command 
-docker build -t vowerp3be-docker .
+docker build -t vowerp-backend .
 
 run command 
 docker run -d -p 8000:8000 --env-file .env --name vowerp3be vowerp3be-docker
@@ -27,3 +27,18 @@ Alternatively, you can use a command in your Dockerfile or Docker Compose to han
 
 
 using db.py against database.py for sqlmodel
+
+to run the project locally on docker first create a docker network:
+command for the same is - docker network create vowerpnet
+to check if docker network is created from before - docker network ls
+
+to run docker in the said network 
+docker run -d \
+  --name vowerp-backend \
+  --network vowerpnet \
+  --env-file .env \
+  -p 8000:8000 \
+  vowerp-backend
+
+
+  

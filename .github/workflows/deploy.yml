@@ -38,7 +38,23 @@ jobs:
 
         #build docker image in pipeline
       - name: Build Docker image
-        run: docker build . -t vowerp3be:latest -f Dockerfile
+        id: build-image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg DATABASE_USER=${{ secrets.DATABASE_USER }} \
+            --build-arg DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }} \
+            --build-arg DATABASE_HOST=${{ secrets.DATABASE_HOST }} \
+            --build-arg DATABASE_PORT=${{ secrets.DATABASE_PORT }} \
+            --build-arg DATABASE_DEFAULT=${{ secrets.DATABASE_DEFAULT }} \
+            --build-arg ENV=production \
+            -t vowerp3be-main:$IMAGE_TAG .
+      
+          docker tag vowerp3be-main:$IMAGE_TAG ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:$IMAGE_TAG
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:$IMAGE_TAG
+          echo "image=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
