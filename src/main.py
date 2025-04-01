@@ -5,7 +5,6 @@ from src.authorization.routers import common_router as auth_router
 from src.common.companydata import router as company_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.proxy_headers import ProxyHeadersMiddleware  # ✅ NEW
 from starlette.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -13,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="Vowerp3b API")
 
 # ✅ Add this to trust NGINX proxy headers (like X-Forwarded-Proto)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 
 # Add CORS middleware
 add_cors_middleware(app)
