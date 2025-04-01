@@ -8,7 +8,7 @@ on:
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}                  # set this to your preferred AWS region, e.g. us-west-1
   ECR_REPOSITORY: vowerp3be-main          # set this to your Amazon ECR repository name
-  ECS_SERVICE: vowerp3ui-main-service                 # set this to your Amazon ECS service name
+  ECS_SERVICE: vowerp3ui-main                 # set this to your Amazon ECS service name
   ECS_CLUSTER: default                 # set this to your Amazon ECS cluster name
   ECS_TASK_DEFINITION: .aws/task-definition.json # set this to the path to your Amazon ECS task definition
                                                # file, e.g. .aws/task-definition.json
@@ -66,11 +66,6 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Push image to Amazon ECR
-        run: |
-          docker tag vowerp3be-main:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/vowerp3be-main:latest
 
 #update task definition
       - name: Update ECS Task Definition
