@@ -12,9 +12,11 @@ def get_engine(db_url: str):
     return create_engine(db_url, pool_pre_ping=True)
 
 # Default (main) database connection
-
+# DEFAULT_PORT = 3306
 DEFAULT_DATABASE_URL = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
                        f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{os.getenv('DATABASE_DEFAULT')}"
+# DEFAULT_DATABASE_URL = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
+#                        f"{os.getenv('DATABASE_HOST')}:{DEFAULT_PORT}/{os.getenv('DATABASE_DEFAULT')}"
 print ('DE',DEFAULT_DATABASE_URL)                       
 default_engine = get_engine(DEFAULT_DATABASE_URL)
 
