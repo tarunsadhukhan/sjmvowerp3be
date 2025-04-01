@@ -1,20 +1,19 @@
 import logging
 from fastapi import FastAPI, Request
 from src.common.routers import router as common_router
-#from src.authorization.routes import common_router as auth_router
-#from src.authorization.routes import common_router as auth_router
 from src.authorization.routers import common_router as auth_router
-#from src.common.routers import router as common_router  # ✅ Absolute import
-#from src.hrms.routers import router as hrms_router  # ✅ Absolute import
-#from src.common.master import router as master_router  # ✅ Absolute import
 from src.common.companydata import router as company_router
-from src.config.cors import add_cors_middleware  # Import CORS configuration
+from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.proxy_headers import ProxyHeadersMiddleware  # ✅ NEW
 from starlette.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Vowerp3b API")
+
+# ✅ Add this to trust NGINX proxy headers (like X-Forwarded-Proto)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Add CORS middleware
 add_cors_middleware(app)
@@ -31,10 +30,7 @@ async def catch_exceptions_middleware(request: Request, call_next):
 print ('mama')
 app.include_router(common_router, prefix="/api/common", tags=["Common"])
 app.include_router(auth_router, prefix="/api/authRoutes", tags=["Auth"])
-app.include_router(company_router,prefix="/api/companyRoutes",tags=["company"])
-
-#app.include_router(hrms_router, prefix="/api/hrms", tags=["HRMS"])
-#app.include_router(master_router, prefix="/api/master", tags=["Master"])
+app.include_router(company_router, prefix="/api/companyRoutes", tags=["company"])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
