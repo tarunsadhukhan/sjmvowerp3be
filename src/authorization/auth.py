@@ -5,7 +5,7 @@ from sqlalchemy.sql import text
 from src.config.db import get_db_names,default_engine  # ✅ Ensure correct import
 from src.config.db import Session  # ✅ Import default_engine
 from fastapi.responses import JSONResponse  # ✅ Import JSONResponse
-from src.authorization.query import get_admin_login_query
+from src.authorization.query import get_admin_login_query, get_company_admin_login_query
 import os
 
 def login_user_console(
@@ -22,7 +22,7 @@ def login_user_console(
     print('dhshdshdsd',subdomain)
     # 3. Authenticate user
     with Session(default_engine) as session:
-        query = get_admin_login_query()   
+        query = get_admin_login_query() if subdomain == 'admin' else get_company_admin_login_query()
         print('Query:', query)
         user = session.execute(query, {"username": username}).fetchone()
         print('User result:', user)
