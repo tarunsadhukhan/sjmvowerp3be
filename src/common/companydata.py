@@ -6,10 +6,10 @@ import os
 from fastapi import Depends, Query, Request, HTTPException,APIRouter, Header
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
-from src.config.db import get_db_names,default_engine,db,db1,db2,db3,db4
+from src.config.db import get_db_names,default_engine
 from src.authorization.utils import verify_access_token
 from collections import defaultdict
-from src.common.query import get_menu_for_user1_query, get_menu_for_othuser_query,get_total_count_query,get_role_for_user1_query
+from src.common.query import get_menu_for_user1_query, get_menu_for_othuser_query,get_total_count_query,get_role_for_user1_query, get_role_for_user1_query_company
 # Example definition for get_menu_for_othuser_query (replace with actual implementation)
 from pydantic import BaseModel
 from typing import Optional
@@ -249,6 +249,104 @@ def companiesfyyear(
 
 
 
+@router.get("/roles_sls")
+async def get_roles(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1),
+    user_id: int = Query(None),  # Make optional
+    search: Optional[str] = None,
+    cookies: Optional[str] = Cookie(None)
+):
+    try:
+        # Default to user_id=0 if not provided
+        if user_id is None:
+            user_id = 0
+        print(f"Using user_id: {user_id}")
+        
+        offset = (page - 1) * limit
+        print(f"Pagination: page={page}, limit={limit}, offset={offset}")
+
+        try:
+            db = get_db_names(request)  # ✅ Fetch the full dictionary
+            print('DEBUG: db_data =', db)  # ✅ Print full response for debugging
+        except Exception as db_error:
+            print(f"Error retrieving DB names: {db_error}")
+            raise HTTPException(status_code=500, detail=f"Database configuration error: {str(db_error)}")
+
+        # Check if db is properly structured
+        if not isinstance(db, dict) or "db" not in db:
+            print("Missing db key in db_data dictionary")
+            raise HTTPException(status_code=500, detail="Invalid database configuration structure")
+
+        dbm = db.get("db")  # Get the database name
+        print(f"Using database: {dbm}")
+
+        # Get the appropriate query based on user_id
+        try:
+            if user_id == 1:
+                query = get_role_for_user1_query(search, dbm)
+            else:
+                query = get_role_for_user1_query_company(search, dbm)
+            print(f"Generated query: {query}")
+        except Exception as query_error:
+            print(f"Error generating query: {query_error}")
+            raise HTTPException(status_code=500, detail=f"Query generation error: {str(query_error)}")
+            
+        # Execute the main query
+        try:
+            with Session(default_engine) as session:
+                cmpid = 2
+                print(f"Executing query with cmpid={cmpid}, limit={limit}, offset={offset}, search={search}")
+                roles = session.execute(
+                    query, {"cmpid": cmpid, "limit": limit, "offset": offset, "search": f"%{search}%" if search else None}
+                ).fetchall()
+                print(f"Query returned {len(roles) if roles else 0} results")
+        except Exception as query_exec_error:
+            print(f"Query execution error: {query_exec_error}")
+            print(f"Failed query: {query}")
+            raise HTTPException(status_code=500, detail=f"Database query error: {str(query_exec_error)}")
+
+        # Convert roles to a list of dictionaries
+        try:
+            roles = [dict(r._mapping) for r in roles]
+            print(f"Converted {len(roles)} rows to dictionaries")
+        except Exception as conversion_error:
+            print(f"Data conversion error: {conversion_error}")
+            raise HTTPException(status_code=500, detail=f"Data conversion error: {str(conversion_error)}")
+
+    except HTTPException:
+        # Re-raise HTTP exceptions to maintain their status codes
+        raise
+    except Exception as e:
+        # Catch any other exceptions
+        print(f"Unexpected error in get_roles: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+    # Get total count
+    try:
+        with Session(default_engine) as session:
+            count_query = get_total_count_query(user_id, search)
+            cmpid = 2
+            total_result = session.execute(count_query, {"cmpid": cmpid, "search": f"%{search}%" if search else None}).fetchone()
+            print(f"Total count query result: {total_result}")
+
+        # Extract the count value
+        total = total_result[0] if total_result else 0
+        print(f"Total records: {total}")
+
+    except Exception as count_error:
+        print(f"Error retrieving total count: {count_error}")
+        total = 0  # Default to 0 if count query fails
+
+    return {
+        "data": roles,
+        "total": total
+    }
+  
+
 @router.get("/roles")
 async def get_roles(
     page: int = Query(1, ge=1),
@@ -293,4 +391,3 @@ async def get_roles(
         "data": roles,
         "total": total
     }
-  

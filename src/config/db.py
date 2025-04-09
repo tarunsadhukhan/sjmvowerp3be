@@ -1,6 +1,7 @@
 from fastapi import Request
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session as SQLAlchemySession
 import os
 
 # Load environment variables
@@ -28,33 +29,44 @@ DEFAULT_DATABASE_URL = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv
 print('DE', DEFAULT_DATABASE_URL)
 default_engine = get_engine(DEFAULT_DATABASE_URL)
 
+# Create a sessionmaker
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=default_engine)
+
+# Export the Session class
+Session = SQLAlchemySession
+
+# Default database name variables - used by other modules
+# Setting default values that will be overridden during request processing
+db = "default"  
+db1 = "default_c"
+db2 = "default_c_1"
+db3 = "default_c_2"
+db4 = "default_c_3"
+
 def get_db_names(request: Request):
     """Fetches dynamic database mappings and assigns database engines."""
-    host = request.headers.get("X-Subdomain", "default")  # ✅ Extract from headers
-    subdomain = host.split(".")[0] if "." in host else "default"
-    print(f"Extracted subdomain: {subdomain}")  # Debugging
+    subdomain = request.headers.get("X-Subdomain", "default")  # ✅ Extract from headers
+    print(f"Extracted subdomain from db.py: {subdomain}")  # Debugging
 
     db_engines = {"default": default_engine}
-    db_names_array = []  # ✅ Array to store database names
     
-    db_url = subdomain
-    db_url1 = subdomain + "_c"
-    db_url2 = subdomain + "_c_1"
-    db_url3 = subdomain + "_c_2"
-    db_url4 = subdomain + "_c_3"
+    # Calculate database names based on subdomain
+    global db, db1, db2, db3, db4  # Access the global variables
+    db = subdomain
+    db1 = subdomain + "_c"
+    db2 = subdomain + "_c_1"
+    db3 = subdomain + "_c_2"
+    db4 = subdomain + "_c_3"
 
     print("Final Database Mappings:", db_engines)
-    print("Final Database Names Array:", db_names_array)
 
     return {
         "db_engines": db_engines,  # ✅ Return dictionary of database engines
-        "db_names_array": db_names_array,
-        "db": db_url,
-        "db1": db_url1,
-        "db2": db_url2,
-        "db3": db_url3,
-        "db4": db_url4,
-
+        "db": db,
+        "db1": db1,
+        "db2": db2,
+        "db3": db3,
+        "db4": db4,
         # ✅ Return array of database names
     }
 

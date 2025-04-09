@@ -1,4 +1,5 @@
 from sqlalchemy.sql import text
+from sqlalchemy.sql import bindparam
 
 def get_menu_for_user1_query():
     sql="""WITH RECURSIVE MenuHierarchy AS (
@@ -142,6 +143,19 @@ def get_role_for_user1_query(search: str = None):
         LIMIT :limit OFFSET :offset
     """)
 
+
+def get_role_for_user1_query_company(search: str = None, dbm: str = None):
+      sql = f"(select * from {dbm}.roles_mst) LIMIT :limit OFFSET :offset "
+      query = text(sql)
+      # Bind the database name parameter
+      # query = query.bindparams(bindparam('db_name', value=dbm if dbm else 'sls'))
+      return query
+
+
+
+
+# select * from sls.roles_mst
+# OFFSET :offset
 
 
 

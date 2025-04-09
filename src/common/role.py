@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from database import get_db
+from src.config.database import get_db
 
 router = APIRouter()
 
