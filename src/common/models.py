@@ -7,9 +7,10 @@ from sqlmodel import SQLModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from db
 
 class ConOrgMaster(SQLModel, table=True):
-    __tablename__ = "con_org_master"
+    __tablename__ = dburl."con_org_master"
     con_org_id: Optional[int] = Field(default=None, primary_key=True)
     con_org_name: str
     con_org_address: str
