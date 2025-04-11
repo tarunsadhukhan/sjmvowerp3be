@@ -102,54 +102,7 @@ def compmenuitems(
         "data": menuData
     }
 
-@router.get("/co_console_menu_items")
-def co_compmenuitems(
-    request: Request,
-    subdomain: str = Query(...),
-    user_id: str = Query(...),
-    # token_data: dict = Depends(verify_access_token),
-):
-    # Return static menu details
-    return {
-        "data": [
-            {
-                "id": 1,
-                "title": "Company Details",
-                "path": "/company-details",
-                "submenu": [
-                    {
-                        "id": 6,
-                        "title": "Create Company",
-                        "path": "/dashboardadmin/createCompany",
-                        "icon": None
-                    }]
-            },
-            {
-                "id": 2,
-                "title": "User Management",
-                "path": "/user_management",
-                "submenu": [
-                    {
-                        "id": 3,
-                        "title": "Role Managemnt",
-                        "path": "/dashboardadmin/roleManagement",
-                        "icon": None
-                    },
-                    {
-                        "id": 4,
-                        "title": "User Management",
-                        "path": "/dashboardadmin/userManagement",
-                        "icon": None
-                    },{
-                        "id": 5,
-                        "title": "Approval Hierarchy",
-                        "path": "/dashboardadmin/approvalHierarchy",
-                        "icon": None
-                    }
-                ]
-            }
-        ]
-    }
+
 
 @router.get("/companyfyyear")
 def companiesfyyear(
