@@ -209,13 +209,15 @@ async def get_roles(
     limit: int = Query(10, ge=1),
     user_id: int = Query(None),  # Make optional
     search: Optional[str] = None,
-    cookies: Optional[str] = Cookie(None)
+    token_data: dict = Depends(verify_access_token),  # Use the new dependency
 ):
+    subdomain = request.headers.get("X-Subdomain", "default")
+    user_id_ck = token_data.get("user_id")
     try:
         # Default to user_id=0 if not provided
-        if user_id is None:
-            user_id = 0
-        print(f"Using user_id: {user_id}")
+        if user_id_ck is None:
+            user_id_ck = 0
+        print(f"Using user_id: {user_id_ck}")
         
         offset = (page - 1) * limit
         print(f"Pagination: page={page}, limit={limit}, offset={offset}")

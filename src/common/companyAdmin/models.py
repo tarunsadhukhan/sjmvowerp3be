@@ -61,3 +61,15 @@ class CityMst(Base):
 
     def __repr__(self):
         return f"<CityMst(id={self.city_id}, city_name='{self.city_name}', state_id={self.state_id})>"
+
+
+class RoleMenuMap(Base):
+    __tablename__ = 'role_menu_map'
+
+    role_menu_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
+    role_id = Column(Integer, ForeignKey('roles_mst.role_id'), nullable=False)
+    menu_id = Column(Integer, ForeignKey('con_menu_master.con_menu_id'), nullable=False)
+    access_type_id = Column(Integer, ForeignKey('access_type.access_type_id'), nullable=False)
+
+    def __repr__(self):
+        return f"<RoleMenuMap(id={self.role_menu_mapping_id}, role_id={self.role_id}, menu_id={self.menu_id}, access_type_id={self.access_type_id})>"
