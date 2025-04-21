@@ -16,3 +16,5 @@ class MenuItem(BaseModel):
 
 class MenuResponse(BaseModel):
     data: List[MenuItem]
+
+

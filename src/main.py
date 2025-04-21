@@ -8,6 +8,7 @@ from src.common.companyAdmin.roles import router as co_roles_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,8 +33,9 @@ print ('mama')
 app.include_router(common_router, prefix="/api/common", tags=["Common"])
 app.include_router(auth_router, prefix="/api/authRoutes", tags=["Auth"])
 app.include_router(company_router, prefix="/api/companyRoutes", tags=["company"])
-app.include_router(co_console_router, prefix="/api/companyAdmin", tags=["companyAdmin"])
-app.include_router(co_roles_router, prefix="/api/companyAdmin", tags=["companyAdmin"])
+app.include_router(co_console_router, prefix="/api/companyAdmin", tags=["company-admin-menu"])
+app.include_router(co_roles_router, prefix="/api/companyAdmin", tags=["company-admin-roles"])
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +47,16 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application is shutting down...")
+
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # 👇 Startup logic
+#     logger.info("Application is starting up...")
+#     yield
+#     # 👇 Shutdown logic
+#     logger.info("Application is shutting down...")
+
+# app = FastAPI(lifespan=lifespan)
 
 if __name__ == "__main__":
     import uvicorn

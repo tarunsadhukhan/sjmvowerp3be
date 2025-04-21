@@ -1,4 +1,3 @@
-
 # from sqlmodel import Session, select
 # from passlib.context import CryptContext
 # import jwt
@@ -17,7 +16,10 @@ async def compmenuitems(
     request: Request,
     token_data: dict = Depends(verify_access_token),  # Use the new dependency
 ):
-    subdomain = request.headers.get("X-Subdomain", "default")
+    # Extract subdomain from host header
+    host = request.headers.get("host", "")
+    subdomain = host.split('.')[0] if '.' in host else "default"
+    
     user_id_ck = token_data.get("user_id")
     print(f" Token user_id: {user_id_ck}")  # Debug
     if not user_id_ck:

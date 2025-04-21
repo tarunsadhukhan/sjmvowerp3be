@@ -1,5 +1,6 @@
 from sqlalchemy.sql import text
 from sqlalchemy.sql import bindparam
+from sqlalchemy.sql.elements import TextClause
 
 def get_menu_for_user1_query():
     sql="""WITH RECURSIVE MenuHierarchy AS (
@@ -145,11 +146,45 @@ def get_role_for_user1_query(search: str = None):
 
 
 def get_role_for_user1_query_company(search: str = None, dbm: str = None):
-      sql = f"(select * from {dbm}.roles_mst) LIMIT :limit OFFSET :offset "
-      query = text(sql)
-      # Bind the database name parameter
-      # query = query.bindparams(bindparam('db_name', value=dbm if dbm else 'sls'))
-      return query
+    sql = f"SELECT * FROM {dbm}.roles_mst LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+def get_roles_tenant_admin(search: str = None, org_id: int = None):
+    sql = f"SELECT * FROM con_role_master where con_org_id = :org_id LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+# from typing import Optional
+
+# def get_roles_co_console(search: Optional[str], org_id: int) -> TextClause:
+#     # """
+#     # Generate SQL query for retrieving roles for a specific organization.
+    
+#     # Args:
+#     #     search: Optional search term
+#     #     org_id: Organization ID
+        
+#     # Returns:
+#     #     SQLAlchemy TextClause query
+#     # """
+#     # query = """
+#     #     SELECT *
+#     #     FROM vowconsole3.con_role_master 
+#     #     WHERE con_org_id = :org_id 
+#     # """
+    
+#     # if search:
+#     #     query += " AND con_role_name LIKE :search"
+        
+#     # query += """
+#     #     ORDER BY created_date_time DESC
+#     #     LIMIT :limit OFFSET :offset
+#     # """
+#     sql = f"SELECT * FROM con_roles_master where con_org_id = :org_id LIMIT :limit OFFSET :offset"
+#     query = text(sql)
+    
+#     return text(query)
 
 
 
