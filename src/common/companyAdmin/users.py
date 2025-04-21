@@ -4,6 +4,7 @@ from sqlalchemy import  func
 from sqlalchemy.sql import text
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Path
 from pydantic import BaseModel
+from datetime import datetime
 from src.config.db import default_engine, extract_subdomain_from_request
 from src.authorization.utils import verify_access_token, get_password_hash
 from src.common.query import (get_users_tenant_admin_query)
@@ -273,6 +274,84 @@ async def create_user_tenant_admin(
                 "role_mapping_id": role_mapping.con_user_role_mapping_id
             }
 
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+class EditUserTenantAdmin(BaseModel):
+    userId: str
+    roleId: Optional[int] = None
+    active: Optional[int] = None
+    timestamp: datetime
+
+@router.post("/edit_user_tenant_admin")
+async def edit_user_tenant_admin(
+    request: Request,
+    payload: EditUserTenantAdmin,
+    token_data: dict = Depends(verify_access_token),
+):
+    """
+    Update user role and active status for tenant admin
+    
+    Args:
+        request (Request): FastAPI request object
+        submit_data (EditUserTenantAdmin): Data containing updates for user
+        token_data (dict): Authentication token data
+        
+    Returns:
+        dict: Status of the update operation
+    """
+    try:
+        # Verify user from token
+        user_id = token_data.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=403, detail="User ID not found in token")
+
+        with Session(default_engine) as session:
+            # Convert userId to integer
+            target_user_id = int(payload.userId)
+            
+            # Handle role update if roleId is provided
+            if payload.roleId is not None:
+                # Delete existing role mapping
+                session.query(ConUserRoleMapping).filter(
+                    ConUserRoleMapping.con_user_id == target_user_id
+                ).delete()
+                
+                # Create new role mapping
+                new_role_mapping = ConUserRoleMapping(
+                    con_role_id=payload.roleId,
+                    con_user_id=target_user_id,
+                    created_by=user_id,
+                    created_date_time=payload.timestamp
+                )
+                session.add(new_role_mapping)
+            
+            # Handle active status update if active is provided
+            if payload.active is not None:
+                session.query(ConUser).filter(
+                    ConUser.con_user_id == target_user_id
+                ).update({
+                    ConUser.active: payload.active
+                })
+            
+            session.commit()
+            
+            return {
+                "message": "User updated successfully",
+                "user_id": target_user_id,
+                "updates": {
+                    "role_updated": payload.roleId is not None,
+                    "active_status_updated": payload.active is not None
+                }
+            }
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=f"Invalid user ID format: {str(ve)}")
     except HTTPException as he:
         raise he
     except Exception as e:
