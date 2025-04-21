@@ -8,6 +8,7 @@ from src.config.db import default_engine
 from src.authorization.utils import verify_access_token
 from src.common.query import (get_roles_tenant_admin)
 from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap
+from src.authorization.utils import get_password_hash
 
 
 router = APIRouter()
@@ -377,6 +378,8 @@ async def edit_role_tenant_admin(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+    
+    
 
 
 

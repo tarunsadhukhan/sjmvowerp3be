@@ -145,3 +145,12 @@ class conRoleMaster(Base):
     created_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
     con_company_id = Column(Integer, nullable=True)
     is_enable = Column(Integer, nullable=False, default=1)
+
+class ConUserRoleMapping(Base):
+    __tablename__ = "con_user_role_mapping"
+
+    con_user_role_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
+    con_role_id = Column(Integer, nullable=False, index=True)
+    con_user_id = Column(Integer, nullable=False, index=True)
+    created_by = Column(Integer, nullable=False, index=True)
+    created_date_time = Column(DateTime, nullable=True, server_default=func.now())

@@ -5,6 +5,7 @@ from src.authorization.routers import common_router as auth_router
 from src.common.companydata import router as company_router
 from src.common.companyAdmin.menu import router as co_console_router
 from src.common.companyAdmin.roles import router as co_roles_router
+from src.common.companyAdmin.users import router as co_users_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -35,6 +36,7 @@ app.include_router(auth_router, prefix="/api/authRoutes", tags=["Auth"])
 app.include_router(company_router, prefix="/api/companyRoutes", tags=["company"])
 app.include_router(co_console_router, prefix="/api/companyAdmin", tags=["company-admin-menu"])
 app.include_router(co_roles_router, prefix="/api/companyAdmin", tags=["company-admin-roles"])
+app.include_router(co_users_router, prefix="/api/companyAdmin", tags=["company-admin-users"])
 
 
 logging.basicConfig(level=logging.INFO)
