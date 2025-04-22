@@ -144,7 +144,20 @@ tenant_engine = get_engine(tenant_url)
 SessionTeanant = sessionmaker(autocommit=False, autoflush=False, bind=tenant_engine)
 SessionTenantLocal = SessionTeanant()
 
-def get_tenant_db():
+def get_tenant_db(request:Request):
     """Returns the tenant database session."""
+    subdomain = extract_subdomain_from_request(request)
+    tenant_db= subdomain
+    tenant_url = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
+                       f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{tenant_db}"
+    engine = get_engine(tenant_url)
+    SessionTenant = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    db = SessionTenant()
+    try:
+        yield db
+    finally:
+        db.close()
+        
 
 

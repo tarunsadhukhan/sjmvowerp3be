@@ -155,6 +155,17 @@ def get_roles_tenant_admin(search: str = None, org_id: int = None):
     query = text(sql)
     return query
 
+def get_roles_tenant(search: str = None):
+    sql = f"SELECT role_id, role_name, active FROM roles_mst LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+
+def get_users_tenant(search: str = None):
+    sql = f"SELECT user_id, name , email_id, active FROM user_mst LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
 def get_users_tenant_admin_query(search: str = None, org_id: int = None):
     sql = """
         SELECT 

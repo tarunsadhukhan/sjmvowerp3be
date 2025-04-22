@@ -8,7 +8,6 @@ from src.config.db import default_engine,extract_subdomain_from_request
 from src.authorization.utils import verify_access_token
 from src.common.query import (get_roles_tenant_admin)
 from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap
-from src.authorization.utils import get_password_hash
 from src.common.companyAdmin.users import get_org_id_from_subdomain
 
 
