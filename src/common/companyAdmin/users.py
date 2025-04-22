@@ -20,41 +20,43 @@ router = APIRouter(
 
 def get_org_id_from_subdomain(subdomain: str, db: Session) -> int:
     """
-    Get the organization ID for a given subdomain
-    
+    Get the organization ID for a given subdomain using raw SQL.
+
     Args:
-        subdomain (str): The subdomain from the request
-        db (Session): SQLAlchemy database session
-        
+        subdomain (str): Subdomain extracted from the request.
+        db (Session): SQLAlchemy session.
+
     Returns:
-        int: The organization ID
-        
+        int: Organization ID.
+
     Raises:
-        HTTPException: If organization not found or database error occurs
+        HTTPException: If organization is not found or on DB error.
     """
     try:
-        query = db.query(ConOrgMaster).filter(
-            ConOrgMaster.con_org_shortname == subdomain,
-            ConOrgMaster.active == 1
+        sql = text(
+            "SELECT con_org_id "
+            "FROM con_org_master "
+            "WHERE con_org_shortname = :subdomain"
         )
-        org = query.first()
-        
-        if not org:
+        org_id = db.execute(sql, {"subdomain": subdomain}).scalar()
+
+        if org_id is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Organization with subdomain {subdomain} not found"
+                detail=f"Organization with subdomain {subdomain} not found",
             )
-            
-        return org.con_org_id
-        
-    except HTTPException as he:
-        raise he
+
+        return org_id
+
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error in get_org_id_from_subdomain: {str(e)}")
+        print(f"Error in get_org_id_from_subdomain: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving organization ID: {str(e)}"
+            detail=f"Error retrieving organization ID: {str(e)}",
         )
+    
 
 @router.get("/get_user_tenant_admin")
 async def get_users_tenant_admin(

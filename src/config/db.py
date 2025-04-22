@@ -45,28 +45,31 @@ db4 = "default_c_3"
 
 def extract_subdomain_from_request(request: Request) -> str:
     """
-    Extract subdomain from request using multiple fallback methods:
-    1. X-Forwarded-Host header
-    2. Host header
-    3. Referer header
-    4. Custom subdomain header
+    Extract subdomain from request using multiple fallback methods
     """
+    print("\n=== Extracting Subdomain ===")
+    
     # Try X-Forwarded-Host first (common with proxies)
     forwarded_host = request.headers.get("x-forwarded-host")
+    print(f"📌 X-Forwarded-Host header: {forwarded_host}")
     if forwarded_host and '.' in forwarded_host:
         subdomain = forwarded_host.split('.')[0]
         if subdomain != "localhost":
+            print(f"✅ Found subdomain from X-Forwarded-Host: {subdomain}")
             return subdomain
 
     # Try regular host header
     host = request.headers.get("host", "")
+    print(f"📌 Host header: {host}")
     if host and '.' in host:
         subdomain = host.split('.')[0]
         if subdomain != "localhost":
+            print(f"✅ Found subdomain from Host: {subdomain}")
             return subdomain
 
     # Try getting from referer
     referer = request.headers.get("referer", "")
+    print(f"📌 Referer header: {referer}")
     if referer:
         try:
             from urllib.parse import urlparse
@@ -74,44 +77,60 @@ def extract_subdomain_from_request(request: Request) -> str:
             if parsed.netloc and '.' in parsed.netloc:
                 subdomain = parsed.netloc.split('.')[0]
                 if subdomain != "localhost":
+                    print(f"✅ Found subdomain from Referer: {subdomain}")
                     return subdomain
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ Error parsing referer: {str(e)}")
 
     # Try explicit subdomain header as fallback
     subdomain = request.headers.get("subdomain")
+    print(f"📌 Explicit subdomain header: {subdomain}")
     if subdomain:
+        print(f"✅ Found explicit subdomain: {subdomain}")
         return subdomain.strip()
 
     # Default fallback
+    print("ℹ️ No subdomain found, using default")
     return "default"
 
 def get_db_names(request: Request):
     """Fetches dynamic database mappings and assigns database engines."""
-    subdomain = extract_subdomain_from_request(request)
-    print(f"Extracted subdomain from db.py: {subdomain}")  # Debugging
-
-    db_engines = {"default": default_engine}
+    print("\n=== Setting up Database Connection ===")
     
-    # Calculate database names based on subdomain
-    global db, db1, db2, db3, db4  # Access the global variables
-    db = subdomain
-    db1 = f"{subdomain}_c"
-    db2 = f"{subdomain}_c_1"
-    db3 = f"{subdomain}_c_2"
-    db4 = f"{subdomain}_c_3"
+    subdomain = extract_subdomain_from_request(request)
+    print(f"🌐 Using subdomain for database: {subdomain}")
 
-    print("Final Database Mappings:", db_engines)
+    try:
+        db_engines = {"default": default_engine}
+        
+        # Calculate database names based on subdomain
+        global db, db1, db2, db3, db4
+        db = subdomain
+        db1 = f"{subdomain}_c"
+        db2 = f"{subdomain}_c_1"
+        db3 = f"{subdomain}_c_2"
+        db4 = f"{subdomain}_c_3"
+        
+        print(f"""📊 Database mappings:
+        Main DB: {db}
+        DB1: {db1}
+        DB2: {db2}
+        DB3: {db3}
+        DB4: {db4}""")
 
-    return {
-        "db_engines": db_engines,
-        "db": db,
-        "db1": db1,
-        "db2": db2,
-        "db3": db3,
-        "db4": db4,
-        "db_names_array": [db, db1, db2, db3, db4]
-    }
+        return {
+            "db_engines": db_engines,
+            "db": db,
+            "db1": db1,
+            "db2": db2,
+            "db3": db3,
+            "db4": db4,
+            "db_names_array": [db, db1, db2, db3, db4]
+        }
+    except Exception as e:
+        print(f"❌ Error in get_db_names: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        raise
 
 # Dependency function to get the correct database session
 def get_db(request: Request):
@@ -127,5 +146,5 @@ SessionTenantLocal = SessionTeanant()
 
 def get_tenant_db():
     """Returns the tenant database session."""
-    
+
 

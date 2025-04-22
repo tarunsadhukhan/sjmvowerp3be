@@ -4,11 +4,12 @@ from sqlalchemy import  func
 from sqlalchemy.sql import text
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Path
 from pydantic import BaseModel
-from src.config.db import default_engine
+from src.config.db import default_engine,extract_subdomain_from_request
 from src.authorization.utils import verify_access_token
 from src.common.query import (get_roles_tenant_admin)
 from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap
 from src.authorization.utils import get_password_hash
+from src.common.companyAdmin.users import get_org_id_from_subdomain
 
 
 router = APIRouter()
@@ -88,19 +89,16 @@ async def get_roles(
 
         offset = (page - 1) * limit
         print(f"Calculated offset: {offset} for page: {page} and limit: {limit}")
+        subdomain = extract_subdomain_from_request(request)
     except HTTPException as he:
         print(f"HTTP Exception in get_roles: {str(he)}")
 
-    try:
-            org_id = get_org_id_for_user(user_id_ck)
-            print(f"Successfully retrieved org_id2: {org_id}")
-    except Exception as e:
-            print(f"Error getting org_id2: {str(e)}")
-            raise
 
-
+            
     try:
         with Session(default_engine) as session:
+            
+            org_id = get_org_id_from_subdomain(subdomain, session)
             # Create query with org_id
             query = get_roles_tenant_admin(search, org_id)
             print(f"Executing query for org_id: {org_id}, search: {search}")
@@ -215,17 +213,13 @@ async def create_role_tenant_admin(
         print(f"Received selected menu IDs: {role_data.selectedMenuIds}")
         
         # Get the org_id for the user
-        org_id = get_org_id_for_user(user_id)
-        if not org_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Organization ID not found for the user"
-            )
+        subdomain = extract_subdomain_from_request(request)
         
-        print(f"Creating role for org_id: {org_id}")
         
         with Session(default_engine) as session:
+            
             try:
+                org_id = get_org_id_from_subdomain(subdomain, session)
                 # Create a new role
                 new_role = conRoleMaster(
                     con_role_name=role_data.roleName,

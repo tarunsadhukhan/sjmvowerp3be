@@ -23,19 +23,34 @@ common_router = APIRouter()
 @common_router.post("/login")
 def login_route(request: Request, login_data: LoginRequest):
     """Login Route (calls login_user from auth.py)"""
-    print("Login User")
+    print("\n=== Starting Login Process ===")
+    print(f"🔄 Received login request for user: {login_data.username}")
+    print(f"🔍 Login type: {login_data.logintype}")
+    print(f"🔒 Remember me: {login_data.rememberMe}")
 
-    # ✅ Extract `X-Subdomain` before calling `login_user()`
+    # Extract subdomain
     subdomain = request.headers.get("X-Subdomain", "default")
-    print(f"DEBUG: Extracted Subdomain = {subdomain}")  # Debugging
-    print('hhhsub',subdomain)
-    return login_user(
-        request,
-        login_data.username,
-        login_data.password,
-        login_data.logintype,
-        subdomain  # ✅ Pass extracted subdomain
-    )
+    print(f"🌐 Using subdomain: {subdomain}")
+    
+    # Print all headers for debugging
+    print("\n📋 Request Headers:")
+    for header, value in request.headers.items():
+        print(f"   {header}: {value}")
+    
+    try:
+        result = login_user(
+            request,
+            login_data.username,
+            login_data.password,
+            login_data.logintype,
+            subdomain
+        )
+        print("✅ Login function completed successfully")
+        return result
+    except Exception as e:
+        print(f"❌ Login error in router: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        raise
 
 @common_router.post("/loginconsole")
 def login_console_route(request: Request, login_data: LoginRequest):
