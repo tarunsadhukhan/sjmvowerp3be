@@ -8,6 +8,7 @@ from src.common.companyAdmin.roles import router as co_roles_router
 from src.common.companyAdmin.users import router as co_users_router
 from src.common.portal.roles import router as co_portal_router
 from src.common.portal.users import router as co_portal_users_router
+from src.common.portal.menu import router as co_portal_menu_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
