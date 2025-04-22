@@ -1,4 +1,3 @@
-
 from src.authorization.utils import create_access_token, create_refresh_token, verify_password
 from fastapi import Request, HTTPException, Response  # ✅ Import Response
 from sqlalchemy.sql import text
@@ -16,88 +15,96 @@ def login_user_console(
     subdomain: str,
 ):
     """Login logic - Queries user table where username, password, and subdomain match"""
-    # 1. Get database connections
- 
-  
-    print('dhshdshdsd',subdomain)
-    # 3. Authenticate user
-    with Session(default_engine) as session:
-        query = get_admin_login_query() if subdomain == 'admin' else get_company_admin_login_query()
-        print('Query:', query)
-        user = session.execute(query, {"username": username}).fetchone()
-        print('User result:', user)
-        if not user:
-            return JSONResponse(
-                content={
-                    "access_token": "",
-                    "token_type": "",
-                    "status": 401,
-                    "message": "Invalid username or password",
-                },
-                status_code=401,
-            )
-        userid=user.con_user_id
-        print('User id:', userid,subdomain)
-
-        if not user or not verify_password(password, user.con_user_login_password):
-            return JSONResponse(
-                content={
-                    "access_token": "",
-                    "token_type": "",
-                    "status": 401,
-                    "message": "Invalid username or password",
-                },
-                status_code=401,
-            )
-
-        # 4. Create tokens
-        token = create_access_token({"user_id": user.con_user_id})
-        refresh_token = create_refresh_token({"user_id": user.con_user_id})
-        
-        # 5. Update refresh token in DB
-        try:
-            query = text("""
-                UPDATE vowconsole3.con_user_master 
-                SET refresh_token = :refresh_token 
-                WHERE con_user_login_email_id = :username
-            """)
-            session.execute(query, {
-                "username": username,
-                "refresh_token": refresh_token
-            })
-            session.commit()
-            print('Refresh token updated for:', username)
-        except Exception as e:
-            print('Error updating refresh token:', str(e))
-            raise HTTPException(status_code=500, detail="Failed to update refresh token")
-
-    # 6. Send cookie with response
-    response = JSONResponse(
-        content={
-            "message": "Login successful",
-            "status": 200,
-            "access_token": token,
-            "user_id": userid
+    try:
+        with Session(default_engine) as session:
+            # Get appropriate query based on subdomain
+            query = get_admin_login_query() if subdomain == 'admin' else get_company_admin_login_query()
+            
+            # Execute query and get user
+            result = session.execute(query, {"username": username})
+            user = result.fetchone() if result else None
+            
+            # Validate user exists and password matches
+            if not user or not hasattr(user, 'con_user_login_password') or not verify_password(password, user.con_user_login_password):
+                return JSONResponse(
+                    content={
+                        "access_token": "",
+                        "token_type": "",
+                        "status": 401,
+                        "message": "Invalid username or password",
                     },
-        status_code=200
-    )
+                    status_code=401,
+                )
 
-    ENV = os.getenv("ENV", "development")  # Set ENV=production in production
-    COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None  # None in dev (set by proxy)
-    SECURE = True if ENV == "production" else False
-    SAMESITE = "None" if ENV == "production" else "Lax"
- 
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,       # Changed: Set to True for security (middleware can still read it)
-        secure=SECURE,       # True in prod (HTTPS), False in dev
-        samesite=SAMESITE,   # 'None' in prod (cross-subdomain), 'Lax' in dev
-        path="/",
-        domain=COOKIE_DOMAIN # .vowerp.co.in in prod, None in dev (set by proxy)
-)
-    return response  # Ensure this is inside the appropriate function
-        
+            # Create tokens
+            user_id = getattr(user, 'con_user_id', None)
+            if not user_id:
+                raise HTTPException(status_code=500, detail="User ID not found in database")
+
+            # Create access token for frontend
+            token = create_access_token({"user_id": user_id})
+            
+            # Create refresh token (stored only in DB)
+            refresh_token = create_refresh_token({"user_id": user_id})
+            
+            # Update refresh token in DB only
+            try:
+                update_query = text("""
+                    UPDATE vowconsole3.con_user_master 
+                    SET refresh_token = :refresh_token 
+                    WHERE con_user_login_email_id = :username
+                """)
+                session.execute(update_query, {
+                    "username": username,
+                    "refresh_token": refresh_token
+                })
+                session.commit()
+                print('Refresh token updated in database for:', username)
+            except Exception as e:
+                print('Error updating refresh token:', str(e))
+                raise HTTPException(status_code=500, detail="Failed to update refresh token")
+
+            # Create response with access token only
+            response = JSONResponse(
+                content={
+                    "message": "Login successful",
+                    "status": 200,
+                    "access_token": token,
+                    "user_id": user_id
+                },
+                status_code=200
+            )
+
+            # Set only access token cookie
+            ENV = os.getenv("ENV", "development")
+            COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None
+            SECURE = True if ENV == "production" else False
+            SAMESITE = "None" if ENV == "production" else "Lax"
+            
+            # Set only access token cookie
+            response.set_cookie(
+                key="access_token",
+                value=token,
+                httponly=True,
+                secure=SECURE,
+                samesite=SAMESITE,
+                path="/",
+                domain=COOKIE_DOMAIN
+            )
+
+            return response
+
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return JSONResponse(
+            content={
+                "access_token": "",
+                "token_type": "",
+                "status": 500,
+                "message": "Internal server error",
+            },
+            status_code=500,
+        )
 
 
 def login_user(
@@ -106,103 +113,117 @@ def login_user(
     password: str,
     logintype: str,
     subdomain: str,
-    #dbs: dict = Depends(get_db_names),  # ✅ Ensure `Depends` is resolved correctly
 ):
     """Login logic - Queries usertable where user_name, password, and mainurl (subdomain) match"""
-  
+    try:
+        db_data = get_db_names(request)
+        dbs = db_data.get("db_engines", {})
+        dbn = db_data.get("db_names_array", [])
 
-    db_data = get_db_names(request)  # ✅ Fetch the full dictionary
-    print('DEBUG: db_data =', db_data)  # ✅ Print full response for debugging
+        if not dbs or "default" not in dbs:
+            return JSONResponse(
+                content={
+                    "access_token": "",
+                    "token_type": "",
+                    "status": 500,
+                    "message": "Database connection failed",
+                },
+                status_code=500,
+            )
 
-    dbs = db_data["db_engines"]  # ✅ Extract database engines
-    dbn = db_data["db_names_array"]  # ✅ Extract database names
+        host = subdomain.strip() if subdomain else None
+        if not host:
+            return JSONResponse(
+                content={
+                    "access_token": "",
+                    "token_type": "",
+                    "status": 400,
+                    "message": "Invalid Subdomain",
+                },
+                status_code=400,
+            )
 
-    print("DEBUG: db_engines =", dbs)  # ✅ Debugging
-    print("DEBUG: db_names_array =", dbn)  # ✅ Debugging
+        with Session(default_engine) as session:
+            query = text("""
+                SELECT * FROM vowconsole3.con_user_master cum
+                LEFT JOIN vowconsole3.con_org_master com ON com.con_org_id = cum.con_org_id
+                WHERE com.active = 1 
+                AND com.con_org_master_status = 3 
+                AND com.con_org_main_url = :host 
+                AND cum.con_user_login_email_id = :username
+            """)
+            user = session.execute(query, {"host": host, "username": username}).fetchone()
 
-    # ✅ Assign dynamic variables based on available database names
-    dbfl1 = dbn[0] if len(dbn) > 0 else None
-    dbfl2 = dbn[1] if len(dbn) > 1 else None
+            if not user or not verify_password(password, getattr(user, 'con_user_login_password', None)):
+                return JSONResponse(
+                    content={
+                        "access_token": "",
+                        "token_type": "",
+                        "status": 401,
+                        "message": "Invalid username or password",
+                    },
+                    status_code=401,
+                )
 
-    print(f"Assigned dbfl1: {dbfl1}, dbfl2: {dbfl2}")  # ✅ Debugging
-    print(request,subdomain)
-    
-    
-    
-    
-    if not isinstance(db_data, dict) or "db_engines" not in db_data:
-        return {
-            "access_token": "",
-            "token_type": "",
-            "status_code": 500,  # Internal Server Error
-            "message": "Database connection failed: Invalid database configuration"
-        }
-       
-    
-    
+            # Create access token for frontend
+            token = create_access_token({"user_id": user.con_user_id})
+            
+            # Create refresh token (stored only in DB)
+            refresh_token = create_refresh_token({"user_id": user.con_user_id})
+            
+            # Update refresh token in DB only
+            try:
+                update_query = text("""
+                    UPDATE vowconsole3.con_user_master 
+                    SET refresh_token = :refresh_token 
+                    WHERE con_user_login_email_id = :username
+                """)
+                session.execute(update_query, {
+                    "username": username,
+                    "refresh_token": refresh_token
+                })
+                session.commit()
+            except Exception as e:
+                print('Error updating refresh token:', str(e))
+                raise HTTPException(status_code=500, detail="Failed to update refresh token")
 
+            # Create response with access token only
+            response = JSONResponse(
+                content={
+                    "message": "Login successful",
+                    "status": 200,
+                    "access_token": token,
+                    "user_id": user.con_user_id
+                },
+                status_code=200
+            )
 
-    
-    print('2nd ',request)
-    if "default" not in dbs:
-        return {
-            "access_token": "",
-            "token_type": "",
-            "status_code": 500,  # Internal Server Error
-            "message": "Database connection failed: Default database missing"
-        }
-        
-        
-    #raise HTTPException(status_code=500, detail="Default database connection missing")
-    print('3ndddssdsdsd ',request)
-    print ('Hosthdshdshd') 
-    host = subdomain.strip() if subdomain else None
-    if not host:
-           return {
-             "access_token": "",
-            "token_type": "",
-            "status_code": 400,  # Internal Server Error
-            "message": "Invalid Subdoman"   
-        }
-     
-        #raise HTTPException(status_code=400, detail="Invalid subdomain")
-    
-    
-    print('hhhs',host)
-   
-    #engine = create_engine(dbs["default"])
-    with Session(default_engine) as session:
-        query = text("""select * from vowconsole3.con_user_master cum
-        left join vowconsole3.con_org_master com on com.con_org_id = cum.con_org_id
-        where com.active = 1 and com.con_org_master_status = 3 and con_org_main_url
-        = :host and con_user_login_email_id = :username""")
-        print('querr', query)
-        user = session.execute(query, {"host": host, "username": username}).fetchone()
-        print('queruserr', query, user)
+            # Set only access token cookie
+            ENV = os.getenv("ENV", "development")
+            COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None
+            SECURE = True if ENV == "production" else False
+            SAMESITE = "None" if ENV == "production" else "Lax"
+            
+            response.set_cookie(
+                key="access_token",
+                value=token,
+                httponly=True,
+                secure=SECURE,
+                samesite=SAMESITE,
+                path="/",
+                domain=COOKIE_DOMAIN
+            )
 
-        if not user or not verify_password(password, user.con_user_login_password):
-            return {
+            return response
+
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return JSONResponse(
+            content={
                 "access_token": "",
                 "token_type": "",
-                "status_code": 401,  # Unauthorized
-                "message": "Invalid username or password"
-            }
-        
-        
-        print('ff', user.con_user_login_password)
-
-        if not verify_password(password, user.con_user_login_password):
-            raise HTTPException(status_code=401, detail="Invalid username or credentials")
-
-        #token = create_access_token({"sub": username})
-        #token = create_access_token({"sub": username, "user_id": user.con_user_id})
-        token = create_access_token({"user_id": user.con_user_id})
-
-        user_id=user.con_user_id
-
-    response = Response(
-        content="Login successful",
-        status_code=200  # Success
-    )
-    response.set_cookie(key="access_token", value=token, httponly=True, secure=True)
-    return response
+                "status": 500,
+                "message": "Internal server error",
+            },
+            status_code=500,
+        )

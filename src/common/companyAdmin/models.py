@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
@@ -79,8 +80,11 @@ class ConRoleMenuMap(Base):
     __tablename__ = 'con_role_menu_map'
 
     con_role_menu_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
-    con_role_id = Column(Integer, ForeignKey('con_role_master.con_role_id'), nullable=False)
+    con_role_id = Column(Integer, ForeignKey('con_role.con_role_id'), nullable=False)
     con_menu_id = Column(Integer, ForeignKey('con_menu_master.con_menu_id'), nullable=False)
+
+    menu = relationship('ConMenuMaster', backref='role_mappings')
+    role = relationship('ConRole', backref='menu_mappings')
 
     def __repr__(self):
         return (f"<ConRoleMenuMap(id={self.con_role_menu_mapping_id}, "
@@ -150,7 +154,11 @@ class ConUserRoleMapping(Base):
     __tablename__ = "con_user_role_mapping"
 
     con_user_role_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
-    con_role_id = Column(Integer, nullable=False, index=True)
-    con_user_id = Column(Integer, nullable=False, index=True)
+    con_role_id = Column(Integer, ForeignKey('con_role_master.con_role_id'), nullable=False, index=True)
+    con_user_id = Column(Integer, ForeignKey('con_user_master.con_user_id'), nullable=False, index=True)
     created_by = Column(Integer, nullable=False, index=True)
     created_date_time = Column(DateTime, nullable=True, server_default=func.now())
+
+    # Add relationships
+    user = relationship('ConUser', foreign_keys=[con_user_id])
+    role = relationship('ConRole', foreign_keys=[con_role_id])
