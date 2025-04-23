@@ -30,7 +30,7 @@ class ConRoleMenuMap(Base):
     __tablename__ = "role_menu_map"
 
     role_menu_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
-    role_id = Column(Integer, ForeignKey('role_mst.role_id'), nullable=False)
+    role_id = Column(Integer, ForeignKey('roles_mst.role_id'), nullable=False)
     menu_id = Column(Integer, nullable=False)
     access_type_id = Column(Integer, nullable=False)
 
