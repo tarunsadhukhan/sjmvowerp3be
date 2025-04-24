@@ -35,3 +35,98 @@ class ConRoleMenuMap(Base):
     access_type_id = Column(Integer, nullable=False)
 
     role = relationship('conRoleMaster', backref='menu_mappings')
+
+class UserRoleMap(Base):
+    __tablename__ = "user_role_map"
+
+    user_role_map_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("user_mst.user_id"), nullable=False)
+    role_id = Column(Integer, ForeignKey("roles_mst.role_id"), nullable=False)
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
+    branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=False)
+    created_by_con_user = Column(Integer)
+    created_at = Column(DateTime, default=func.now())
+
+    user = relationship("ConUser", foreign_keys=[user_id], backref="role_maps")
+
+
+class CoMst(Base):
+    __tablename__ = "co_mst"
+
+    co_id = Column(Integer, primary_key=True, autoincrement=True)
+    co_name = Column(String(255), nullable=False, unique=True)
+    co_prefix = Column(String(25), nullable=False, unique=True)
+    co_address1 = Column(String(255), nullable=False)
+    co_address2 = Column(String(255))
+    co_zipcode = Column(Integer, nullable=False)
+    country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False)
+    state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=False)
+    city_id = Column(Integer, ForeignKey("city_mst.city_id"), nullable=False)
+    co_logo = Column(String(255))
+    auto_datetime_insert = Column(DateTime, default=func.now())
+    created_by_con_user = Column(Integer)
+    co_cin_no = Column(String(25))
+    co_email_id = Column(String(255))
+    co_pan_no = Column(String(25))
+    s3bucket_name = Column(String(255))
+    s3folder_name = Column(String(255))
+    tally_sync = Column(String(255))
+    alert_email_id = Column(String(255))
+
+    country = relationship("CountryMst", foreign_keys=[country_id])
+    state = relationship("StateMst", foreign_keys=[state_id])
+    city = relationship("CityMst", foreign_keys=[city_id])
+
+
+class BranchMst(Base):
+    __tablename__ = "branch_mst"
+
+    branch_id = Column(Integer, primary_key=True, autoincrement=True)
+    branch_name = Column(String(255), nullable=False, unique=True)
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
+    branch_address1 = Column(String(255))
+    branch_address2 = Column(String(255))
+    branch_zipcode = Column(Integer)
+    country_id = Column(Integer, ForeignKey("country_mst.country_id"))
+    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
+    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
+    gst_no = Column(String(25))
+    contact_no = Column(Integer)
+    contact_person = Column(String(255))
+    branch_email = Column(String(255))
+    active = Column(Boolean)
+    gst_verified = Column(Boolean)
+    co = relationship("CoMst", foreign_keys=[co_id])
+    country = relationship("CountryMst", foreign_keys=[country_id])
+    state  = relationship("StateMst",  foreign_keys=[state_id])
+    city   = relationship("CityMst",   foreign_keys=[city_id])
+
+
+class CountryMst(Base):
+    __tablename__ = "country_mst"
+
+    country_id = Column(Integer, primary_key=True, autoincrement=True)
+    country = Column(String(255), nullable=False, unique=True)
+
+    states = relationship("StateMst", back_populates="country")
+
+
+class StateMst(Base):
+    __tablename__ = "state_mst"
+
+    state_id = Column(Integer, primary_key=True, autoincrement=True)
+    state = Column(String(255), nullable=False, unique=True)
+    country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False)
+
+    country = relationship("CountryMst", back_populates="states")
+    cities = relationship("CityMst", back_populates="state")
+
+
+class CityMst(Base):
+    __tablename__ = "city_mst"
+
+    city_id = Column(Integer, primary_key=True, autoincrement=True)
+    city_name = Column(String(255))
+    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
+
+    state = relationship("StateMst", back_populates="cities")

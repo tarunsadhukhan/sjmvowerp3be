@@ -163,9 +163,9 @@ async def create_role_portal(
         elif role_data.selectedMenuIds:
             print(f"Received selectedMenuIds: {role_data.selectedMenuIds}")
         
-        # Get the subdomain for logging
-        subdomain = extract_subdomain_from_request(request)
-        print(f"Creating role for subdomain: {subdomain}")
+        # # Get the subdomain for logging
+        # subdomain = extract_subdomain_from_request(request)
+        # print(f"Creating role for subdomain: {subdomain}")
         
         try:
             # Create a new role
@@ -259,15 +259,15 @@ async def edit_role_portal(
     Returns:
         Dict with status and updated role data
     """
-    print("Starting update_role_menu_access endpoint")
+    print(f"\n[DEBUG] Starting edit_role_portal for role ID: {role_data.roleId}")
     try:
         user_id = token_data.get("user_id")
         if not user_id:
             raise HTTPException(status_code=403, detail="User ID not found in token")
         
-        print(f"Authenticated user ID: {user_id}")
-        print(f"Updating role ID: {role_data.roleId}")
-        print(f"Menu access list: {[f'menuId: {item.menuId}, accessTypeId: {item.accessTypeId}' for item in role_data.menuAccessList]}")
+        print(f"[DEBUG] Authenticated user ID: {user_id}")
+        print(f"[DEBUG] Updating role ID: {role_data.roleId}")
+        print(f"[DEBUG] Menu access list: {[f'menuId: {item.menuId}, accessTypeId: {item.accessTypeId}' for item in role_data.menuAccessList]}")
         
         try:
             # First verify if role exists
@@ -281,13 +281,49 @@ async def edit_role_portal(
                     detail=f"Role with ID {role_data.roleId} not found"
                 )
             
-            # Delete existing menu mappings for this role
-            print(f"Deleting existing menu mappings for role {role_data.roleId}")
-            delete_query = tenant_session.query(ConRoleMenuMap).filter(
+            # Get count of existing mappings before deletion
+            existing_count = tenant_session.query(ConRoleMenuMap).filter(
                 ConRoleMenuMap.role_id == role_data.roleId
-            ).delete()
+            ).count()
+            print(f"[DEBUG] Found {existing_count} existing menu mappings for role {role_data.roleId}")
             
-            print(f"Deleted {delete_query} existing mappings")
+            # Delete existing menu mappings for this role
+            print(f"[DEBUG] Deleting existing menu mappings for role {role_data.roleId}")
+            
+            try:
+                delete_query = tenant_session.query(ConRoleMenuMap).filter(
+                    ConRoleMenuMap.role_id == role_data.roleId
+                ).delete(synchronize_session='fetch')  # Use 'fetch' strategy for safety
+                
+                print(f"[DEBUG] Deleted {delete_query} existing mappings")
+                
+                # Verify deletion was successful
+                remaining_count = tenant_session.query(ConRoleMenuMap).filter(
+                    ConRoleMenuMap.role_id == role_data.roleId
+                ).count()
+                print(f"[DEBUG] After deletion, {remaining_count} mappings remain for role {role_data.roleId}")
+                
+                if remaining_count > 0:
+                    print(f"[DEBUG] WARNING: Not all mappings were deleted. {remaining_count} mappings remain.")
+                    # Try direct SQL approach if ORM approach didn't work
+                    try:
+                        direct_delete = text("DELETE FROM role_menu_map WHERE role_id = :role_id")
+                        result = tenant_session.execute(direct_delete, {"role_id": role_data.roleId})
+                        tenant_session.flush()
+                        print(f"[DEBUG] Direct SQL delete executed with result: {result.rowcount} rows affected")
+                        
+                        # Check again
+                        remaining_count = tenant_session.query(ConRoleMenuMap).filter(
+                            ConRoleMenuMap.role_id == role_data.roleId
+                        ).count()
+                        print(f"[DEBUG] After direct SQL deletion, {remaining_count} mappings remain for role {role_data.roleId}")
+                    except Exception as sql_error:
+                        print(f"[DEBUG] Error in direct SQL delete: {str(sql_error)}")
+                        raise
+            except Exception as delete_error:
+                print(f"[DEBUG] Error during deletion: {str(delete_error)}")
+                tenant_session.rollback()
+                raise
             
             # Create new menu mappings with access types
             menu_mappings = []
@@ -304,9 +340,25 @@ async def edit_role_portal(
             
             if menu_mappings:
                 tenant_session.add_all(menu_mappings)
-                print(f"Added {len(menu_mappings)} new menu mappings with access types")
+                tenant_session.flush()  # Flush to ensure mappings are processed before commit
+                print(f"[DEBUG] Added {len(menu_mappings)} new menu mappings with access types")
+            
+            # Final check before commit
+            current_mappings = tenant_session.query(ConRoleMenuMap).filter(
+                ConRoleMenuMap.role_id == role_data.roleId
+            ).all()
+            print(f"[DEBUG] Before commit, found {len(current_mappings)} mappings for role {role_data.roleId}")
+            print(f"[DEBUG] Current mappings: {[(m.menu_id, m.access_type_id) for m in current_mappings]}")
             
             tenant_session.commit()
+            print(f"[DEBUG] Transaction committed successfully")
+            
+            # Verify final state after commit
+            final_mappings = tenant_session.query(ConRoleMenuMap).filter(
+                ConRoleMenuMap.role_id == role_data.roleId
+            ).all()
+            print(f"[DEBUG] After commit, found {len(final_mappings)} mappings for role {role_data.roleId}")
+            print(f"[DEBUG] Final mappings: {[(m.menu_id, m.access_type_id) for m in final_mappings]}")
             
             return {
                 "status": "success",
@@ -314,13 +366,14 @@ async def edit_role_portal(
                 "data": {
                     "role_id": role_data.roleId,
                     "role_name": role.role_name if hasattr(role, 'role_name') else None,
-                    "mapped_menu_count": len(role_data.menuAccessList)
+                    "mapped_menu_count": len(role_data.menuAccessList),
+                    "actual_mapped_count": len(final_mappings)
                 }
             }
             
         except Exception as db_error:
             tenant_session.rollback()
-            print(f"Database error: {str(db_error)}")
+            print(f"[DEBUG] Database error: {str(db_error)}")
             import traceback
             traceback.print_exc()
             raise HTTPException(
@@ -329,9 +382,10 @@ async def edit_role_portal(
             )
     
     except HTTPException as he:
+        print(f"[DEBUG] HTTP Exception: {str(he)}")
         raise he
     except Exception as e:
-        print(f"Unexpected error in update_role_menu_access: {str(e)}")
+        print(f"[DEBUG] Unexpected error in edit_role_portal: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
