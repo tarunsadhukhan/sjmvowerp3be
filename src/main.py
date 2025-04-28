@@ -9,6 +9,7 @@ from src.common.companyAdmin.users import router as co_users_router
 from src.common.portal.roles import router as co_portal_router
 from src.common.portal.users import router as co_portal_users_router
 from src.common.portal.menu import router as co_portal_menu_router
+from src.common.portal.approval import router as co_portal_approval_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -42,7 +43,8 @@ app.include_router(co_roles_router, prefix="/api/companyAdmin", tags=["company-a
 app.include_router(co_users_router, prefix="/api/companyAdmin", tags=["company-admin-users"])
 app.include_router(co_portal_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
 app.include_router(co_portal_users_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
-
+app.include_router(co_portal_menu_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+app.include_router(co_portal_approval_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

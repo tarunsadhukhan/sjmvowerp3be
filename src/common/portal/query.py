@@ -27,6 +27,33 @@ def get_user_role_map_tenant(user_id: int = None):
     query = text(sql)
     return query
 
+def get_co_brnach_all():
+    sql = f"SELECT cm.co_id, cm.co_name, bm.branch_id, bm.branch_name FROM branch_mst bm LEFT JOIN co_mst cm ON cm.co_id = bm.co_id;"
+    query = text(sql)
+    return query
+
+def get_submenu_portal():
+    sql = f"SELECT menu_id, menu_name FROM menu_mst mm WHERE mm.menu_parent_id IS NOT NULL;"
+    query = text(sql)
+    return query
+
+def get_users_approval_portal(menu_id: int = None, branch_id: int = None):
+    sql = f"select distinct(urm.user_id), um.email_id from user_role_map urm left join user_mst um on urm.user_id = um.user_id where urm.branch_id =:branch_id and urm.role_id in (select rmm.role_id from role_menu_map rmm where rmm.menu_id =:menu_id )  ;"
+    query = text(sql)
+    return query
+
+def get_max_approval(menu_id: int = None):
+    sql = f"SELECT max(approval_level) as max_approval FROM approval_mst where menu_id = :menu_id;"
+    query = text(sql)
+    return query
+
+def get_approval_data(menu_id: int = None, branch_id: int = None):
+    sql = f"SELECT approval_level, user_id, max_amount_single , day_max_amount , month_max_amount FROM approval_mst where menu_id = :menu_id and branch_id = :branch_id;"
+    query = text(sql)
+    return query
+
+
+
 
 # {
 #     "detail": "Error fetching user edit setup data: (sqlalchemy.exc.InvalidRequestError) "

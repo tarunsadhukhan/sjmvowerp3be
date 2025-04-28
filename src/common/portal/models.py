@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from sqlalchemy import Float
 
 # Create Base class for SQLAlchemy ORM
 Base = declarative_base()
@@ -130,3 +131,33 @@ class CityMst(Base):
     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
 
     state = relationship("StateMst", back_populates="cities")
+
+class ApprovalMst(Base):
+    __tablename__ = "approval_mst"
+
+    approval_mst_id   = Column(Integer, primary_key=True, autoincrement=True)
+    menu_id           = Column(Integer, ForeignKey("menu_mst.menu_id"),   nullable=False)
+    user_id           = Column(Integer, ForeignKey("user_mst.user_id"),   nullable=False)
+    branch_id         = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=False)
+    approval_level    = Column(Integer, nullable=False)
+    max_amount_single = Column(Float)
+    day_max_amount    = Column(Float)
+    month_max_amount  = Column(Float)
+
+    # relationships
+    menu   = relationship("MenuMst",   foreign_keys=[menu_id])
+    user   = relationship("ConUser",   foreign_keys=[user_id])
+    branch = relationship("BranchMst", foreign_keys=[branch_id])
+    class MenuMst(Base):
+        __tablename__ = "menu_mst"
+
+        menu_id        = Column(Integer, primary_key=True, autoincrement=True)
+        menu_name      = Column(String(255), nullable=False, unique=True)
+        menu_path      = Column(String(255))
+        active         = Column(Boolean, nullable=False)
+        menu_parent_id = Column(Integer, ForeignKey("menu_mst.menu_id"))
+        menu_type_id   = Column(Integer)
+        menu_icon      = Column(String(255))
+
+        parent   = relationship("MenuMst", remote_side=[menu_id],
+                                backref="children", foreign_keys=[menu_parent_id])

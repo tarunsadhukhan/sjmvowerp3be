@@ -170,36 +170,17 @@ CREATE TABLE user_role_map (
     FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id)
 );
 
--- TABLE: task_mst
-CREATE TABLE task_mst (
-    task_mst_id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    task_desc VARCHAR(255),
-    module_mst_id INTEGER,
-    FOREIGN KEY (module_mst_id) REFERENCES module_mst(module_mst_id)
-);
-
--- TABLE: approval_mst
 CREATE TABLE approval_mst (
-    approval_mst_id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    task_mst_id INTEGER,
-    approval_level INTEGER,
-    max_amount DOUBLE,
-    branch_id INTEGER,
+    approval_mst_id INT NOT NULL AUTO_INCREMENT,
+    menu_id INT NOT NULL,
+    user_id INT NOT NULL,
+    branch_id INT NOT NULL,
+    approval_level INT NOT NULL,
+    max_amount_single DOUBLE,
     day_max_amount DOUBLE,
     month_max_amount DOUBLE,
-    FOREIGN KEY (task_mst_id) REFERENCES task_mst(task_mst_id),
-    FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id)
-);
-
--- TABLE: approval_map
-CREATE TABLE approval_map (
-    approval_mapping_id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    user_id INTEGER,
-    approval_mst_id INTEGER,
-    branch_id INTEGER,
-    co_id INTEGER,
+    PRIMARY KEY (approval_mst_id),
+    FOREIGN KEY (menu_id) REFERENCES menu_mst(menu_id),
     FOREIGN KEY (user_id) REFERENCES user_mst(user_id),
-    FOREIGN KEY (approval_mst_id) REFERENCES approval_mst(approval_mst_id),
-    FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
-    FOREIGN KEY (co_id) REFERENCES co_mst(co_id)
+    FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id)
 );
