@@ -1,46 +1,163 @@
-from fastapi import Request, HTTPException
-from sqlmodel import Session, create_engine
-from sqlalchemy.sql import text
+from fastapi import Request
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session as SQLAlchemySession
 import os
-import pymysql
 
 # Load environment variables
-load_dotenv("env/database.env")
+try:
+    load_dotenv("env/database.env")
+except Exception as e:
+    print(f"Warning: Could not load database.env file: {e}")
 
 def get_engine(db_url: str):
-    return create_engine(db_url, pool_pre_ping=True)
+    try:
+        return create_engine(db_url, pool_pre_ping=True)
+    except Exception as e:
+        print(f"Error creating database engine: {e}")
+        raise
+
+# Check for required environment variables
+required_vars = ['DATABASE_USER', 'DATABASE_PASSWORD', 'DATABASE_HOST', 'DATABASE_PORT', 'DATABASE_DEFAULT']
+missing_vars = [var for var in required_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Default (main) database connection
-# DEFAULT_PORT = 3306
 DEFAULT_DATABASE_URL = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
                        f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{os.getenv('DATABASE_DEFAULT')}"
-# DEFAULT_DATABASE_URL = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
-#                        f"{os.getenv('DATABASE_HOST')}:{DEFAULT_PORT}/{os.getenv('DATABASE_DEFAULT')}"
-print ('DE',DEFAULT_DATABASE_URL)                       
+print('DE', DEFAULT_DATABASE_URL)
 default_engine = get_engine(DEFAULT_DATABASE_URL)
+
+# Create a sessionmaker
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=default_engine)
+
+# Export the Session class
+Session = SQLAlchemySession
+
+# Default database name variables - used by other modules
+# Setting default values that will be overridden during request processing
+db = "default"  
+db1 = "default_c"
+db2 = "default_c_1"
+db3 = "default_c_2"
+db4 = "default_c_3"
+
+def extract_subdomain_from_request(request: Request) -> str:
+    """
+    Extract subdomain from request using multiple fallback methods
+    """
+    print("\n=== Extracting Subdomain ===")
+    
+    # Try X-Forwarded-Host first (common with proxies)
+    forwarded_host = request.headers.get("x-forwarded-host")
+    print(f"📌 X-Forwarded-Host header: {forwarded_host}")
+    if forwarded_host and '.' in forwarded_host:
+        subdomain = forwarded_host.split('.')[0]
+        if subdomain != "localhost":
+            print(f"✅ Found subdomain from X-Forwarded-Host: {subdomain}")
+            return subdomain
+
+    # Try regular host header
+    host = request.headers.get("host", "")
+    print(f"📌 Host header: {host}")
+    if host and '.' in host:
+        subdomain = host.split('.')[0]
+        if subdomain != "localhost":
+            print(f"✅ Found subdomain from Host: {subdomain}")
+            return subdomain
+
+    # Try getting from referer
+    referer = request.headers.get("referer", "")
+    print(f"📌 Referer header: {referer}")
+    if referer:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            if parsed.netloc and '.' in parsed.netloc:
+                subdomain = parsed.netloc.split('.')[0]
+                if subdomain != "localhost":
+                    print(f"✅ Found subdomain from Referer: {subdomain}")
+                    return subdomain
+        except Exception as e:
+            print(f"❌ Error parsing referer: {str(e)}")
+
+    # Try explicit subdomain header as fallback
+    subdomain = request.headers.get("subdomain")
+    print(f"📌 Explicit subdomain header: {subdomain}")
+    if subdomain:
+        print(f"✅ Found explicit subdomain: {subdomain}")
+        return subdomain.strip()
+
+    # Default fallback
+    print("ℹ️ No subdomain found, using default")
+    return "default"
 
 def get_db_names(request: Request):
     """Fetches dynamic database mappings and assigns database engines."""
-    #host = "vowsls3.vowerp.co.in"
-    host = request.headers.get("X-Subdomain", "default")  # ✅ Extract from headers
-    subdomain = host.split(".")[0] if "." in host else "default"
-    print(f"Extracted subdomain: {subdomain}")  # Debugging
+    print("\n=== Setting up Database Connection ===")
+    
+    subdomain = extract_subdomain_from_request(request)
+    print(f"🌐 Using subdomain for database: {subdomain}")
 
-    db_engines = {"default": default_engine}
-    db_names_array = []  # ✅ Array to store database names
+    try:
+        db_engines = {"default": default_engine}
+        
+        # Calculate database names based on subdomain
+        global db, db1, db2, db3, db4
+        db = subdomain
+        db1 = f"{subdomain}_c"
+        db2 = f"{subdomain}_c_1"
+        db3 = f"{subdomain}_c_2"
+        db4 = f"{subdomain}_c_3"
+        
+        print(f"""📊 Database mappings:
+        Main DB: {db}
+        DB1: {db1}
+        DB2: {db2}
+        DB3: {db3}
+        DB4: {db4}""")
 
-
-    print("Final Database Mappings:", db_engines)
-    print("Final Database Names Array:", db_names_array)
-
-    return {
-        "db_engines": db_engines,  # ✅ Return dictionary of database engines
-        "db_names_array": db_names_array  # ✅ Return array of database names
-    }
+        return {
+            "db_engines": db_engines,
+            "db": db,
+            "db1": db1,
+            "db2": db2,
+            "db3": db3,
+            "db4": db4,
+            "db_names_array": [db, db1, db2, db3, db4]
+        }
+    except Exception as e:
+        print(f"❌ Error in get_db_names: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        raise
 
 # Dependency function to get the correct database session
 def get_db(request: Request):
     """Returns the correct database session dynamically."""
     db_engines = get_db_names(request)
     yield db_engines
+
+tenant_url = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
+                       f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{db}"
+tenant_engine = get_engine(tenant_url)
+SessionTeanant = sessionmaker(autocommit=False, autoflush=False, bind=tenant_engine)
+SessionTenantLocal = SessionTeanant()
+
+def get_tenant_db(request:Request):
+    """Returns the tenant database session."""
+    subdomain = extract_subdomain_from_request(request)
+    tenant_db= subdomain
+    tenant_url = f"mysql+pymysql://{os.getenv('DATABASE_USER')}:{os.getenv('DATABASE_PASSWORD')}@" \
+                       f"{os.getenv('DATABASE_HOST')}:{os.getenv('DATABASE_PORT')}/{tenant_db}"
+    engine = get_engine(tenant_url)
+    SessionTenant = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    db = SessionTenant()
+    try:
+        yield db
+    finally:
+        db.close()
+        
+
+

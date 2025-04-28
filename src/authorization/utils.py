@@ -60,6 +60,18 @@ def create_refresh_token(data: dict, expires_delta: timedelta = None):
 def verify_password(plain_password, hashed_password) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
+def get_password_hash(password: str) -> str:
+    """
+    Hash a password using bcrypt
+    
+    Args:
+        password (str): The plain text password to hash
+        
+    Returns:
+        str: The hashed password
+    """
+    return pwd_context.hash(password)
+
 def decode_access_token(token: str) -> str:
         # Example implementation
         # Decode the token and return the username or relevant data
@@ -92,3 +104,4 @@ def verify_access_token(access_token: str = Cookie(None, alias="access_token")) 
     except jwt.InvalidTokenError as e:
         print(f"Token verification failed: {str(e)}")  # Debug
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+

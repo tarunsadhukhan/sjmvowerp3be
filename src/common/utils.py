@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from typing import Optional
 from datetime import datetime
 
@@ -64,3 +64,42 @@ def get_current_timestamp():
     Returns the current timestamp in 'YYYY-MM-DD HH:MM:SS' format.
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def get_org_id_from_subdomain(subdomain: str, db: Session) -> int:
+    """
+    Get the organization ID for a given subdomain using raw SQL.
+
+    Args:
+        subdomain (str): Subdomain extracted from the request.
+        db (Session): SQLAlchemy session.
+
+    Returns:
+        int: Organization ID.
+
+    Raises:
+        HTTPException: If organization is not found or on DB error.
+    """
+    try:
+        sql = text(
+            "SELECT con_org_id "
+            "FROM con_org_master "
+            "WHERE con_org_shortname = :subdomain"
+        )
+        org_id = db.execute(sql, {"subdomain": subdomain}).scalar()
+
+        if org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Organization with subdomain {subdomain} not found",
+            )
+
+        return org_id
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in get_org_id_from_subdomain: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving organization ID: {str(e)}",
+        )

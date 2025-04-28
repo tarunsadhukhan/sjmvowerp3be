@@ -7,6 +7,7 @@ from sqlmodel import SQLModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from src.config.db import get_db, get_db_names
 
 class ConOrgMaster(SQLModel, table=True):
     __tablename__ = "con_org_master"
@@ -56,4 +57,3 @@ class MachineMaster(SQLModel, table=True):
     
 class CompanyRequest(BaseModel):
     userId: int
-    

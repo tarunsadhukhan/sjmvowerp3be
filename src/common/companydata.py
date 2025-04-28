@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 from src.config.db import get_db_names,default_engine
 from src.authorization.utils import verify_access_token
 from collections import defaultdict
-from src.common.query import get_menu_for_user1_query, get_menu_for_othuser_query
+from src.common.query import get_menu_for_user1_query, get_menu_for_othuser_query,get_total_count_query,get_role_for_user1_query, get_role_for_user1_query_company
 # Example definition for get_menu_for_othuser_query (replace with actual implementation)
+from pydantic import BaseModel
+from typing import Optional
 
 router = APIRouter()
 
@@ -18,6 +20,14 @@ from fastapi import Request, Query, Cookie, HTTPException
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
 
+
+class RoleBase(BaseModel):
+    name: str
+    type: str
+    has_hrms_access: bool = False
+
+
+# control desk menu
 @router.get("/console_menu_items")
 def compmenuitems(
     request: Request,
@@ -28,19 +38,6 @@ def compmenuitems(
     subdomain = request.headers.get("X-Subdomain", "default")
     print(subdomain)
 
-    # # Validate the cookie
-    # if not access_token:
-    #     raise HTTPException(status_code=403, detail="No access token cookie provided")
-
-    # # Example: Assuming the cookie contains user_id or some identifier
-    # # Replace this with your actual cookie validation logic (e.g., decode JWT, check session store)
-    # user_id_from_cookie = access_token  # For now, assuming access_token is the user_id; adjust as needed
-
-    # print(user_id, user_id_from_cookie)
-    # if str(user_id) != str(user_id_from_cookie):  # Ensure correct user
-    #     raise HTTPException(status_code=403, detail="Unauthorized access via cookie")
-
-    # New: Extract user_id from the decoded token
     user_id_from_cookie = token_data.get("user_id")
     print(f"Query user_id: {user_id}, Token user_id: {user_id_from_cookie}")  # Debug
     if not user_id_from_cookie:
@@ -190,11 +187,6 @@ def companiesfyyear(
                 "status_code": 401,  # Unauthorized
                 "message": "No Data Found"
             }
-        
-        
-      
- 
-
     return {
         "data": user,
         "status_code": 200,  # Success
@@ -205,5 +197,124 @@ def companiesfyyear(
 
 
 
+@router.get("/roles_sls")
+async def get_roles(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1),
+    search: Optional[str] = None,
+    token_data: dict = Depends(verify_access_token),  # Use the new dependency
+):
+    user_id_ck = token_data.get("user_id")  
+    offset = (page - 1) * limit
+    try:
+            db = get_db_names(request)  # ✅ Fetch the full dictionary
+    except Exception as db_error:
+            raise HTTPException(status_code=500, detail=f"Database configuration error: {str(db_error)}")
+        # Check if db is properly structured
+    if not isinstance(db, dict) or "db" not in db:
+            raise HTTPException(status_code=500, detail="Invalid database configuration structure")
+    dbm = db.get("db")  # Get the database name
+    try:
+            if user_id_ck == 1:
+                query = get_role_for_user1_query(search, dbm)
+            else:
+                query = get_role_for_user1_query_company(search, dbm)
+    except Exception as query_error:
+            raise HTTPException(status_code=500, detail=f"Query generation error: {str(query_error)}")
+            
+        # Execute the main query
+    try:
+            with Session(default_engine) as session:
+                print(f"Executing query with  limit={limit}, offset={offset}, search={search}")
+                roles = session.execute(
+                    query, { "limit": limit, "offset": offset, "search": f"%{search}%" if search else None}
+                ).fetchall()
+                print(f"Query returned {len(roles) if roles else 0} results")
+    except Exception as query_exec_error:
+            raise HTTPException(status_code=500, detail=f"Database query error: {str(query_exec_error)}")
+
+        # Convert roles to a list of dictionaries
+    try:
+            roles = [dict(r._mapping) for r in roles]
+            print(f"Converted {len(roles)} rows to dictionaries")
+    except Exception as conversion_error:
+            print(f"Data conversion error: {conversion_error}")
+            raise HTTPException(status_code=500, detail=f"Data conversion error: {str(conversion_error)}")
+
+    except HTTPException:
+        # Re-raise HTTP exceptions to maintain their status codes
+        raise
+    except Exception as e:
+        # Catch any other exceptions
+        print(f"Unexpected error in get_roles: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+    # Get total count
+    try:
+        with Session(default_engine) as session:
+            count_query = get_total_count_query(user_id_ck, search)
+            cmpid = 2
+            total_result = session.execute(count_query, {"cmpid": cmpid, "search": f"%{search}%" if search else None}).fetchone()
+            print(f"Total count query result: {total_result}")
+
+        # Extract the count value
+        total = total_result[0] if total_result else 0
+        print(f"Total records: {total}")
+
+    except Exception as count_error:
+        print(f"Error retrieving total count: {count_error}")
+        total = 0  # Default to 0 if count query fails
+
+    return {
+        "data": roles,
+        "total": total
+    }
+  
+
+@router.get("/roles")
+async def get_roles(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1),
+    user_id: int = Query(1),
+    search: Optional[str] = None,
+):
+    try:
+        offset = (page - 1) * limit
+
+        # Get the appropriate query based on user_id
+        if user_id == 1:
+            query = get_role_for_user1_query(search)
+        else:
+            query = get_menu_for_othuser_query()
+
+        # Execute the main query
+        with Session(default_engine) as session:
+            cmpid = 2
+            roles = session.execute(
+            query, {"cmpid": cmpid, "limit": limit, "offset": offset, "search": f"%{search}%" if search else None}
+            ).fetchall()
+            print("queruserr", query, roles)
+
+        # Convert roles to a list of dictionaries
+        roles = [dict(r._mapping) for r in roles]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Get total count
+    with Session(default_engine) as session:
+        count_query = get_total_count_query(user_id,search)
+        cmpid = 2
+        total_result = session.execute(count_query, {"cmpid": cmpid, "search": f"%{search}%" if search else None}).fetchone()
+        print("total", total_result)
+
+    # total = total_result[0] if total_result else 0
+    total = total_result[0] if total_result else 0
 
 
+    return {
+        "data": roles,
+        "total": total
+    }
