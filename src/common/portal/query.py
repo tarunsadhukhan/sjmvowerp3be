@@ -52,6 +52,20 @@ def get_approval_data(menu_id: int = None, branch_id: int = None):
     query = text(sql)
     return query
 
+def get_portal_user_menus(user_id: int = None):
+    sql = """
+        select  urm.co_id ,cm.co_name , urm.branch_id,bm.branch_name ,  urm.role_id, rmm.menu_id, 
+        mm.menu_name, mm.menu_path, mm.menu_parent_id  
+        from user_role_map urm
+        left join co_mst cm on cm.co_id= urm.co_id
+        left join branch_mst bm on bm.branch_id = urm.branch_id
+        left join role_menu_map rmm on rmm.role_id = urm.role_id
+        left join menu_mst mm on mm.menu_id = rmm.menu_id and mm.active =1
+    where urm.user_id = :user_id;
+    """
+    query = text(sql)
+    return query
+
 
 
 
