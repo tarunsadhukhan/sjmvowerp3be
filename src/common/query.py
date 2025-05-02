@@ -63,9 +63,9 @@ WITH RECURSIVE MenuHierarchy AS (
         CASE WHEN parent_id = 66 THEN concat('store/', path) ELSE path END path, icon, parent_id, mmenu_id,
         null company_id, :userid user_id FROM MenuHierarchy mh ORDER BY mmenu_id limit 3290 ) k
         join (
-        select control_desk_menu_id from vowconsole3.con_user_role_mapping curm 
-        left join vowconsole3.con_role_menu_mapping crmm on curm.con_role_id =crmm.con_role_id
-        where curm.con_user_id =:userid
+        select control_desk_menu_id from control_desk_menu cdm 
+        where cdm.control_desk_menu_id in (select con_menu_id from con_role_menu_map crmm where con_role_id = 
+        (select curm.con_role_id from con_user_role_mapping curm where curm.con_user_id = :userid) )
         ) g on  k.id=g.control_desk_menu_id """)
 
 
@@ -278,15 +278,15 @@ def get_users_ctrldesk_admin_query(search: str = None):
 
 
 
-def get_menu_for_othuser_query():
-    return text("""
-        SELECT r.* 
-        FROM roles r 
-        WHERE r.has_hrms_access = false 
-        OR :userid != 1
-        ORDER BY r.created_at DESC 
-        LIMIT :limit OFFSET :offset
-    """)
+# def get_menu_for_othuser_query():
+#     return text("""
+#         SELECT r.* 
+#         FROM roles r 
+#         WHERE r.has_hrms_access = false 
+#         OR :userid != 1
+#         ORDER BY r.created_at DESC 
+#         LIMIT :limit OFFSET :offset
+#     """)
 
 def get_total_count_query(user_id: int,search: str = None):
     if user_id == 1:

@@ -60,8 +60,8 @@ def compmenuitems(
     else:
         sql_query = get_menu_for_othuser_query()
         params = {"userid": user_id} 
- 
-    # print(sql_query,params)
+
+    print("sqluery display for menu", sql_query, params)
         
         
     
@@ -73,13 +73,13 @@ def compmenuitems(
 
     column_names = ['id', 'title', 'path', 'icon', 'parent_id', 'mmenu_id', 'company_id', 'user_id']
     results = [dict(zip(column_names, row)) for row in user]
-    # print('results', results)
+    print('results', results)
 
     mainMenus = [item for item in results if item['parent_id'] == 0]
     subMenus = [item for item in results if item['parent_id'] != 0]
 
-    # print('main', mainMenus)
-    # print('sub', subMenus)
+    print('main', mainMenus)
+    print('sub', subMenus)
 
     menuData = []
     for main in mainMenus:
@@ -97,7 +97,7 @@ def compmenuitems(
             'icon': main['icon'],
             'submenu': submenuItems if submenuItems else None,
         })
-
+        print('menuData other user', menuData)
     return {
         "data": menuData
     }
