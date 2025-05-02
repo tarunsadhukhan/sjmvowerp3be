@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from src.config.db import default_engine, extract_subdomain_from_request
 from src.authorization.utils import verify_access_token, get_password_hash
-from src.common.query import (get_users_tenant_admin_query)
+from src.common.query import (get_users_tenant_admin_query, get_users_ctrldesk_admin_query)
 from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap, ConOrgMaster, ConUserRoleMapping
 
 
@@ -58,7 +58,7 @@ def get_org_id_from_subdomain(subdomain: str, db: Session) -> int:
         )
     
 
-@router.get("/get_user_tenant_admin")
+@router.get("/get_user_ctrldsk_admin")
 async def get_users_tenant_admin(
     request: Request,
     page: int = Query(1, ge=1),
@@ -96,21 +96,21 @@ async def get_users_tenant_admin(
 
         with Session(default_engine) as session:
             # Get org_id from subdomain
-            org_id = get_org_id_from_subdomain(subdomain, session)
-            print(f"Retrieved org_id: {org_id} for subdomain: {subdomain}")
+            # org_id = get_org_id_from_subdomain(subdomain, session)
+            # print(f"Retrieved org_id: {org_id} for subdomain: {subdomain}")
 
             # First get total count
             count_query = text("""
                 SELECT COUNT(*) as total
                 FROM con_user_master cum 
-                WHERE cum.con_org_id = :org_id
+                WHERE cum.con_org_id is null
                 AND (:search IS NULL OR 
                     cum.con_user_name LIKE :search OR 
                     cum.con_user_login_email_id LIKE :search)
             """)
             
             count_params = {
-                "org_id": org_id,
+                "org_id": None,
                 "search": f"%{search}%" if search else None
             }
             
@@ -118,12 +118,12 @@ async def get_users_tenant_admin(
             print(f"Total count: {total_count}")
 
             # Get users query
-            query = get_users_tenant_admin_query(search, org_id)
-            print(f"Executing query for org_id: {org_id}, search: {search}")
+            query = get_users_ctrldesk_admin_query(search)
+            print(f"Executing query for org_id: None, search: {search}")
 
             # Execute query with parameters
             params = {
-                "org_id": org_id,
+                "org_id": None,
                 "search": f"%{search}%" if search else None,
                 "limit": limit,
                 "offset": offset
@@ -155,7 +155,7 @@ async def get_users_tenant_admin(
         )
 
 
-@router.get("/get_roles_tenant_admin_assign")
+@router.get("/get_roles_ctrldsk_admin_assign")
 async def get_roles_tenant_admin_assign(
     request: Request,
     token_data: dict = Depends(verify_access_token),
@@ -181,18 +181,18 @@ async def get_roles_tenant_admin_assign(
 
         with Session(default_engine) as session:
             # Get org_id from subdomain
-            org_id = get_org_id_from_subdomain(subdomain, session)
+            # org_id = get_org_id_from_subdomain(subdomain, session)
 
             # Get roles query
             query = text("""
                 SELECT con_role_id, con_role_name
                 FROM con_role_master crm
                 WHERE is_enable = 1
-                AND con_org_id = :org_id
+                AND con_org_id is null
                 ORDER BY con_role_name
             """)
 
-            result = session.execute(query, {"org_id": org_id})
+            result = session.execute(query, {"org_id": None})
             roles = [dict(r._mapping) for r in result.fetchall()]
 
             return roles
@@ -212,7 +212,7 @@ class CreateUserTenantAdmin(BaseModel):
     active: int
     password: str
 
-@router.post("/create_user_tenant_admin")
+@router.post("/create_user_ctrldsk_admin")
 async def create_user_tenant_admin(
     request: Request,
     user_data: CreateUserTenantAdmin,
@@ -240,14 +240,14 @@ async def create_user_tenant_admin(
 
         with Session(default_engine) as session:
             # Get org_id from subdomain
-            org_id = get_org_id_from_subdomain(subdomain, session)
+            # org_id = get_org_id_from_subdomain(subdomain, session)
 
             # Hash the password
             hashed_password = get_password_hash(user_data.password)
 
             # Create new user
             new_user = ConUser(
-                con_org_id=org_id,
+                con_org_id=None,  # Set to None for tenant admin
                 con_user_login_email_id=user_data.email,
                 con_user_login_password=hashed_password,
                 con_user_name=user_data.name,
@@ -264,7 +264,8 @@ async def create_user_tenant_admin(
             role_mapping = ConUserRoleMapping(
                 con_role_id=user_data.roleId,
                 con_user_id=new_user.con_user_id,
-                created_by=user_id
+                created_by=user_id,
+                created_date_time=datetime.utcnow()
             )
             
             session.add(role_mapping)
@@ -290,7 +291,7 @@ class EditUserTenantAdmin(BaseModel):
     active: Optional[int] = None
     timestamp: datetime
 
-@router.post("/edit_user_tenant_admin")
+@router.post("/edit_user_ctrldsk_admin")
 async def edit_user_tenant_admin(
     request: Request,
     payload: EditUserTenantAdmin,

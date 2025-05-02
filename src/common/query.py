@@ -214,6 +214,30 @@ def get_users_tenant_admin_query(search: str = None, org_id: int = None):
     """
     return text(sql)
 
+
+
+def get_users_ctrldesk_admin_query(search: str = None):
+    sql = """
+        SELECT 
+            cum.con_user_id,
+            cum.con_user_name,
+            cum.con_user_login_email_id,
+            cum.active,
+            cum.con_user_type,
+            crm.con_role_id,
+            crm.con_role_name 
+        FROM con_user_master cum 
+        JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
+        JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
+        WHERE cum.con_org_id is null
+        AND (:search IS NULL OR 
+             cum.con_user_name LIKE :search OR 
+             cum.con_user_login_email_id LIKE :search)
+        ORDER BY cum.con_user_id
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
 # from typing import Optional
 
 # def get_roles_co_console(search: Optional[str], org_id: int) -> TextClause:
