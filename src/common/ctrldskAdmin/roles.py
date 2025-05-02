@@ -119,23 +119,23 @@ async def get_roles(
     return { "data": roles, "total": total }
 
 
-@router.get("/admin_tenant_menu_full")
-async def get_admin_tenant_menu_full(
-    token_data: dict = Depends(verify_access_token),  # Use the new dependency  
-    ):
-    try:
-        with Session(default_engine) as session:
-            query = text(f"SELECT con_menu_id, con_menu_name, con_menu_parent_id FROM con_menu_master where active =1")
-            result = session.execute(query).fetchall()
-            print(f"Query returned {len(result)} results")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query execution error: {str(e)}")
-    try:
-        menus = [dict(row._mapping) for row in result]  # Use _mapping to convert rows to dictionaries
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Data conversion error: {str(e)}")
+# @router.get("/admin_tenant_menu_full")
+# async def get_admin_tenant_menu_full(
+#     token_data: dict = Depends(verify_access_token),  # Use the new dependency  
+#     ):
+#     try:
+#         with Session(default_engine) as session:
+#             query = text(f"SELECT con_menu_id, con_menu_name, con_menu_parent_id FROM con_menu_master where active =1")
+#             result = session.execute(query).fetchall()
+#             print(f"Query returned {len(result)} results")
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Query execution error: {str(e)}")
+#     try:
+#         menus = [dict(row._mapping) for row in result]  # Use _mapping to convert rows to dictionaries
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Data conversion error: {str(e)}")
             
-    return {"data": menus}
+#     return {"data": menus}
 
 
 @router.get("/admin_ctrldsk_menu_full")
@@ -171,7 +171,7 @@ async def get_admin_tenant_menu_by_roleid(
     FROM control_desk_menu cmm 
     LEFT JOIN con_role_menu_map crmm 
     ON crmm.con_menu_id = cmm.control_desk_menu_id 
-    WHERE crmm.con_role_id = :role_id
+    and crmm.con_role_id = :role_id
             """).bindparams(role_id=role_id)
             menu_result = session.execute(menu_query).fetchall()
             print(f"Menu query returned {len(menu_result)} results")
