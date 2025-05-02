@@ -63,9 +63,9 @@ WITH RECURSIVE MenuHierarchy AS (
         CASE WHEN parent_id = 66 THEN concat('store/', path) ELSE path END path, icon, parent_id, mmenu_id,
         null company_id, :userid user_id FROM MenuHierarchy mh ORDER BY mmenu_id limit 3290 ) k
         join (
-        select control_desk_menu_id from vowconsole3.con_user_role_mapping curm 
-        left join vowconsole3.con_role_menu_mapping crmm on curm.con_role_id =crmm.con_role_id
-        where curm.con_user_id =:userid
+        select control_desk_menu_id from control_desk_menu cdm 
+        where cdm.control_desk_menu_id in (select con_menu_id from con_role_menu_map crmm where con_role_id = 
+        (select curm.con_role_id from con_user_role_mapping curm where curm.con_user_id = :userid) )
         ) g on  k.id=g.control_desk_menu_id """)
 
 
@@ -155,6 +155,32 @@ def get_roles_tenant_admin(search: str = None, org_id: int = None):
     query = text(sql)
     return query
 
+
+
+def get_roles_ctrldsk_admin(search: str = None):
+    sql = f"SELECT * FROM con_role_master where ifnull(con_org_id,0) =0 LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+
+def get_roles_ctrldsk_full_menu():
+    sql = f"SELECT control_desk_menu_id con_menu_id, control_desk_menu_name con_menu_name,case when parent_id=0 then null else parent_id end con_menu_parent_id FROM control_desk_menu cdm  where active =1"
+    query = text(sql)
+    return query
+
+def get_roles_ctrldsk_menu_by_roleid(role_id: int):
+    sql = f"""SELECT cmm.control_desk_menu_id con_menu_id, cmm.control_desk_menu_name con_menu_name, cmm.parent_id con_menu_parent_id, crmm.con_role_id
+    FROM control_desk_menu cmm 
+    LEFT JOIN con_role_menu_map crmm 
+    ON crmm.con_menu_id = cmm.control_desk_menu_id 
+    WHERE crmm.con_role_id = :role_id"""
+    query = text(sql)
+    return query
+
+
+
+
+
 def get_roles_tenant(search: str = None):
     sql = f"SELECT role_id, role_name, active FROM roles_mst LIMIT :limit OFFSET :offset"
     query = text(sql)
@@ -180,6 +206,30 @@ def get_users_tenant_admin_query(search: str = None, org_id: int = None):
         JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
         JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
         WHERE cum.con_org_id = :org_id
+        AND (:search IS NULL OR 
+             cum.con_user_name LIKE :search OR 
+             cum.con_user_login_email_id LIKE :search)
+        ORDER BY cum.con_user_id
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+
+def get_users_ctrldesk_admin_query(search: str = None):
+    sql = """
+        SELECT 
+            cum.con_user_id,
+            cum.con_user_name,
+            cum.con_user_login_email_id,
+            cum.active,
+            cum.con_user_type,
+            crm.con_role_id,
+            crm.con_role_name 
+        FROM con_user_master cum 
+        JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
+        JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
+        WHERE cum.con_org_id is null
         AND (:search IS NULL OR 
              cum.con_user_name LIKE :search OR 
              cum.con_user_login_email_id LIKE :search)
@@ -228,15 +278,15 @@ def get_users_tenant_admin_query(search: str = None, org_id: int = None):
 
 
 
-def get_menu_for_othuser_query():
-    return text("""
-        SELECT r.* 
-        FROM roles r 
-        WHERE r.has_hrms_access = false 
-        OR :userid != 1
-        ORDER BY r.created_at DESC 
-        LIMIT :limit OFFSET :offset
-    """)
+# def get_menu_for_othuser_query():
+#     return text("""
+#         SELECT r.* 
+#         FROM roles r 
+#         WHERE r.has_hrms_access = false 
+#         OR :userid != 1
+#         ORDER BY r.created_at DESC 
+#         LIMIT :limit OFFSET :offset
+#     """)
 
 def get_total_count_query(user_id: int,search: str = None):
     if user_id == 1:
