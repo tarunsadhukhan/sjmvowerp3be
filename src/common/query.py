@@ -155,6 +155,32 @@ def get_roles_tenant_admin(search: str = None, org_id: int = None):
     query = text(sql)
     return query
 
+
+
+def get_roles_ctrldsk_admin(search: str = None):
+    sql = f"SELECT * FROM con_role_master where ifnull(con_org_id,0) =0 LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+
+def get_roles_ctrldsk_full_menu():
+    sql = f"SELECT control_desk_menu_id con_menu_id, control_desk_menu_name con_menu_name,case when parent_id=0 then null else parent_id end con_menu_parent_id FROM control_desk_menu cdm  where active =1"
+    query = text(sql)
+    return query
+
+def get_roles_ctrldsk_menu_by_roleid(role_id: int):
+    sql = f"""SELECT cmm.control_desk_menu_id con_menu_id, cmm.control_desk_menu_name con_menu_name, cmm.parent_id con_menu_parent_id, crmm.con_role_id
+    FROM control_desk_menu cmm 
+    LEFT JOIN con_role_menu_map crmm 
+    ON crmm.con_menu_id = cmm.control_desk_menu_id 
+    WHERE crmm.con_role_id = :role_id"""
+    query = text(sql)
+    return query
+
+
+
+
+
 def get_roles_tenant(search: str = None):
     sql = f"SELECT role_id, role_name, active FROM roles_mst LIMIT :limit OFFSET :offset"
     query = text(sql)

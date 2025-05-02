@@ -10,6 +10,7 @@ from src.common.portal.roles import router as co_portal_router
 from src.common.portal.users import router as co_portal_users_router
 from src.common.portal.menu import router as co_portal_menu_router
 from src.common.portal.approval import router as co_portal_approval_router
+from src.common.ctrldskAdmin.roles import router as co_ctrldsk_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -45,6 +46,8 @@ app.include_router(co_portal_router, prefix="/api/admin/PortalData", tags=["Port
 app.include_router(co_portal_users_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
 app.include_router(co_portal_menu_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
 app.include_router(co_portal_approval_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+app.include_router(co_ctrldsk_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-roles"])
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
