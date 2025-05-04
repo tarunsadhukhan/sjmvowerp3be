@@ -309,3 +309,34 @@ def get_total_count_query(user_id: int,search: str = None):
             WHERE r.has_hrms_access = false 
             OR :userid != 1
         """)
+    
+
+def get_orgs_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select com.con_org_id, com.con_org_name, com.con_org_email_id, 
+    com.con_org_shortname, com.active 
+    from con_org_master com WHERE (:search IS NULL OR 
+             com.con_org_name LIKE :search OR 
+             com.con_org_email_id LIKE :search OR
+             com.con_org_shortname LIKE :search )
+        ORDER BY com.con_org_id
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_orgs_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from con_org_master com 
+    where 
+    (:search IS NULL OR 
+                    com.con_org_name LIKE :search OR 
+                    com.con_org_email_id LIKE :search
+                      ) 
+                      ;"""
+    query = text(sql)
+    return query
+
+def get_org_by_id_query(org_id: int):
+    sql = f"""select com.con_org_id, com.con_org_name, com.con_org_email_id, 
+    com.con_org_shortname, com.active, com.con_org_remarks 
+    from con_org_master com where com.con_org_id = :org_id;"""
+    query = text(sql)
+    return query
