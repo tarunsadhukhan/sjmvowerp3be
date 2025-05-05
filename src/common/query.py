@@ -313,11 +313,14 @@ def get_total_count_query(user_id: int,search: str = None):
 
 def get_orgs_all_query(search: str = None, limit: int = None, offset: int = None):
     sql = f"""select com.con_org_id, com.con_org_name, com.con_org_email_id, 
-    com.con_org_shortname, com.active 
-    from con_org_master com WHERE (:search IS NULL OR 
+    com.con_org_shortname, com.con_org_master_status, csm.con_status_name
+    from con_org_master com 
+    left join con_status_master csm on com.con_org_master_status = csm.con_status_id
+    WHERE (:search IS NULL OR 
              com.con_org_name LIKE :search OR 
              com.con_org_email_id LIKE :search OR
-             com.con_org_shortname LIKE :search )
+             com.con_org_shortname LIKE :search OR
+             csm.con_status_name LIKE :search)
         ORDER BY com.con_org_id
         LIMIT :limit OFFSET :offset;"""
     query = text(sql)
@@ -335,8 +338,54 @@ def get_orgs_all_count_query(search: str = None):
     return query
 
 def get_org_by_id_query(org_id: int):
-    sql = f"""select com.con_org_id, com.con_org_name, com.con_org_email_id, 
-    com.con_org_shortname, com.active, com.con_org_remarks 
-    from con_org_master com where com.con_org_id = :org_id;"""
+    sql = f"""select com.con_org_id , 
+com.con_org_name, 
+com.con_org_shortname,
+com.con_org_contact_person ,
+com.con_org_email_id,
+com.con_org_mobile ,
+com.con_org_address ,
+com.con_org_pincode , 
+com.con_org_state_id ,
+com.con_org_remarks ,
+com.active,
+com.con_org_master_status,
+com.con_modules_selected, 
+com.con_org_main_url
+from con_org_master com 
+where com.con_org_id = :org_id;"""
     query = text(sql)
     return query
+
+def get_org_modules_query(org_id: int):
+    sql = f"""SELECT module_id
+FROM con_org_master com
+JOIN JSON_TABLE(
+  com.con_modules_selected,
+  '$[*]' COLUMNS (module_id VARCHAR(255) PATH '$')
+) AS modules
+WHERE com.con_org_id = :org_id;"""
+    query = text(sql)
+    return query
+
+def all_countries_query():
+    sql = f"""SELECT country_id, country_name FROM con_country_master;"""
+    query = text(sql)
+    return query
+
+def all_states_query():
+    sql = f"""SELECT state_id, state_name, country_id FROM con_state_master;"""
+    query = text(sql)
+    return query
+
+def get_all_modules_query():
+    sql = f"""SELECT con_module_id, con_module_name FROM con_module_masters;"""
+    query = text(sql)
+    return query
+
+def get_all_status_query():
+    sql = f"""SELECT con_status_id, con_status_name FROM con_status_master;"""
+    query = text(sql)
+    return query
+
+

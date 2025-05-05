@@ -88,3 +88,27 @@ class ConUserRoleMapping(Base):
     created_by = Column(Integer, nullable=False, index=True)
     created_date_time = Column(DateTime, nullable=True, server_default=func.now())
 
+
+# class ConOrgMaster(Base):
+#     __tablename__ = 'con_org_master'
+
+#     con_org_id = Column(Integer, primary_key=True, autoincrement=True)
+#     active = Column(Integer, nullable=True, default=1)
+#     con_modules_selected = Column(JSON, nullable=True)
+#     con_org_address = Column(String(255), nullable=True)
+#     con_org_contact_person = Column(String(255), nullable=True)
+#     con_org_email_id = Column(String(255), nullable=True)
+#     con_org_main_url = Column(String(255), nullable=True)
+#     con_org_master_status = Column(Integer, nullable=True)
+#     con_org_mobile = Column(String(255), nullable=True)
+#     con_org_name = Column(String(255), nullable=True)
+#     con_org_pincode = Column(Integer, nullable=True)
+#     con_org_remarks = Column(String(255), nullable=True)
+#     con_org_shortname = Column(String(255), nullable=True)
+#     con_org_state_id = Column(Integer, nullable=True)
+#     created_by = Column(Integer, nullable=True)
+#     created_date_time = Column(DateTime, nullable=True, default=func.now())
+
+#     def __repr__(self):
+#         return f"<ConOrgMaster(con_org_id={self.con_org_id}, con_org_name='{self.con_org_name}')>"
+
