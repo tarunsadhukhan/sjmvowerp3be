@@ -13,6 +13,7 @@ from src.common.portal.approval import router as co_portal_approval_router
 from src.common.ctrldskAdmin.roles import router as co_ctrldsk_router
 from src.common.ctrldskAdmin.users import router as co_ctrldsk_users_router
 from src.common.ctrldskAdmin.orgs import router as co_ctrldsk_orgs_router
+from src.common.companyAdmin.company import router as co_company_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -51,6 +52,8 @@ app.include_router(co_portal_approval_router, prefix="/api/admin/PortalData", ta
 app.include_router(co_ctrldsk_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-roles"])
 app.include_router(co_ctrldsk_users_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-users"])
 app.include_router(co_ctrldsk_orgs_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-orgs"])
+app.include_router(co_company_router, prefix="/api/companyAdmin", tags=["company-admin-company"])
+
 
 
 

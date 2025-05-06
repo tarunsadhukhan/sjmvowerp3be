@@ -389,3 +389,26 @@ def get_all_status_query():
     return query
 
 
+def get_co_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select cm.co_id, cm.co_name, cm.co_prefix,  cm.co_email_id 
+from co_mst cm
+    WHERE (:search IS NULL OR 
+             cm.co_name LIKE :search OR
+             cm.co_prefix LIKE :search OR
+             cm.co_email_id LIKE :search) 
+        ORDER BY cm.co_id
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_co_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from co_mst cm 
+    where 
+    (:search IS NULL OR 
+                    cm.co_name LIKE :search OR 
+                    cm.co_prefix LIKE :search OR 
+                    cm.co_email_id LIKE :search
+                      ) 
+                      ;"""
+    query = text(sql)
+    return query
