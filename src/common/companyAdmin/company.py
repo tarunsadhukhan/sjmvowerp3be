@@ -4,8 +4,10 @@ from sqlalchemy.orm import Session
 from src.config.db import get_db_names,default_engine, get_tenant_db
 from src.authorization.utils import verify_access_token
 from src.common.ctrldskAdmin.schemas import MenuResponse, OrgCreate
-from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster
-from src.common.query import get_co_all_query, get_co_all_count_query, get_org_by_id_query, get_org_modules_query,all_countries_query, get_all_modules_query, all_states_query, get_all_status_query
+from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster, CoMst
+from src.common.companyAdmin.query import get_co_all_query, get_co_all_count_query, get_co_by_id_query
+from src.common.companyAdmin.query import get_country_query, get_state_query, get_city_query
+from src.common.companyAdmin.schemas import CoCreate
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -81,149 +83,157 @@ async def getOrgsFull(
     # ---------------------------------------------------------------------------
 
 
-# @router.get("/get_org_data_by_id/{org_id}")
-# async def get_org_data_by_id(
-#     org_id: int,
-#     token_data: dict = Depends(verify_access_token),
-# ):
-#     try:
-#         with Session(default_engine) as session:
-#             query = get_org_by_id_query(org_id)
-#             org_details = session.execute(query, {"org_id": org_id}).fetchone()
-#             # if not org_details:
-#             #     raise HTTPException(status_code=404, detail="Organisation not found")
-
-#             selected_org_modules = session.execute(
-#                 get_org_modules_query(org_id), {"org_id": org_id}
-#             ).fetchall()
-
-#             all_modules = session.execute(get_all_modules_query()).fetchall()
-#             countries   = session.execute(all_countries_query()).fetchall()
-#             states      = session.execute(all_states_query()).fetchall()
-#             status_all  = session.execute(get_all_status_query()).fetchall()
-
-#             return {
-#                 "data": dict(org_details._mapping),
-#                 "selectedModules": [dict(m._mapping) for m in selected_org_modules],
-#                 "allModules":      [dict(m._mapping) for m in all_modules],
-#                 "countries":       [dict(c._mapping) for c in countries],
-#                 "states":          [dict(s._mapping) for s in states],
-#                 "statusAll":       [dict(st._mapping) for st in status_all],
-#             }
-#     except HTTPException:
-#         raise
-#     except Exception as exc:
-#         print(f"Unexpected error in get_org_data_by_id: {exc}")
-#         import traceback; traceback.print_exc()
-#         raise HTTPException(status_code=500, detail="Internal server error")
+@router.get("/get_co_data_by_id/{co_id}")
+async def get_org_data_by_id(
+    co_id: int,
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    try:
+            query = get_co_by_id_query(co_id)
+            org_details = db.execute(query, {"co_id": co_id}).fetchone()
+            countries   = db.execute(get_country_query()).fetchall()
+            states      = db.execute(get_state_query()).fetchall()
+            cities    = db.execute(get_city_query()).fetchall()
+            return {
+                "data": dict(org_details._mapping),
+                "countries":       [dict(c._mapping) for c in countries],
+                "states":          [dict(s._mapping) for s in states],
+                "cities":          [dict(c._mapping) for c in cities],
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in get_org_data_by_id: {exc}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error")
     
 
-# @router.get("/create_org_setup_data")
-# async def create_org_setup_data(
-#     # org_id: int,
-#     token_data: dict = Depends(verify_access_token),
-# ):
-#     try:
-#         with Session(default_engine) as session:
-#             all_modules = session.execute(get_all_modules_query()).fetchall()
-#             countries   = session.execute(all_countries_query()).fetchall()
-#             states      = session.execute(all_states_query()).fetchall()
-#             status_all  = session.execute(get_all_status_query()).fetchall()
-#             return {
-#                 "allModules":      [dict(m._mapping) for m in all_modules],
-#                 "countries":       [dict(c._mapping) for c in countries],
-#                 "states":          [dict(s._mapping) for s in states],
-#                 "statusAll":       [dict(st._mapping) for st in status_all],
-#             }
-#     except HTTPException:
-#         raise
-#     except Exception as exc:
-#         print(f"Unexpected error in get_org_data_by_id: {exc}")
-#         import traceback; traceback.print_exc()
-#         raise HTTPException(status_code=500, detail="Internal server error")
+@router.get("/create_co_setup_data")
+async def create_org_setup_data(
+    # org_id: int,
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    try:
+        with Session(default_engine) as session:
+            countries   = db.execute(get_country_query()).fetchall()
+            states      = db.execute(get_state_query()).fetchall()
+            cities  = db.execute(get_city_query()).fetchall()
+            return {
+                "countries":       [dict(c._mapping) for c in countries],
+                "states":          [dict(s._mapping) for s in states],
+                "cities":       [dict(ct._mapping) for ct in cities],
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in get_org_data_by_id: {exc}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error")
     
-# @router.post("/create_org_data")
-# async def create_org_data(
-#     payload: OrgCreate,
-#     token_data: dict = Depends(verify_access_token),
-# ):
-#     """
-#     Insert a new organisation record using the ORM model and return its id.
-#     """
-#     try:
-#         with Session(default_engine) as session:
-#             # Create the organization first
-#             new_org = ConOrgMaster(
-#                 con_org_name=payload.con_org_name,
-#                 con_org_shortname=payload.con_org_shortname,
-#                 con_org_contact_person=payload.con_org_contact_person,
-#                 con_org_email_id=payload.con_org_email_id,
-#                 con_org_mobile=payload.con_org_mobile,
-#                 con_org_address=payload.con_org_address,
-#                 con_org_pincode=payload.con_org_pincode,
-#                 con_org_state_id=payload.con_org_state_id,
-#                 con_org_remarks=payload.con_org_remarks,
-#                 active=payload.active,
-#                 con_org_master_status=payload.con_org_master_status,
-#                 con_org_main_url=payload.con_org_main_url,
-#                 created_by=token_data.get("user_id"),
-#                 con_modules_selected=payload.con_modules_selected
-#             )
-#             session.add(new_org)
-#             session.flush()  # Get the ID without committing
-            
-            
-#             session.commit()
-#             return {"message": "Organisation created", "org_id": new_org.con_org_id}
-#     except HTTPException:
-#         raise
-#     except Exception as exc:
-#         print(f"Unexpected error in create_org_data: {exc}")
-#         import traceback; traceback.print_exc()
-#         raise HTTPException(status_code=500, detail="Internal server error")
+@router.post("/create_co_data")
+async def create_org_data(
+    payload: CoCreate,
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    """
+    Insert a new company record using the ORM model and return its id.
+    """
+    try:
+        # Create the company using the tenant database
+        new_company = CoMst(
+            co_name=payload.co_name,
+            co_prefix=payload.co_prefix,
+            co_address1=payload.co_address1,
+            co_address2=payload.co_address2,
+            co_zipcode=payload.co_zipcode,
+            country_id=payload.country_id,
+            state_id=payload.state_id,
+            city_id=payload.city_id,
+            co_logo=payload.co_logo,
+            created_by_con_user=token_data.get("user_id"),
+            co_cin_no=payload.co_cin_no,
+            co_email_id=payload.co_email_id,
+            co_pan_no=payload.co_pan_no,
+            s3bucket_name=payload.s3bucket_name,
+            s3folder_name=payload.s3folder_name,
+            tally_sync=payload.tally_sync,
+            alert_email_id=payload.alert_email_id,
+        )
+        
+        db.add(new_company)
+        db.flush()  # Get the ID without committing
+        db.commit()
+        
+        return {"message": "Company created successfully", "co_id": new_company.co_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in create_org_data: {exc}")
+        import traceback; traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
     
-# @router.post("/edit_org_data")
-# async def edit_org_data(
-#     payload: OrgCreate,
-#     token_data: dict = Depends(verify_access_token),
-# ):
-#     """
-#     Update an existing organisation record and its module mappings.
-#     """
-#     try:
-#         with Session(default_engine) as session:
-#             # Make sure the primary-key is supplied in the request body
-#             # if not getattr(payload, "org_id", None):
-#             #     raise HTTPException(status_code=400, detail="org_id is required for update")
+@router.post("/edit_co_data")
+async def edit_co_data(
+    payload: CoCreate,
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    """
+    Update an existing company record using the ORM model.
+    co_id is expected to be included in the payload.
+    """
+    try:
+        # Extract co_id from the payload
+        co_id = payload.dict().get("co_id")
+        if co_id is None:
+            raise HTTPException(status_code=400, detail="co_id is required in the payload")
+        
+        # Convert co_id to int if it's a string
+        if isinstance(co_id, str):
+            try:
+                co_id = int(co_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid co_id format")
 
-#             org: ConOrgMaster | None = session.get(ConOrgMaster, payload.con_org_id)
-#             if org is None:
-#                 raise HTTPException(status_code=404, detail="Organisation not found")
+        # Get the existing company
+        company = db.query(CoMst).filter(CoMst.co_id == co_id).first()
+        if company is None:
+            raise HTTPException(status_code=404, detail="Company not found")
 
-#             # Update organization fields
-#             org.con_org_name = payload.con_org_name
-#             org.con_org_shortname = payload.con_org_shortname
-#             org.con_org_contact_person = payload.con_org_contact_person
-#             org.con_org_email_id = payload.con_org_email_id
-#             org.con_org_mobile = payload.con_org_mobile
-#             org.con_org_address = payload.con_org_address
-#             org.con_org_pincode = payload.con_org_pincode
-#             org.con_org_state_id = payload.con_org_state_id
-#             org.con_org_remarks = payload.con_org_remarks
-#             org.active = payload.active
-#             org.con_org_master_status = payload.con_org_master_status
-#             org.con_org_main_url = payload.con_org_main_url
-#             org.con_modules_selected = payload.con_modules_selected
-
-
-            
-#             session.commit()
-#             return {"message": "Organisation updated", "org_id": org.con_org_id}
-#     except HTTPException:
-#         raise
-#     except Exception as exc:
-#         print(f"Unexpected error in edit_org_data: {exc}")
-#         import traceback; traceback.print_exc()
-#         raise HTTPException(status_code=500, detail="Internal server error")
+        # Update the company fields
+        company.co_name = payload.co_name
+        company.co_prefix = payload.co_prefix
+        company.co_address1 = payload.co_address1
+        company.co_address2 = payload.co_address2
+        company.co_zipcode = payload.co_zipcode
+        company.country_id = payload.country_id
+        company.state_id = payload.state_id
+        company.city_id = payload.city_id
+        company.co_logo = payload.co_logo
+        company.co_cin_no = payload.co_cin_no
+        company.co_email_id = payload.co_email_id
+        company.co_pan_no = payload.co_pan_no
+        company.s3bucket_name = payload.s3bucket_name
+        company.s3folder_name = payload.s3folder_name
+        company.tally_sync = payload.tally_sync
+        company.alert_email_id = payload.alert_email_id
+        
+        # # Only update active status if it's provided in the payload
+        # if payload.active is not None:
+        #     company.active = payload.active
+        db.commit()
+        
+        return {"message": "Company updated successfully", "co_id": company.co_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in edit_co_data: {exc}")
+        import traceback; traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
 
 

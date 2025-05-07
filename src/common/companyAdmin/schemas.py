@@ -17,4 +17,24 @@ class MenuItem(BaseModel):
 class MenuResponse(BaseModel):
     data: List[MenuItem]
 
+class CoCreate(BaseModel):
+    co_name: str
+    co_prefix: str
+    co_address1: str
+    co_address2: Optional[str] = None
+    co_zipcode: int
+    country_id: int
+    state_id: int
+    city_id: int
+    co_logo: Optional[str] = None
+    co_cin_no: Optional[str] = None
+    co_email_id: Optional[str] = None
+    co_pan_no: Optional[str] = None
+    s3bucket_name: Optional[str] = None
+    s3folder_name: Optional[str] = None
+    tally_sync: Optional[str] = None
+    alert_email_id: Optional[str] = None
+    co_id: Optional[str] = None  # Added for edit operations
+
+
 
