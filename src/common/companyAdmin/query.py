@@ -49,3 +49,58 @@ def get_city_query():
     query = text(sql)
     return query
 
+def get_branch_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select bm.co_id as co_id, cm.co_name as co_name , bm.branch_id, bm.branch_name , bm.active
+from branch_mst bm left join co_mst cm on cm.co_id = bm.co_id
+    WHERE (:search IS NULL OR 
+             bm.branch_name LIKE :search OR
+             co_name LIKE :search)
+             
+        ORDER BY bm.branch_id
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_branch_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from branch_mst bm left join co_mst cm on cm.co_id = bm.co_id
+    where (:search IS NULL OR 
+                    bm.branch_name LIKE :search OR 
+                    bm.co_id LIKE :search) 
+                      ;"""
+    query = text(sql)
+    return query
+
+
+def get_branch_by_id_query(branch_id: int):
+    sql = f"""select bm.branch_id, 
+bm.branch_name, 
+bm.branch_address1 , 
+bm.branch_address2 , 
+bm.branch_zipcode, 
+bm.country_id , 
+bm.state_id, 
+bm.city_id, 
+bm.gst_no, 
+bm.contact_no , 
+bm.contact_person, 
+bm.branch_email, 
+bm.active, 
+bm.gst_verified
+from branch_mst bm
+    WHERE bm.branch_id = :branch_id;"""
+    query = text(sql)
+    return query
+
+
+
+def get_co_all_query_nosearch():
+    sql = f"""select cm.co_id , cm.co_name from co_mst cm 
+        """
+    query = text(sql)
+    return query
+
+def get_branch_query_nosearch():
+    sql = f"""select bm.branch_id, bm.branch_name, bm.co_id from branch_mst bm
+    """
+    query = text(sql)
+    return query
