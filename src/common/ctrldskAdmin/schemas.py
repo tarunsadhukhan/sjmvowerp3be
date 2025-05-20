@@ -35,3 +35,35 @@ class OrgCreate(BaseModel):
     con_org_id: Optional[int] = None  # For edit operations
 
 
+class ControlDeskMenuSchema(BaseModel):
+    control_desk_menu_id: Optional[int]
+    control_desk_menu_name: str
+    active: int
+    parent_id: Optional[int]
+    menu_path: Optional[str]
+    menu_state: Optional[str]
+    report_path: Optional[str]
+    menu_icon_name: Optional[str]
+    order_by: Optional[int]
+    menu_type: Optional[int]
+
+    class Config:
+        orm_mode = True
+
+
+class PortalMenuMstSchema(BaseModel):
+    menu_id: Optional[int]
+    menu_name: str
+    menu_path: Optional[str]
+    active: bool
+    menu_parent_id: Optional[int]
+    menu_type_id: int
+    menu_icon: Optional[str]
+    module_id: int
+    order_by: Optional[int]
+    menu_type: Optional[int] = None  # Add menu_type field
+
+    class Config:
+        orm_mode = True
+
+

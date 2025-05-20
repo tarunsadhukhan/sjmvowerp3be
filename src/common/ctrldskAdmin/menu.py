@@ -145,3 +145,51 @@ async def compmenuitems(
         print(f"Error type: {type(e).__name__}")
         print(f"Error details: {e.__dict__}")
         raise
+
+@router.get("/control-desk-menu", response_model=list)
+def get_control_desk_menu(db: Session = Depends(get_db)):
+    """
+    Fetch control desk menu data with parent menu name and tooltip details using raw SQL query.
+    """
+    raw_query = text("""
+        SELECT 
+            cdm.control_desk_menu_id,
+            cdm.control_desk_menu_name,
+            cdm.active,
+            cdm.parent_id,
+            CASE 
+                WHEN cdm.parent_id > 0 THEN (SELECT parent.control_desk_menu_name 
+                                            FROM control_desk_menu parent 
+                                            WHERE parent.control_desk_menu_id = cdm.parent_id)
+                ELSE ''
+            END AS parent_menu_name,
+            cdm.menu_type,
+            cdm.menu_path,
+            cdm.menu_state,
+            cdm.report_path,
+            cdm.menu_icon_name,
+            cdm.order_by
+        FROM control_desk_menu cdm
+    """)
+
+    result = db.execute(raw_query).fetchall()
+
+    response = []
+    for row in result:
+        response.append({
+            "control_desk_menu_id": row.control_desk_menu_id,
+            "control_desk_menu_name": row.control_desk_menu_name,
+            "active": row.active,
+            "parent_id": row.parent_id,
+            "parent_menu_name": row.parent_menu_name,
+            "menu_type": row.menu_type,
+            "tooltip": {
+                "menu_path": row.menu_path,
+                "menu_state": row.menu_state,
+                "report_path": row.report_path,
+                "menu_icon_name": row.menu_icon_name,
+                "order_by": row.order_by
+            }
+        })
+
+    return response
