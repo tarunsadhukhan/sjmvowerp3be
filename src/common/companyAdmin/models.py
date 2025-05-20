@@ -122,33 +122,27 @@ class CoMst(Base):
 
 
 
-# class BranchMst(Base):
-#     __tablename__ = "branch_mst"
+class BranchMst(Base):
+    __tablename__ = "branch_mst"
 
-#     branch_id = Column(Integer, primary_key=True, autoincrement=True)
-#     branch_name = Column(String(255), nullable=False, unique=True)
-#     co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
-#     branch_address1 = Column(String(255))
-#     branch_address2 = Column(String(255))
-#     branch_zipcode = Column(Integer)
-#     country_id = Column(Integer, ForeignKey("country_mst.country_id"))
-#     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-#     city_id = Column(Integer, ForeignKey("city_mst.city_id"))
-#     gst_no = Column(String(25))
-#     contact_no = Column(Integer)
-#     contact_person = Column(String(255))
-#     branch_email = Column(String(255))
-#     active = Column(Boolean, default=True)
-#     gst_verified = Column(Boolean, default=False)
+    branch_id = Column(Integer, primary_key=True, autoincrement=True)
+    branch_name = Column(String(255), nullable=False, unique=True)
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
+    branch_address1 = Column(String(255))
+    branch_address2 = Column(String(255))
+    branch_zipcode = Column(Integer)
+    country_id = Column(Integer, ForeignKey("country_mst.country_id"))
+    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
+    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
+    gst_no = Column(String(25))
+    contact_no = Column(Integer)
+    contact_person = Column(String(255))
+    branch_email = Column(String(255))
+    active = Column(Boolean, default=True)
+    gst_verified = Column(Boolean, default=False)
 
-#     # Optional relationships
-#     company = relationship("CoMst", backref="branches")
-#     country = relationship("CountryMst", backref="branches")
-#     state = relationship("StateMst", backref="branches")
-#     city = relationship("CityMst", backref="branches")
-
-#     def __repr__(self):
-#         return f"<BranchMst(id={self.branch_id}, name='{self.branch_name}')>"
+    def __repr__(self):
+        return f"<BranchMst(id={self.branch_id}, name='{self.branch_name}')>"
 class CountryMst(Base):
     __tablename__ = "country_mst"
 

@@ -15,6 +15,7 @@ from src.common.ctrldskAdmin.users import router as co_ctrldsk_users_router
 from src.common.ctrldskAdmin.orgs import router as co_ctrldsk_orgs_router
 from src.common.companyAdmin.company import router as co_company_router
 from src.common.ctrldskAdmin.menuportal import router as co_ctrldsk_menu_router
+from src.common.companyAdmin.branch import router as co_branch_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -55,6 +56,7 @@ app.include_router(co_ctrldsk_users_router, prefix="/api/ctrldskAdmin", tags=["c
 app.include_router(co_ctrldsk_orgs_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-orgs"])
 app.include_router(co_company_router, prefix="/api/companyAdmin", tags=["company-admin-company"])
 app.include_router(co_ctrldsk_menu_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-menu"])
+app.include_router(co_branch_router, prefix="/api/companyAdmin", tags=["company-admin-branch"])
 
 
 
