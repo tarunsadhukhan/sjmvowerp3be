@@ -101,6 +101,30 @@ def get_menu_by_id_query(co_id: int):
     return query
 
 
+
+def orgmodulename(search: str = None):
+    print(f" query orgmodulename called ")
+    sql="""SELECT 
+            com.con_org_id AS org_id,
+            com.con_org_name AS org_name,
+            GROUP_CONCAT(cmm.con_module_name SEPARATOR '/') AS module_selected
+            FROM 
+            vowconsole3.con_org_master com
+            LEFT JOIN JSON_TABLE(
+            com.con_modules_selected,
+            '$[*]' COLUMNS (
+            module_id VARCHAR(10) PATH '$'
+            )
+        ) AS jt ON TRUE
+        LEFT JOIN con_module_masters cmm 
+        ON cmm.con_module_id = jt.module_id
+        WHERE 
+        com.con_org_master_status = 3
+        GROUP BY 
+        com.con_org_id, com.con_org_name
+"""
+    return text(sql)
+
  
 
 # text(f"""

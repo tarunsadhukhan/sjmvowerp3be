@@ -91,8 +91,6 @@ async def get_roles(
         subdomain = extract_subdomain_from_request(request)
     except HTTPException as he:
         print(f"HTTP Exception in get_roles: {str(he)}")
-
-
             
     try:
         with Session(default_engine) as session:

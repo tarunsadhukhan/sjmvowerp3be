@@ -49,6 +49,56 @@ def get_city_query():
     query = text(sql)
     return query
 
+
+
+
+def get_department_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select dept_id,dept_desc,order_id,dm.dept_code,dm.branch_id,bm.branch_name,bm.co_id,cm.co_name  
+    from dept_mst dm 
+			left join branch_mst bm on dm.branch_id =bm.branch_id
+			left join co_mst cm on cm.co_id =bm.co_id
+    WHERE (:search IS NULL OR 
+             dm.dept_desc LIKE :search )
+        ORDER BY dm.dept_desc
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_department_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from dept_mst dm left join branch_mst bm on bm.branch_id = dm.branch_id
+    where (:search IS NULL OR 
+                    dm.dept_desc LIKE :search ) 
+                      ;"""
+    query = text(sql)
+    return query
+
+
+def get_subdepartment_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select sdm.sub_dept_id,sdm.sub_dept_code,sdm.sub_dept_desc,sdm.dept_id,dept_desc,order_no,dm.dept_code,
+			dm.branch_id,bm.branch_name,bm.co_id,cm.co_name  
+    from sub_dept_mst sdm
+    left join dept_mst dm on sdm.dept_id=dm.dept_id
+			left join branch_mst bm on dm.branch_id =bm.branch_id
+			left join co_mst cm on cm.co_id =bm.co_id
+    WHERE (:search IS NULL OR 
+             sdm.sub_dept_desc LIKE :search )
+        ORDER BY sdm.sub_dept_desc
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_subdepartment_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from sub_dept_mst sdm
+left join dept_mst dm on sdm.dept_id =dm.dept_id 
+left join branch_mst bm on bm.branch_id = dm.branch_id
+    where (:search IS NULL OR 
+                    sdm.sub_dept_desc LIKE :search ) 
+                      ;"""
+    query = text(sql)
+    return query
+
+
+
 def get_branch_all_query(search: str = None, limit: int = None, offset: int = None):
     sql = f"""select bm.co_id as co_id, cm.co_name as co_name , bm.branch_id, bm.branch_name , bm.active
 from branch_mst bm left join co_mst cm on cm.co_id = bm.co_id
@@ -104,3 +154,12 @@ def get_branch_query_nosearch():
     """
     query = text(sql)
     return query
+
+
+def get_department_by_id_query(dept_id: int):
+    sql = f"""select dm.*,bm.co_id from sls.dept_mst dm 
+left join sls.branch_mst bm on dm.branch_id =bm.branch_id
+    WHERE dm.dept_id = :dept_id;"""
+    query = text(sql)
+    return query
+

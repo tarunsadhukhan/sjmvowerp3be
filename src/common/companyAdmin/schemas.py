@@ -55,3 +55,12 @@ class BranchCreate(BaseModel):
 
 
 
+class DeptCreate(BaseModel):
+    branch_id: Optional[int]
+    dept_desc: Optional[str]
+    dept_code: Optional[str]
+    order_id: Optional[int]
+    dept_id: Optional[int] = None  # Added for edit operations
+    created_date: Optional[str] = None  # Added for edit operations
+    class Config:
+        orm_mode = True

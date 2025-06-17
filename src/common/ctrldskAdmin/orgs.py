@@ -57,6 +57,8 @@ async def getOrgsFull(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+
     
     # # ---------------------------------------------------------------------------
     # # Schemas
@@ -171,6 +173,7 @@ async def create_org_data(
                 created_by=token_data.get("user_id"),
                 con_modules_selected=payload.con_modules_selected
             )
+            print(f"Creating new organisation with modules: {payload.con_modules_selected}")
             session.add(new_org)
             session.flush()  # Get the ID without committing
             
