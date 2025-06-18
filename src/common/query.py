@@ -63,9 +63,9 @@ WITH RECURSIVE MenuHierarchy AS (
         CASE WHEN parent_id = 66 THEN concat('store/', path) ELSE path END path, icon, parent_id, mmenu_id,
         null company_id, :userid user_id FROM MenuHierarchy mh ORDER BY mmenu_id limit 3290 ) k
         join (
-        select control_desk_menu_id from vowconsole3.con_user_role_mapping curm 
-        left join vowconsole3.con_role_menu_mapping crmm on curm.con_role_id =crmm.con_role_id
-        where curm.con_user_id =:userid
+        select control_desk_menu_id from control_desk_menu cdm 
+        where cdm.control_desk_menu_id in (select con_menu_id from con_role_menu_map crmm where con_role_id = 
+        (select curm.con_role_id from con_user_role_mapping curm where curm.con_user_id = :userid) )
         ) g on  k.id=g.control_desk_menu_id """)
 
 
@@ -155,6 +155,32 @@ def get_roles_tenant_admin(search: str = None, org_id: int = None):
     query = text(sql)
     return query
 
+
+
+def get_roles_ctrldsk_admin(search: str = None):
+    sql = f"SELECT * FROM con_role_master where ifnull(con_org_id,0) =0 LIMIT :limit OFFSET :offset"
+    query = text(sql)
+    return query
+
+
+def get_roles_ctrldsk_full_menu():
+    sql = f"SELECT control_desk_menu_id con_menu_id, control_desk_menu_name con_menu_name,case when parent_id=0 then null else parent_id end con_menu_parent_id FROM control_desk_menu cdm  where active =1"
+    query = text(sql)
+    return query
+
+def get_roles_ctrldsk_menu_by_roleid(role_id: int):
+    sql = f"""SELECT cmm.control_desk_menu_id con_menu_id, cmm.control_desk_menu_name con_menu_name, cmm.parent_id con_menu_parent_id, crmm.con_role_id
+    FROM control_desk_menu cmm 
+    LEFT JOIN con_role_menu_map crmm 
+    ON crmm.con_menu_id = cmm.control_desk_menu_id 
+    WHERE crmm.con_role_id = :role_id"""
+    query = text(sql)
+    return query
+
+
+
+
+
 def get_roles_tenant(search: str = None):
     sql = f"SELECT role_id, role_name, active FROM roles_mst LIMIT :limit OFFSET :offset"
     query = text(sql)
@@ -180,6 +206,30 @@ def get_users_tenant_admin_query(search: str = None, org_id: int = None):
         JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
         JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
         WHERE cum.con_org_id = :org_id
+        AND (:search IS NULL OR 
+             cum.con_user_name LIKE :search OR 
+             cum.con_user_login_email_id LIKE :search)
+        ORDER BY cum.con_user_id
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+
+def get_users_ctrldesk_admin_query(search: str = None):
+    sql = """
+        SELECT 
+            cum.con_user_id,
+            cum.con_user_name,
+            cum.con_user_login_email_id,
+            cum.active,
+            cum.con_user_type,
+            crm.con_role_id,
+            crm.con_role_name 
+        FROM con_user_master cum 
+        JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
+        JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
+        WHERE cum.con_org_id is null
         AND (:search IS NULL OR 
              cum.con_user_name LIKE :search OR 
              cum.con_user_login_email_id LIKE :search)
@@ -228,15 +278,15 @@ def get_users_tenant_admin_query(search: str = None, org_id: int = None):
 
 
 
-def get_menu_for_othuser_query():
-    return text("""
-        SELECT r.* 
-        FROM roles r 
-        WHERE r.has_hrms_access = false 
-        OR :userid != 1
-        ORDER BY r.created_at DESC 
-        LIMIT :limit OFFSET :offset
-    """)
+# def get_menu_for_othuser_query():
+#     return text("""
+#         SELECT r.* 
+#         FROM roles r 
+#         WHERE r.has_hrms_access = false 
+#         OR :userid != 1
+#         ORDER BY r.created_at DESC 
+#         LIMIT :limit OFFSET :offset
+#     """)
 
 def get_total_count_query(user_id: int,search: str = None):
     if user_id == 1:
@@ -259,3 +309,84 @@ def get_total_count_query(user_id: int,search: str = None):
             WHERE r.has_hrms_access = false 
             OR :userid != 1
         """)
+    
+
+def get_orgs_all_query(search: str = None, limit: int = None, offset: int = None):
+    sql = f"""select com.con_org_id, com.con_org_name, com.con_org_email_id, 
+    com.con_org_shortname, com.con_org_master_status, csm.con_status_name
+    from con_org_master com 
+    left join con_status_master csm on com.con_org_master_status = csm.con_status_id
+    WHERE (:search IS NULL OR 
+             com.con_org_name LIKE :search OR 
+             com.con_org_email_id LIKE :search OR
+             com.con_org_shortname LIKE :search OR
+             csm.con_status_name LIKE :search)
+        ORDER BY com.con_org_id
+        LIMIT :limit OFFSET :offset;"""
+    query = text(sql)
+    return query
+
+def get_orgs_all_count_query(search: str = None):
+    sql = f"""select count(*) as total from con_org_master com 
+    where 
+    (:search IS NULL OR 
+                    com.con_org_name LIKE :search OR 
+                    com.con_org_email_id LIKE :search
+                      ) 
+                      ;"""
+    query = text(sql)
+    return query
+
+def get_org_by_id_query(org_id: int):
+    sql = f"""select com.con_org_id , 
+com.con_org_name, 
+com.con_org_shortname,
+com.con_org_contact_person ,
+com.con_org_email_id,
+com.con_org_mobile ,
+com.con_org_address ,
+com.con_org_pincode , 
+com.con_org_state_id ,
+com.con_org_remarks ,
+com.active,
+com.con_org_master_status,
+com.con_modules_selected, 
+com.con_org_main_url
+from con_org_master com 
+where com.con_org_id = :org_id;"""
+    query = text(sql)
+    return query
+
+def get_org_modules_query(org_id: int):
+    sql = f"""SELECT module_id
+FROM con_org_master com
+JOIN JSON_TABLE(
+  com.con_modules_selected,
+  '$[*]' COLUMNS (module_id VARCHAR(255) PATH '$')
+) AS modules
+WHERE com.con_org_id = :org_id;"""
+    query = text(sql)
+    return query
+
+def all_countries_query():
+    sql = f"""SELECT country_id, country_name FROM con_country_master;"""
+    query = text(sql)
+    return query
+
+def all_states_query():
+    sql = f"""SELECT state_id, state_name, country_id FROM con_state_master;"""
+    query = text(sql)
+    return query
+
+def get_all_modules_query():
+    sql = f"""SELECT con_module_id, con_module_name FROM con_module_masters;"""
+    query = text(sql)
+    return query
+
+def get_all_status_query():
+    sql = f"""SELECT con_status_id, con_status_name FROM con_status_master;"""
+    query = text(sql)
+    return query
+
+
+

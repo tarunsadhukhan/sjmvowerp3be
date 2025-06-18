@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
@@ -72,7 +72,7 @@ class conRoleMaster(Base):
 
     con_role_id = Column(Integer, primary_key=True, autoincrement=True)
     con_role_name = Column(String(50), nullable=False)
-    con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=False)
+    con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=True)
     status = Column(Integer, nullable=False)
     created_by = Column(Integer, nullable=True)
     created_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
@@ -88,111 +88,56 @@ class ConUserRoleMapping(Base):
     created_by = Column(Integer, nullable=False, index=True)
     created_date_time = Column(DateTime, nullable=True, server_default=func.now())
 
+class ControlDeskMenu(Base):
+    __tablename__ = 'control_desk_menu'
 
-class CoMst(Base):
-    __tablename__ = "co_mst"
+    control_desk_menu_id = Column(Integer, primary_key=True, autoincrement=True)
+    control_desk_menu_name = Column(String(50), nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    parent_id = Column(Integer, nullable=True)
+    menu_path = Column(String(100), nullable=True)
+    menu_state = Column(String(100), nullable=True)
+    report_path = Column(String(100), nullable=True)
+    menu_icon_name = Column(Text, nullable=True)
+    order_by = Column(Integer, nullable=True)
+    menu_type = Column(Integer, nullable=True, comment='0 for Portal,1 for App')
 
-    co_id = Column(Integer, primary_key=True, autoincrement=True)
-    co_name = Column(String(255), nullable=False, unique=True)
-    co_prefix = Column(String(25), nullable=False, unique=True)
-    co_address1 = Column(String(255))
-    co_address2 = Column(String(255))
-    co_zipcode = Column(Integer)
-    country_id = Column(Integer, ForeignKey("country_mst.country_id"))
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
-    co_logo = Column(String(255))
-    auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
-    created_by_con_user = Column(Integer)
-    co_cin_no = Column(String(25))
-    co_email_id = Column(String(255))
-    co_pan_no = Column(String(25))
-    s3bucket_name = Column(String(255))
-    s3folder_name = Column(String(255))
-    tally_sync = Column(String(255))
-    alert_email_id = Column(String(255))
+class MenuTypeMst(Base):
+    __tablename__ = 'menu_type_mst'
 
-    # Relationships
-    country = relationship("CountryMst", backref="companies")
-    state = relationship("StateMst", backref="companies")
-    city = relationship("CityMst", backref="companies")
-    def __repr__(self):
-        return f"<CoMst(id={self.co_id}, name='{self.co_name}')>"
-
-
-
-
-class BranchMst(Base):
-    __tablename__ = "branch_mst"
-
-    branch_id = Column(Integer, primary_key=True, autoincrement=True)
-    branch_name = Column(String(255), nullable=False, unique=True)
-    co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
-    branch_address1 = Column(String(255))
-    branch_address2 = Column(String(255))
-    branch_zipcode = Column(Integer)
-    country_id = Column(Integer, ForeignKey("country_mst.country_id"))
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
-    gst_no = Column(String(25))
-    contact_no = Column(Integer)
-    contact_person = Column(String(255))
-    branch_email = Column(String(255))
-    active = Column(Boolean, default=True)
-    gst_verified = Column(Boolean, default=False)
+    menu_type_id = Column(Integer, primary_key=True, autoincrement=True)
+    menu_type = Column(String(25), nullable=False)
 
     def __repr__(self):
-        return f"<BranchMst(id={self.branch_id}, name='{self.branch_name}')>"
-class CountryMst(Base):
-    __tablename__ = "country_mst"
+        return f"<MenuTypeMst(id={self.menu_type_id}, name='{self.menu_type}')>"
 
-    country_id = Column(Integer, primary_key=True, autoincrement=True)
-    country = Column(String(255), nullable=False, unique=True)
+class PortalMenuMst(Base):
+    __tablename__ = 'portal_menu_mst'
 
-    def __repr__(self):
-        return f"<CountryMst(id={self.country_id}, country='{self.country}')>"
-
-
-class StateMst(Base):
-    __tablename__ = "state_mst"
-
-    state_id = Column(Integer, primary_key=True, autoincrement=True)
-    state = Column(String(255), nullable=False, unique=True)
-    country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False)
-
-    # Relationships
-    country = relationship("CountryMst", backref="states")
+    menu_id = Column(Integer, primary_key=True, autoincrement=True)
+    menu_name = Column(String(255), nullable=False)
+    menu_path = Column(String(255), nullable=True)
+    active = Column(Boolean, nullable=False)
+    menu_parent_id = Column(Integer, nullable=True)
+    menu_type_id = Column(Integer, ForeignKey('menu_type_mst.menu_type_id'), nullable=False)
+    menu_icon = Column(String(555), nullable=True)
+    module_id = Column(Integer, ForeignKey('con_module_masters.con_module_id'), nullable=False)
+    order_by = Column(Integer, nullable=True)
 
     def __repr__(self):
-        return f"<StateMst(id={self.state_id}, state='{self.state}', country_id={self.country_id})>"
+        return f"<PortalMenuMst(id={self.menu_id}, name='{self.menu_name}')>"
 
+class ConModuleMasters(Base):
+    __tablename__ = 'con_module_masters'
 
-class CityMst(Base):
-    __tablename__ = "city_mst"
-
-    city_id = Column(Integer, primary_key=True, autoincrement=True)
-    city_name = Column(String(255))
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-
-    # Relationships
-    state = relationship("StateMst", backref="cities")
+    con_module_id = Column(Integer, primary_key=True, autoincrement=True)
+    con_module_name = Column(String(50), nullable=False)
+    con_module_type = Column(Integer, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
 
     def __repr__(self):
-        return f"<CityMst(id={self.city_id}, city_name='{self.city_name}', state_id={self.state_id})>"
+        return f"<ConModuleMasters(id={self.con_module_id}, name='{self.con_module_name}')>"
 
-class DeptMst(Base):
-    __tablename__ = 'dept_mst'
 
-    dept_id = Column(Integer, primary_key=True, autoincrement=True)
-    branch_id = Column(Integer, ForeignKey('branch_mst.branch_id'), nullable=True)
-    created_by = Column(Integer, nullable=True)
-    dept_desc = Column(String(30), nullable=True)
-    dept_code = Column(String(30), nullable=True)
-    order_id = Column(Integer, nullable=True)
-    created_date = Column(DateTime, nullable=False, default=func.now())
 
-    # Relationship with BranchMst
-    # branch = relationship("BranchMst", back_populates="departments")
 
-    def __repr__(self):
-        return f"<DeptMst(dept_id={self.dept_id}, dept_desc='{self.dept_desc}')>"
