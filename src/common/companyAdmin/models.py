@@ -180,3 +180,19 @@ class CityMst(Base):
     def __repr__(self):
         return f"<CityMst(id={self.city_id}, city_name='{self.city_name}', state_id={self.state_id})>"
 
+class DeptMst(Base):
+    __tablename__ = 'dept_mst'
+
+    dept_id = Column(Integer, primary_key=True, autoincrement=True)
+    branch_id = Column(Integer, ForeignKey('branch_mst.branch_id'), nullable=True)
+    created_by = Column(Integer, nullable=True)
+    dept_desc = Column(String(30), nullable=True)
+    dept_code = Column(String(30), nullable=True)
+    order_id = Column(Integer, nullable=True)
+    created_date = Column(DateTime, nullable=False, default=func.now())
+
+    # Relationship with BranchMst
+    # branch = relationship("BranchMst", back_populates="departments")
+
+    def __repr__(self):
+        return f"<DeptMst(dept_id={self.dept_id}, dept_desc='{self.dept_desc}')>"
