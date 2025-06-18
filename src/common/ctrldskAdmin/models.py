@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
@@ -87,4 +87,57 @@ class ConUserRoleMapping(Base):
     con_user_id = Column(Integer, ForeignKey('con_user_master.con_user_id'), nullable=False, index=True)
     created_by = Column(Integer, nullable=False, index=True)
     created_date_time = Column(DateTime, nullable=True, server_default=func.now())
+
+class ControlDeskMenu(Base):
+    __tablename__ = 'control_desk_menu'
+
+    control_desk_menu_id = Column(Integer, primary_key=True, autoincrement=True)
+    control_desk_menu_name = Column(String(50), nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    parent_id = Column(Integer, nullable=True)
+    menu_path = Column(String(100), nullable=True)
+    menu_state = Column(String(100), nullable=True)
+    report_path = Column(String(100), nullable=True)
+    menu_icon_name = Column(Text, nullable=True)
+    order_by = Column(Integer, nullable=True)
+    menu_type = Column(Integer, nullable=True, comment='0 for Portal,1 for App')
+
+class MenuTypeMst(Base):
+    __tablename__ = 'menu_type_mst'
+
+    menu_type_id = Column(Integer, primary_key=True, autoincrement=True)
+    menu_type = Column(String(25), nullable=False)
+
+    def __repr__(self):
+        return f"<MenuTypeMst(id={self.menu_type_id}, name='{self.menu_type}')>"
+
+class PortalMenuMst(Base):
+    __tablename__ = 'portal_menu_mst'
+
+    menu_id = Column(Integer, primary_key=True, autoincrement=True)
+    menu_name = Column(String(255), nullable=False)
+    menu_path = Column(String(255), nullable=True)
+    active = Column(Boolean, nullable=False)
+    menu_parent_id = Column(Integer, nullable=True)
+    menu_type_id = Column(Integer, ForeignKey('menu_type_mst.menu_type_id'), nullable=False)
+    menu_icon = Column(String(555), nullable=True)
+    module_id = Column(Integer, ForeignKey('con_module_masters.con_module_id'), nullable=False)
+    order_by = Column(Integer, nullable=True)
+
+    def __repr__(self):
+        return f"<PortalMenuMst(id={self.menu_id}, name='{self.menu_name}')>"
+
+class ConModuleMasters(Base):
+    __tablename__ = 'con_module_masters'
+
+    con_module_id = Column(Integer, primary_key=True, autoincrement=True)
+    con_module_name = Column(String(50), nullable=False)
+    con_module_type = Column(Integer, nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+
+    def __repr__(self):
+        return f"<ConModuleMasters(id={self.con_module_id}, name='{self.con_module_name}')>"
+
+
+
 
