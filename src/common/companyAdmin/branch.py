@@ -16,6 +16,7 @@ router = APIRouter()
 async def getBranchFull(
     request: Request,
     page: int = Query(1, ge=1),
+    
     limit: int = Query(10, ge=1),
     search: Optional[str] = None,
     token_data: dict = Depends(verify_access_token),  # Use the new dependency  
