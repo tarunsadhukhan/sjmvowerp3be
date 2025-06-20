@@ -1,13 +1,14 @@
 from fastapi import Depends, Request, HTTPException,APIRouter, Query
 from sqlalchemy.sql import text
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from src.config.db import get_db_names,default_engine, get_tenant_db
 from src.authorization.utils import verify_access_token
 from src.common.ctrldskAdmin.schemas import MenuResponse, OrgCreate
-from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster, CoMst
-from src.common.companyAdmin.query import get_co_all_query, get_co_all_count_query, get_co_by_id_query
+from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster, CoMst, CoConfig, CurrencyMst
+from src.common.companyAdmin.query import get_co_all_query, get_co_all_count_query, get_co_by_id_query, get_co_config_by_id_query
 from src.common.companyAdmin.query import get_country_query, get_state_query, get_city_query
-from src.common.companyAdmin.schemas import CoCreate
+from src.common.companyAdmin.schemas import CoCreate, CoConfigCreate
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -211,5 +212,131 @@ async def edit_co_data(
         import traceback; traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+    
+
+@router.get("/co_config")
+async def get_company_config(
+    co_id: int,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token)
+):
+    """
+    Get the configuration for a specific company, and all currencies.
+    If config does not exist, return default values (0 for booleans, null for numbers).
+    """
+    try:
+        query = get_co_config_by_id_query(co_id)
+        result = db.execute(query, {"co_id": co_id}).fetchone()
+
+        # Fetch all currencies
+        currencies = db.query(CurrencyMst).all()
+        currency_list = [
+            {"currency_id": c.currency_id, "currency_prefix": c.currency_prefix}
+            for c in currencies
+        ]
+
+        if not result:
+            # No config: return default values
+            config = {
+                "co_id": co_id,
+                "currency_id": None,
+                "india_gst": 0,
+                "india_tds": 0,
+                "india_tcs": 0,
+                "back_date_allowable": 0,
+                "indent_required": 0,
+                "po_required": 0,
+                "material_inspection": 0,
+                "quotation_required": 0,
+                "do_required": 0,
+                "gst_linked": 0
+            }
+        else:
+            # Convert SQLAlchemy Row to dict and cast booleans to int (0/1)
+            config = dict(result._mapping)
+            for key in [
+                "india_gst", "india_tds", "india_tcs", "back_date_allowable",
+                "indent_required", "po_required", "material_inspection",
+                "quotation_required", "do_required", "gst_linked"
+            ]:
+                config[key] = int(config[key]) if config[key] is not None else 0
+            # For numbers, if None, keep as None
+
+        return {"company": config, "currencies": currency_list}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in get_company_config: {exc}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
+
+@router.post("/company_config")
+async def create_update_company_config(
+    payload: CoConfigCreate,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token)
+):
+    """
+    Create or update configuration for a specific company.
+    """
+    try:
+        # Check if company exists
+        company = db.query(CoMst).filter(CoMst.co_id == payload.co_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        # Use the query to check if config exists
+        query = get_co_config_by_id_query(payload.co_id)
+        result = db.execute(query, {"co_id": payload.co_id}).fetchone()
+
+        if result:
+            # Config exists, update using ORM
+            config_obj = db.query(CoConfig).filter(CoConfig.co_id == payload.co_id).first()
+            config_obj.currency_id = payload.currency_id
+            config_obj.india_gst = payload.india_gst
+            config_obj.india_tds = payload.india_tds
+            config_obj.india_tcs = payload.india_tcs
+            config_obj.back_date_allowable = payload.back_date_allowable
+            config_obj.indent_required = payload.indent_required
+            config_obj.po_required = payload.po_required
+            config_obj.material_inspection = payload.material_inspection
+            config_obj.quotation_required = payload.quotation_required
+            config_obj.do_required = payload.do_required
+            config_obj.gst_linked = payload.gst_linked
+            config_obj.updated_by = token_data.get("user_id")
+            config_obj.updated_date_time = func.current_timestamp()
+            db.commit()
+            return {"message": "Company configuration updated successfully", "co_id": payload.co_id}
+        else:
+            # Create new config
+            new_config = CoConfig(
+                co_id=payload.co_id,
+                currency_id=payload.currency_id,
+                india_gst=payload.india_gst,
+                india_tds=payload.india_tds,
+                india_tcs=payload.india_tcs,
+                back_date_allowable=payload.back_date_allowable,
+                indent_required=payload.indent_required,
+                po_required=payload.po_required,
+                material_inspection=payload.material_inspection,
+                quotation_required=payload.quotation_required,
+                do_required=payload.do_required,
+                gst_linked=payload.gst_linked,
+                updated_by=token_data.get("user_id"),
+                updated_date_time=func.current_timestamp()
+            )
+            db.add(new_config)
+            db.commit()
+            return {"message": "Company configuration created successfully", "co_id": payload.co_id}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in create_update_company_config: {exc}")
+        import traceback; traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
 
 

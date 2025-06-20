@@ -36,6 +36,8 @@ CREATE TABLE co_config (
     quotation_required BOOLEAN,
     do_required BOOLEAN,
     gst_linked BOOLEAN,
+    update_by INT,
+    update_date DATETIME,
     PRIMARY KEY (co_id),
     FOREIGN KEY (co_id) REFERENCES co_mst(co_id),
     FOREIGN KEY (currency_id) REFERENCES currency_mst(currency_id)

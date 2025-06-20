@@ -64,3 +64,20 @@ class DeptCreate(BaseModel):
     created_date: Optional[str] = None  # Added for edit operations
     class Config:
         orm_mode = True
+
+
+class CoConfigCreate(BaseModel):
+    co_id: int
+    currency_id: int
+    india_gst: Optional[bool] = False
+    india_tds: Optional[bool] = False
+    india_tcs: Optional[bool] = False
+    back_date_allowable: Optional[bool] = False
+    indent_required: Optional[bool] = False
+    po_required: Optional[bool] = False
+    material_inspection: Optional[bool] = False
+    quotation_required: Optional[bool] = False
+    do_required: Optional[bool] = False
+    gst_linked: Optional[bool] = False
+    updated_by: Optional[int] = None  # Added for edit operations
+    updated_date_time: Optional[str] = None  # Added for edit operations

@@ -163,3 +163,18 @@ left join sls.branch_mst bm on dm.branch_id =bm.branch_id
     query = text(sql)
     return query
 
+def get_co_config_by_id_query(co_id: int):
+    sql = f"""select co_id ,
+    currency_id ,
+    india_gst ,
+    india_tds ,
+    india_tcs,
+    back_date_allowable,
+    indent_required,
+    po_required ,
+    material_inspection,
+    quotation_required,
+    do_required ,
+    gst_linked  from co_config cc where co_id= :co_id ;"""
+    query = text(sql)
+    return query
