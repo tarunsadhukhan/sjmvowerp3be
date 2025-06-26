@@ -161,3 +161,4 @@ class ApprovalMst(Base):
 
         parent   = relationship("MenuMst", remote_side=[menu_id],
                                 backref="children", foreign_keys=[menu_parent_id])
+
