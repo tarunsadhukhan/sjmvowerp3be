@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from src.config.db import get_db_names, default_engine, get_tenant_db
 from src.authorization.utils import verify_access_token
 # from src.masters.schemas import MenuResponse
-from src.masters.models import ItemGrpMst
+from src.masters.models import ItemGrpMst, ItemTypeMaster
 from src.masters.query import get_item_group
+from datetime import datetime
 
 router = APIRouter()
 
@@ -31,5 +32,56 @@ async def get_item_groups(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-# @router.post("/create_item_group")
-# async def create_item_group(
+
+
+@router.get("/createItemGroupSetup")
+async def create_item_group_setup(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token)
+):
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
+        # No search param for setup, just get all item groups for dropdown
+        query = get_item_group(int(co_id))
+        result = db.execute(query, {"co_id": int(co_id), "search": None}).fetchall()
+        item_groups = [dict(row._mapping) for row in result]
+        # Get all item types for dropdown
+        item_types = db.query(ItemTypeMaster).all()
+        item_type_list = [
+            {"item_type_id": t.item_type_id, "item_type_name": t.item_type_name}
+            for t in item_types
+        ]
+        return {"item_groups": item_groups, "item_types": item_type_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/createItemGroup")
+async def create_item_group(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token)
+):
+    try:
+        new_group = ItemGrpMst(
+            co_id=payload.get("co_id"),
+            active=payload.get("active"),
+            updated_by=payload.get("updated_by"),
+            updated_date_time=payload.get("updated_date_time", datetime.utcnow()),
+            item_grp_name=payload.get("item_grp_name"),
+            item_grp_code=payload.get("item_grp_code"),
+            item_type_id=payload.get("item_type_id"),
+            parent_grp_id=payload.get("parent_grp_id")
+        )
+        db.add(new_group)
+        db.commit()
+        db.refresh(new_group)
+        return {"message": "Item group created successfully", "item_grp_id": new_group.item_grp_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
