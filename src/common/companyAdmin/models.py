@@ -196,3 +196,35 @@ class DeptMst(Base):
 
     def __repr__(self):
         return f"<DeptMst(dept_id={self.dept_id}, dept_desc='{self.dept_desc}')>"
+    
+
+
+class CoConfig(Base):
+    __tablename__ = "co_config"
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), primary_key=True)
+    currency_id = Column(Integer, ForeignKey("currency_mst.currency_id"))
+    india_gst = Column(Boolean, default=False)
+    india_tds = Column(Boolean, default=False)
+    india_tcs = Column(Boolean, default=False)
+    back_date_allowable = Column(Boolean, default=False)
+    indent_required = Column(Boolean, default=False)
+    po_required = Column(Boolean, default=False)
+    material_inspection = Column(Boolean, default=False)
+    quotation_required = Column(Boolean, default=False)
+    do_required = Column(Boolean, default=False)
+    gst_linked = Column(Boolean, default=False)
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+
+    # Relationships
+    company = relationship("CoMst", backref="config")
+    currency = relationship("CurrencyMst", backref="co_configs")
+
+class CurrencyMst(Base):
+    __tablename__ = "currency_mst"
+    currency_id = Column(Integer, primary_key=True, autoincrement=True)
+    currency_prefix = Column(String(25), nullable=False)
+
+
+
+

@@ -17,6 +17,7 @@ from src.common.companyAdmin.company import router as co_company_router
 from src.common.ctrldskAdmin.menuportal import router as co_ctrldsk_menu_router
 from src.common.companyAdmin.branch import router as co_branch_router
 from src.common.companyAdmin.dept_subdept import router as co_dept_subdept_router
+from masters.items import router as item_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -59,6 +60,8 @@ app.include_router(co_company_router, prefix="/api/companyAdmin", tags=["company
 app.include_router(co_ctrldsk_menu_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-menu"])
 app.include_router(co_branch_router, prefix="/api/companyAdmin", tags=["company-admin-branch"])
 app.include_router(co_dept_subdept_router, prefix="/api/companyAdmin", tags=["company-admin-dept-subdept"])
+app.include_router(item_router, prefix="/api/itemMaster", tags=["masters-items"])
+
 
 
 logging.basicConfig(level=logging.INFO)
