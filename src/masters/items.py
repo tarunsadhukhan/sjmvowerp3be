@@ -1,8 +1,8 @@
-from fastapi import Depends, Request, HTTPException, APIRouter
+from fastapi import Depends, Request, HTTPException, APIRouter, Response
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
 from src.config.db import get_db_names, default_engine, get_tenant_db
-from src.authorization.utils import verify_access_token
+from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
 from src.masters.models import ItemGrpMst, ItemTypeMaster
 from src.masters.query import get_item_group, get_item_group_drodown, india_gst_applicable
@@ -14,8 +14,9 @@ router = APIRouter()
 @router.get("/get_all_item_groups")
 async def get_item_groups(
     request: Request,
+    response: Response,
     db: Session = Depends(get_tenant_db),
-    token_data: dict = Depends(verify_access_token),
+    token_data: dict = Depends(get_current_user_with_refresh),
     search: str = None
 ):
     try:
@@ -38,7 +39,7 @@ async def get_item_groups(
 async def create_item_group_setup(
     request: Request,
     db: Session = Depends(get_tenant_db),
-    token_data: dict = Depends(verify_access_token)
+    token_data: dict = Depends(get_current_user_with_refresh),
 ):
     is_india_gst_applicable = False  # Ensure variable is always defined
     try:
@@ -69,7 +70,7 @@ async def create_item_group_setup(
 async def create_item_group(
     payload: dict,
     db: Session = Depends(get_tenant_db),
-    token_data: dict = Depends(verify_access_token)
+    token_data: dict = Depends(get_current_user_with_refresh)
 ):
     try:
         def sanitize_int(value):
