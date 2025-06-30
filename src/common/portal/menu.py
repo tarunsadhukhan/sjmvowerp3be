@@ -1,8 +1,8 @@
-from fastapi import Depends, Request, HTTPException, APIRouter
+from fastapi import Depends, Request, HTTPException, APIRouter, Response
 from sqlalchemy.sql import text
 from sqlalchemy.orm import Session
 from src.config.db import get_db_names, default_engine, get_tenant_db
-from src.authorization.utils import verify_access_token
+from src.authorization.utils import get_current_user_with_refresh
 from src.common.companyAdmin.schemas import MenuResponse
 from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap
 from src.common.portal.query import get_portal_user_menus
@@ -12,15 +12,15 @@ router = APIRouter()
 @router.get("/portal_menu_items")
 async def compmenuitems(
     request: Request,
-    token_data: dict = Depends(verify_access_token),
-    tenant_session: Session = Depends(get_tenant_db),  # Use the new dependency
+    response: Response,
+    token_data: dict = Depends(get_current_user_with_refresh),
+    tenant_session: Session = Depends(get_tenant_db),
 ):
     user_id = token_data.get("user_id")
     print(f" Token user_id: {user_id}")  # Debug
     if not user_id:
         raise HTTPException(status_code=403, detail="User ID not found in token")
     print(f"✅ Authorized Request: Cookie User: {user_id}")
-    
     try:
         # Get menus for this user
         menu_query = get_portal_user_menus(user_id=user_id)
@@ -88,7 +88,6 @@ async def compmenuitems(
             result.append(company_data)
         
         return result
-        
     except Exception as e:
         print(f"Error getting portal menu items: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting portal menu items: {str(e)}")
