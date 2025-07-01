@@ -97,5 +97,53 @@ async def create_item_group(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+
+@router.post("/updateItemGroupActive")
+async def update_item_group_active_status(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh)
+):
+    try:
+        item_grp_id = payload.get("item_grp_id")
+        active_status = payload.get("active")
+        co_id = payload.get("co_id")
+
+        if item_grp_id is None or active_status is None or co_id is None:
+            raise HTTPException(status_code=400, detail="Item group ID, active status, and company ID are required")
+
+        # Fetch the item group by id and company
+        item_group = db.query(ItemGrpMst).filter_by(item_grp_id=item_grp_id, co_id=co_id).first()
+        if not item_group:
+            raise HTTPException(status_code=404, detail="Item group not found")
+
+        item_group.active = active_status
+        db.commit()
+        return {"message": "Item group active status updated successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/itemGroupDetails")
+async def get_item_group_details(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh)
+):
+    try:
+        item_grp_id = payload.get("itemgroupid")
+        if not item_grp_id:
+            raise HTTPException(status_code=400, detail="Item group ID (itemgroupid) is required")
+        from src.masters.query import get_item_group_details_by_id
+        query = get_item_group_details_by_id()
+        result = db.execute(query, {"item_grp_id": int(item_grp_id)}).fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Item group not found")
+        return dict(result._mapping)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 

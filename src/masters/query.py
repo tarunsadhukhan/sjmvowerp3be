@@ -91,3 +91,10 @@ select cc.india_gst  from co_config cc where cc.co_id =:co_id;
 """
     query = text(sql)
     return query
+
+
+def get_item_group_details_by_id():
+    sql = """
+        SELECT * FROM item_grp_mst WHERE item_grp_id = :item_grp_id
+    """
+    return text(sql)
