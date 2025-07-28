@@ -63,7 +63,7 @@ def get_item_group_drodown(co_id: int = None):
     CAST(igm.item_grp_code AS CHAR) AS item_grp_code_display,
     CAST(igm.item_grp_name AS CHAR) AS item_grp_name_display
   FROM item_grp_mst igm
-  WHERE igm.parent_grp_id IS NULL and igm.co_id =1 and igm.active = 1
+  WHERE igm.parent_grp_id IS NULL and igm.co_id =:co_id and igm.active = 1
   UNION ALL-- Recursive member: join with children
   SELECT 
     child.item_grp_id,
@@ -98,3 +98,14 @@ def get_item_group_details_by_id():
         SELECT * FROM item_grp_mst WHERE item_grp_id = :item_grp_id
     """
     return text(sql)
+
+def get_item(co_id: int = None):
+    sql = f"""item_id, active, item_grp_id , item_code, tangible, item_name , item_photo , legacy_item_code , hsn_code , uom_id , tax_percentage , 
+saleable , consumable , purchaseable , manufacturable , assembly , uom_rounding , rate_rounding 
+from item_mst
+  WHERE co_id = :co_id 
+  AND (:search IS NULL OR 
+                    item_grp_code_display LIKE :search OR 
+                    item_grp_name_display LIKE :search) ;"""
+    query = text(sql)
+    return query

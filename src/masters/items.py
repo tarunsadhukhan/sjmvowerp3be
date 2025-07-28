@@ -78,15 +78,40 @@ async def create_item_group(
 
         parent_grp_id = sanitize_int(payload.get("parent_grp_id"))
         item_type_id = sanitize_int(payload.get("item_type_id"))
-        # Use user_id from token if updated_by is not provided
+        co_id = payload.get("co_id")
+        item_grp_code = payload.get("item_grp_code")
+        item_grp_name = payload.get("item_grp_name")
         updated_by = payload.get("updated_by") or str(token_data.get("user_id"))
+
+        # Check for duplicate item group code for the same company
+        duplicate_code = db.query(ItemGrpMst).filter_by(co_id=co_id, item_grp_code=item_grp_code).first()
+        if duplicate_code:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Item group code '{item_grp_code}' already exists for this company. Cannot create duplicate code.",
+                    "reason": "duplicate_code"
+                }
+            )
+
+        # Check for duplicate item group name for the same company
+        duplicate_name = db.query(ItemGrpMst).filter_by(co_id=co_id, item_grp_name=item_grp_name).first()
+        if duplicate_name:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Item group name '{item_grp_name}' already exists for this company. Cannot create duplicate name.",
+                    "reason": "duplicate_name"
+                }
+            )
+
         new_group = ItemGrpMst(
-            co_id=payload.get("co_id"),
+            co_id=co_id,
             active=1,
             updated_by=updated_by,
             updated_date_time=payload.get("updated_date_time", datetime.utcnow()),
-            item_grp_name=payload.get("item_grp_name"),
-            item_grp_code=payload.get("item_grp_code"),
+            item_grp_name=item_grp_name,
+            item_grp_code=item_grp_code,
             item_type_id=item_type_id,
             parent_grp_id=parent_grp_id
         )
@@ -94,6 +119,8 @@ async def create_item_group(
         db.commit()
         db.refresh(new_group)
         return {"message": "Item group created successfully", "item_grp_id": new_group.item_grp_id}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
