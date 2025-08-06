@@ -5,7 +5,8 @@ from src.config.db import get_db_names, default_engine, get_tenant_db
 from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
 from src.masters.models import ItemGrpMst, ItemTypeMaster
-from src.masters.query import get_item_group, get_item_group_drodown, india_gst_applicable
+from src.masters.query import get_item_group, get_item_group_drodown, india_gst_applicable, get_item_table, check_item_group_code_and_name
+from src.masters.query import get_item_group_details_by_id, get_item_minmax_mapping, get_item, get_item_uom_mapping, get_uom_list
 from datetime import datetime
 
 router = APIRouter()
@@ -83,28 +84,7 @@ async def create_item_group(
         item_grp_name = payload.get("item_grp_name")
         updated_by = payload.get("updated_by") or str(token_data.get("user_id"))
 
-        # Check for duplicate item group code for the same company
-        duplicate_code = db.query(ItemGrpMst).filter_by(co_id=co_id, item_grp_code=item_grp_code).first()
-        if duplicate_code:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Item group code '{item_grp_code}' already exists for this company. Cannot create duplicate code.",
-                    "reason": "duplicate_code"
-                }
-            )
-
-        # Check for duplicate item group name for the same company
-        duplicate_name = db.query(ItemGrpMst).filter_by(co_id=co_id, item_grp_name=item_grp_name).first()
-        if duplicate_name:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Item group name '{item_grp_name}' already exists for this company. Cannot create duplicate name.",
-                    "reason": "duplicate_name"
-                }
-            )
-
+        
         new_group = ItemGrpMst(
             co_id=co_id,
             active=1,
@@ -171,6 +151,52 @@ async def get_item_group_details(
         return dict(result._mapping)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/get_item_table")
+async def get_item(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    search: str = None
+):
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
+        # Prepare search parameter for LIKE if provided
+        search_param = f"%{search}%" if search else None
+        query = get_item_table(int(co_id))
+        result = db.execute(query, {"co_id": int(co_id), "search": search_param}).fetchall()
+        data = [dict(row._mapping) for row in result]
+        return {"data": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@router.get("/item_details")
+async def get_item_details(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    item_id: int = None
+):
+    try:
+        if not item_id:
+            raise HTTPException(status_code=400, detail="Item ID (item_id) is required")
+
+        query = get_item_by_id(item_id)
+        result = db.execute(query, {"item_id": item_id}).fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Item not found")
+        return dict(result._mapping)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
 
 
 
