@@ -285,7 +285,7 @@ async def create_user_portal(
                 role_id=int(branch_role.role_id),  # Convert to int as it might come as string
                 co_id=branch_role.company_id,
                 branch_id=branch_role.branch_id,
-                created_by_con_user=creator_user_id
+                updated_by_con_user=creator_user_id
             )
             role_mappings.append(role_map)
             tenant_session.add(role_map)
@@ -326,80 +326,62 @@ async def edit_user_portal(
     token_data: dict = Depends(verify_access_token),
     tenant_session: Session = Depends(get_tenant_db),
 ):
-    """
-    Edit a user in the portal by updating their active status and role mappings
-    
-    Args:
-        request: The HTTP request
-        user_data: User data including is_active and branch_roles
-        token_data: Authentication token data
-        tenant_session: Database session for tenant database
-        
-    Returns:
-        Dict with status and updated user data
-    """
+    """Edit a user in the portal by updating their active status and role mappings."""
     try:
         admin_user_id = token_data.get("user_id")
         if not admin_user_id:
             raise HTTPException(status_code=403, detail="User ID not found in token")
-        
-        # Get user_id from request body
+
+        # Parse and validate target user id
         user_id = int(user_data.user_id)
-        
+
         print(f"Admin user {admin_user_id} editing portal user ID: {user_id}")
-        
-        # Get the user record
+
+        # Fetch user
         user = tenant_session.query(ConUser).filter(ConUser.user_id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found")
-        
-        # Update the user's active status (true/false -> 1/0)
-        is_active = user_data.is_active
-        user.active = is_active
-        
-        # Delete existing role mappings for this user
+
+        # Update active flag
+        user.active = user_data.is_active
+
+        # Delete existing role mappings using raw SQL to avoid ORM prefetch/select
         try:
-            delete_count = tenant_session.query(UserRoleMap).filter(
-                UserRoleMap.user_id == user_id
-            ).delete(synchronize_session='fetch')
-            
-            print(f"Deleted {delete_count} existing role mappings for user {user_id}")
+            delete_stmt = text("DELETE FROM user_role_map WHERE user_id = :user_id")
+            result = tenant_session.execute(delete_stmt, {"user_id": user_id})
+            tenant_session.flush()
+            delete_count = result.rowcount if result is not None else 0
+            print(f"Deleted {delete_count} existing role mappings for user {user_id} (direct SQL)")
         except Exception as delete_error:
-            print(f"Error during role mappings deletion: {str(delete_error)}")
+            print(f"Error during role mappings deletion (direct SQL): {str(delete_error)}")
             tenant_session.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to delete existing role mappings: {str(delete_error)}"
-            )
-        
+            raise HTTPException(status_code=500, detail=f"Failed to delete existing role mappings: {str(delete_error)}")
+
         # Create new role mappings for each branch role
         role_mappings = []
         for branch_role in user_data.branch_roles:
-            # Create a new role mapping for each branch-role pair
             role_map = UserRoleMap(
                 user_id=user_id,
-                role_id=int(branch_role["role_id"]),  # Convert to int as it might come as string
+                role_id=int(branch_role["role_id"]),
                 co_id=branch_role["company_id"],
                 branch_id=branch_role["branch_id"],
-                created_by_con_user=admin_user_id
+                updated_by_con_user=admin_user_id
             )
             role_mappings.append(role_map)
             tenant_session.add(role_map)
-        
-        # Commit all changes
+
         tenant_session.commit()
-        
-        print(f"User {user_id} updated with active status: {is_active} and {len(role_mappings)} new role mappings")
-        
+
+        print(f"User {user_id} updated with active status: {user.active} and {len(role_mappings)} new role mappings")
+
         return {
             "success": True,
             "message": "User updated successfully",
             "user_id": user_id,
             "roles_mapped": len(role_mappings)
         }
-        
+
     except HTTPException as he:
-        # Re-raise HTTP exceptions
         tenant_session.rollback()
         raise he
     except Exception as e:

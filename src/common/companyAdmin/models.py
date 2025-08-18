@@ -103,7 +103,7 @@ class CoMst(Base):
     city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
-    created_by_con_user = Column(Integer)
+    updated_by_con_user = Column(Integer)
     co_cin_no = Column(String(25))
     co_email_id = Column(String(255))
     co_pan_no = Column(String(25))

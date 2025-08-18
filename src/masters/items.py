@@ -6,7 +6,7 @@ from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
 from src.masters.models import ItemGrpMst, ItemTypeMaster
 from src.masters.query import get_item_group, get_item_group_drodown, india_gst_applicable, get_item_table, check_item_group_code_and_name
-from src.masters.query import get_item_group_details_by_id, get_item_minmax_mapping, get_item, get_item_uom_mapping, get_uom_list
+from src.masters.query import get_item_group_details_by_id, get_item_minmax_mapping, get_item, get_item_uom_mapping, get_uom_list, get_item_by_id
 from datetime import datetime
 
 router = APIRouter()
@@ -174,8 +174,8 @@ async def get_item(
         raise HTTPException(status_code=500, detail=str(e))
     
 
-@router.get("/item_details")
-async def get_item_details(
+@router.get("/item_create_setup")
+async def get_item_create_setup(
     request: Request,
     response: Response,
     db: Session = Depends(get_tenant_db),
@@ -183,20 +183,69 @@ async def get_item_details(
     item_id: int = None
 ):
     try:
-        if not item_id:
-            raise HTTPException(status_code=400, detail="Item ID (item_id) is required")
+        co_id = request.query_params.get("co_id")
 
-        query = get_item_by_id(item_id)
-        result = db.execute(query, {"item_id": item_id}).fetchone()
-        if not result:
-            raise HTTPException(status_code=404, detail="Item not found")
-        return dict(result._mapping)
+        itemgroup_query = get_item_group_drodown(int(co_id))
+        itemgroups = db.execute(itemgroup_query, {"co_id": int(co_id)}).fetchall()
+        uomgroup_query = get_uom_list()
+        uomgroups = db.execute(uomgroup_query, {"co_id": int(co_id)}).fetchall()
+        minmax_query = get_item_minmax_mapping(None, int(co_id))
+        minmax_mapping = db.execute(minmax_query, {"item_id": None, "co_id": int(co_id)}).fetchall()
+        if not itemgroups:
+            raise HTTPException(status_code=404, detail="Item groups not found")
+        return {
+            "itemgroups": [dict(row._mapping) for row in itemgroups], 
+            "uomgroups": [dict(row._mapping) for row in uomgroups],
+            "minmax_mapping": [dict(row._mapping) for row in minmax_mapping]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/CreateItem")
+async def create_item(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh)
+):
+    try:
+        def sanitize_int(value):
+            return int(value) if isinstance(value, int) or (isinstance(value, str) and value.isdigit()) else None
 
+        co_id = payload.get("co_id")
+        item_grp_id = sanitize_int(payload.get("item_grp_id"))
+        item_code = payload.get("item_code")
+        item_name = payload.get("item_name")
+        uom_id = sanitize_int(payload.get("uom_id"))
+        hsn_code = payload.get("hsn_code")
+        tax_percentage = payload.get("tax_percentage", 0.0)
+        updated_by = payload.get("updated_by") or str(token_data.get("user_id"))
 
+        # Check for existing item code and name
+        is_code_valid, is_name_valid = check_item_group_code_and_name(db, co_id, item_code, item_name)
+        if not is_code_valid:
+            raise HTTPException(status_code=400, detail="Item code already exists")
+        if not is_name_valid:
+            raise HTTPException(status_code=400, detail="Item name already exists")
 
-
-
-
-
+        new_item = ItemGrpMst(
+            co_id=co_id,
+            active=1,
+            updated_by=updated_by,
+            updated_date_time=payload.get("updated_date_time", datetime.utcnow()),
+            item_grp_name=item_name,
+            item_grp_code=item_code,
+            uom_id=uom_id,
+            hsn_code=hsn_code,
+            tax_percentage=tax_percentage,
+            item_grp_id=item_grp_id
+        )
+        db.add(new_item)
+        db.commit()
+        db.refresh(new_item)
+        return {"message": "Item created successfully", "item_grp_id": new_item.item_grp_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
