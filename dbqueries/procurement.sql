@@ -209,8 +209,8 @@ CREATE TABLE item_minmax_mst (
     maxqty DOUBLE,
     min_order_qty DOUBLE,
     lead_time INT,
-    created_by INT,
-    created_date DATETIME,
+    updated_by INT,
+    updated_date_tiime DATETIME,
     active INT,
     FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
     FOREIGN KEY (item_id) REFERENCES item_mst(item_id)

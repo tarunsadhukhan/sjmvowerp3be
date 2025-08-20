@@ -320,3 +320,48 @@ WHERE um.active = 1;
 """
     query = text(sql)
     return query
+
+def get_item_make(co_id: int):
+    sql = """
+WITH RECURSIVE item_group_hierarchy AS (
+  -- Anchor: top-level groups
+  SELECT 
+    igm.item_grp_id,
+    igm.item_grp_code,
+    igm.item_grp_name,
+    igm.parent_grp_id,
+    igm.co_id,
+    CAST(igm.item_grp_code AS CHAR) AS item_group_code_display,
+    CAST(igm.item_grp_name AS CHAR) AS item_group_display,
+    1 AS level
+  FROM item_grp_mst igm
+  WHERE igm.parent_grp_id IS NULL AND igm.co_id = 1
+  UNION ALL
+  -- Recursive part
+  SELECT 
+    child.item_grp_id,
+    child.item_grp_code,
+    child.item_grp_name,
+    child.parent_grp_id,
+    child.co_id,
+    CONCAT(parent.item_group_code_display, '-', child.item_grp_code),
+    CONCAT(parent.item_group_display, '-', child.item_grp_name),
+    parent.level + 1
+  FROM item_grp_mst child
+  JOIN item_group_hierarchy parent ON child.parent_grp_id = parent.item_grp_id
+  WHERE child.co_id = :co_id AND child.co_id = parent.co_id
+)
+SELECT 
+  im.item_make_id,
+  im.item_make_name,
+  im.item_grp_id,
+  ig.item_group_display,
+  ig.item_group_code_display
+FROM item_make im
+LEFT JOIN item_group_hierarchy ig ON ig.item_grp_id = im.item_grp_id
+where (:search IS NULL OR
+  ig.item_group_code_display LIKE :search OR
+  ig.item_group_display LIKE :search
+  OR im.item_make_name LIKE :search);"""
+    query = text(sql)
+    return query
