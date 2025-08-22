@@ -365,3 +365,122 @@ where (:search IS NULL OR
   OR im.item_make_name LIKE :search);"""
     query = text(sql)
     return query
+
+
+def get_party_table(co_id: int):
+    sql = """
+select 
+pm.party_id , 
+pm.active ,
+pm.supp_code , 
+pm.supp_name, 
+pm.party_type_id , 
+pm.supp_contact_person , 
+pm.supp_email_id 
+from party_mst pm
+where pm.co_id = :co_id 
+and (:search is NULL OR pm.supp_name LIKE :search OR pm.supp_code LIKE :search);
+"""
+    query = text(sql)
+    return query
+
+def get_party_types():
+    sql = """
+SELECT 
+  ptm.party_types_mst_id,
+  ptm.party_types_mst_name,
+  ptm.module_id
+FROM party_type_mst ptm;
+"""
+    query = text(sql)
+    return query
+
+def get_country_list():
+    sql = """
+SELECT 
+  cm.country_id,
+  cm.country
+FROM country_mst cm;
+"""
+    query = text(sql)
+    return query
+
+def get_state_list():
+    sql = """
+SELECT 
+  sm.state_id,
+  sm.state,
+  sm.country_id
+FROM state_mst sm
+"""
+    query = text(sql)
+    return query
+
+def get_city_list():
+    sql = """
+SELECT 
+  cm.city_id,
+  cm.city_name,
+  cm.state_id
+FROM city_mst cm
+"""
+    query = text(sql)
+    return query
+
+def get_entity_list():
+    sql = """
+select etm.entity_type_id , etm.entity_type_name  from entity_type_mst etm ;
+"""
+    query = text(sql)
+    return query
+
+def get_party_by_id(party_id: int):
+    sql = """
+SELECT  
+pm.party_id , 
+pm.active , 
+pm.supp_name ,
+pm.supp_code ,
+pm.phone_no,
+pm.cin ,
+pm.supp_contact_person ,
+pm.supp_contact_designation ,
+pm.supp_email_id ,
+pm.party_pan_no , 
+pm.entity_type_id ,
+etm.entity_type_name ,
+pm.msme_certified ,
+pm.co_id ,
+cm.country,
+pm.party_type_id 
+from party_mst pm 
+left join country_mst cm on cm.country_id =pm.country_id 
+left join entity_type_mst etm on etm.entity_type_id = pm.entity_type_id 
+where pm.party_id = :party_id
+; 
+"""
+    query = text(sql)
+    return query
+
+def get_party_branch_by_party_id(party_id: int):
+    sql = """
+SELECT
+  pbm.active,
+  pbm.party_mst_branch_id,
+  pbm.gst_no,
+  pbm.address,
+  pbm.address_additional,
+  pbm.zip_code,
+  pbm.city_id,
+  cm.city_name,
+  cm.state_id,
+  sm.state,
+  pbm.contact_no,
+  pbm.contact_person
+FROM party_branch_mst pbm
+LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+WHERE pbm.party_id = :party_id;
+"""
+    query = text(sql)
+    return query

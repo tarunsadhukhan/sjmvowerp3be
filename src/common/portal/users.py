@@ -267,7 +267,7 @@ async def create_user_portal(
             email_id=user_data.user_name,
             password=hashed_password,
             active=user_data.is_active,
-            created_by_con_user=creator_user_id,
+            updated_by_con_user=creator_user_id,
             refresh_token=None,
         )
         
