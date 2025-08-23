@@ -484,3 +484,59 @@ WHERE pbm.party_id = :party_id;
 """
     query = text(sql)
     return query
+
+def get_warehouse_list(branch_ids: list):
+    sql = """
+WITH RECURSIVE warehouse_hierarchy AS (
+  -- Anchor: Top-level warehouses across multiple branches
+  SELECT 
+    wm.warehouse_id,
+    wm.branch_id,
+    wm.warehouse_name,
+    wm.warehouse_type,
+    wm.parent_warehouse_id,
+    CAST(wm.warehouse_name AS CHAR) AS warehouse_path,
+    1 AS level
+  FROM warehouse_mst wm
+  WHERE wm.parent_warehouse_id IS NULL
+    AND wm.branch_id IN :branch_ids  -- ✅ multiple branches here
+  UNION ALL
+  -- Recursive: bring in child warehouses within the same set of branches
+  SELECT 
+    child.warehouse_id,
+    child.branch_id,
+    child.warehouse_name,
+    child.warehouse_type,
+    child.parent_warehouse_id,
+    CONCAT(parent.warehouse_path, '-', child.warehouse_name),
+    parent.level + 1
+  FROM warehouse_mst child
+  JOIN warehouse_hierarchy parent 
+    ON child.parent_warehouse_id = parent.warehouse_id
+  AND child.branch_id IN :branch_ids  -- ✅ repeat here for recursion consistency
+)
+SELECT 
+  warehouse_id,
+  branch_id,
+  warehouse_name,
+  warehouse_type,
+  parent_warehouse_id,
+  warehouse_path,
+  level
+FROM warehouse_hierarchy
+ORDER BY branch_id, warehouse_path;
+"""
+  # allow SQLAlchemy text() to expand a Python list into the IN (:branch_ids) clause
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+
+def get_branch_list():
+    sql = """
+SELECT 
+  bm.branch_id,
+  bm.branch_name
+FROM branch_mst bm;
+"""
+    query = text(sql)
+    return query

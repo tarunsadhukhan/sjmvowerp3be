@@ -171,3 +171,17 @@ class PartyBranchMst(Base):
 
         entity_type_id = Column(Integer, primary_key=True, autoincrement=True)
         entity_type_name = Column(String(30))
+class WarehouseMst(Base):
+    __tablename__ = "warehouse_mst"
+
+    warehouse_id = Column(Integer, primary_key=True, autoincrement=True)
+    warehouse_name = Column(String(30))
+    updated_date_time = Column(DateTime)
+    updated_by = Column(Integer)
+    warehouse_type = Column(String(20))
+    branch_id = Column(Integer)
+    parent_warehouse_id = Column(Integer)
+
+            # branch = relationship("BranchMst", foreign_keys=[branch_id])
+            # Optionally, add relationship for parent warehouse if needed
+            # parent_warehouse = relationship("WarehouseMst", remote_side=[warehouse_id])
