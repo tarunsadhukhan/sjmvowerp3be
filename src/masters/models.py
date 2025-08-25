@@ -185,3 +185,15 @@ class WarehouseMst(Base):
             # branch = relationship("BranchMst", foreign_keys=[branch_id])
             # Optionally, add relationship for parent warehouse if needed
             # parent_warehouse = relationship("WarehouseMst", remote_side=[warehouse_id])
+
+class CostFactorMst(Base):
+    __tablename__ = "cost_factor_mst"
+
+    cost_factor_id = Column(Integer, primary_key=True, autoincrement=True)
+    cost_factor_name = Column(String(255))
+    cost_factor_desc = Column(String(255))
+    branch_id = Column(Integer)
+    dept_id = Column(Integer)
+    updated_by = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
+

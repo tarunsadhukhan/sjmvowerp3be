@@ -540,3 +540,50 @@ FROM branch_mst bm;
 """
     query = text(sql)
     return query
+
+def cost_factor_table(branch_ids: list):
+    sql = """
+SELECT 
+cfm.branch_id,
+cfm.cost_factor_id ,
+cfm.dept_id ,
+dm.dept_desc ,
+cfm.cost_factor_name ,
+cfm.cost_factor_desc 
+from cost_factor_mst cfm 
+left join dept_mst dm on dm.dept_id = cfm.dept_id 
+where cfm.branch_id in :branch_ids 
+and (:search is null or cfm.cost_factor_name LIKE :search);
+"""
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+def get_dept_list_by_branch_id(branch_ids: list):
+    sql = """
+SELECT 
+  dm.dept_id,
+  dm.dept_desc,
+  dm.branch_id
+FROM dept_mst dm
+WHERE dm.branch_id IN :branch_ids;
+"""
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+def cost_factor_table_by_id(cost_factor_id: int):
+    sql = """
+SELECT 
+cfm.branch_id,
+bm.branch_name,
+cfm.cost_factor_id ,
+cfm.dept_id ,
+dm.dept_desc ,
+cfm.cost_factor_name ,
+cfm.cost_factor_desc 
+from cost_factor_mst cfm 
+left join dept_mst dm on dm.dept_id = cfm.dept_id 
+left join branch_mst bm on bm.branch_id = cfm.branch_id
+where cfm.cost_factor_id = :cost_factor_id;
+"""
+    query = text(sql)
+    return query

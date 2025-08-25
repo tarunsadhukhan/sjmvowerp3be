@@ -20,6 +20,7 @@ from src.common.companyAdmin.dept_subdept import router as co_dept_subdept_route
 from masters.party import router as party_router
 from masters.items import router as item_router
 from masters.warehouse import router as warehouse_router
+from masters.castFactor import router as costFactor_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -65,6 +66,7 @@ app.include_router(co_dept_subdept_router, prefix="/api/companyAdmin", tags=["co
 app.include_router(item_router, prefix="/api/itemMaster", tags=["masters-items"])
 app.include_router(party_router, prefix="/api/partyMaster", tags=["masters-party"])
 app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["masters-warehouse"])
+app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
 
 
 
