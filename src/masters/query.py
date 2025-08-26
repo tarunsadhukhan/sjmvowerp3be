@@ -365,6 +365,7 @@ where (:search IS NULL OR
   OR im.item_make_name LIKE :search);"""
     query = text(sql)
     return query
+
   
   
 def get_dept_master(co_id: int = None, branch_ids: list = None):
@@ -658,4 +659,227 @@ def get_project_master(co_id: int = None, branch_ids: list = None):
     query = query.bindparams(bindparam("branch_ids", expanding=True))
 
   return query
+
+
+
+def get_party_table(co_id: int):
+    sql = """
+select 
+pm.party_id , 
+pm.active ,
+pm.supp_code , 
+pm.supp_name, 
+pm.party_type_id , 
+pm.supp_contact_person , 
+pm.supp_email_id 
+from party_mst pm
+where pm.co_id = :co_id 
+and (:search is NULL OR pm.supp_name LIKE :search OR pm.supp_code LIKE :search);
+"""
+    query = text(sql)
+    return query
+
+def get_party_types():
+    sql = """
+SELECT 
+  ptm.party_types_mst_id,
+  ptm.party_types_mst_name,
+  ptm.module_id
+FROM party_type_mst ptm;
+"""
+    query = text(sql)
+    return query
+
+def get_country_list():
+    sql = """
+SELECT 
+  cm.country_id,
+  cm.country
+FROM country_mst cm;
+"""
+    query = text(sql)
+    return query
+
+def get_state_list():
+    sql = """
+SELECT 
+  sm.state_id,
+  sm.state,
+  sm.country_id
+FROM state_mst sm
+"""
+    query = text(sql)
+    return query
+
+def get_city_list():
+    sql = """
+SELECT 
+  cm.city_id,
+  cm.city_name,
+  cm.state_id
+FROM city_mst cm
+"""
+    query = text(sql)
+    return query
+
+def get_entity_list():
+    sql = """
+select etm.entity_type_id , etm.entity_type_name  from entity_type_mst etm ;
+"""
+    query = text(sql)
+    return query
+
+def get_party_by_id(party_id: int):
+    sql = """
+SELECT  
+pm.party_id , 
+pm.active , 
+pm.supp_name ,
+pm.supp_code ,
+pm.phone_no,
+pm.cin ,
+pm.supp_contact_person ,
+pm.supp_contact_designation ,
+pm.supp_email_id ,
+pm.party_pan_no , 
+pm.entity_type_id ,
+etm.entity_type_name ,
+pm.msme_certified ,
+pm.co_id ,
+cm.country,
+pm.party_type_id 
+from party_mst pm 
+left join country_mst cm on cm.country_id =pm.country_id 
+left join entity_type_mst etm on etm.entity_type_id = pm.entity_type_id 
+where pm.party_id = :party_id
+; 
+"""
+    query = text(sql)
+    return query
+
+def get_party_branch_by_party_id(party_id: int):
+    sql = """
+SELECT
+  pbm.active,
+  pbm.party_mst_branch_id,
+  pbm.gst_no,
+  pbm.address,
+  pbm.address_additional,
+  pbm.zip_code,
+  pbm.city_id,
+  cm.city_name,
+  cm.state_id,
+  sm.state,
+  pbm.contact_no,
+  pbm.contact_person
+FROM party_branch_mst pbm
+LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+WHERE pbm.party_id = :party_id;
+"""
+    query = text(sql)
+    return query
+
+def get_warehouse_list(branch_ids: list):
+    sql = """
+WITH RECURSIVE warehouse_hierarchy AS (
+  -- Anchor: Top-level warehouses across multiple branches
+  SELECT 
+    wm.warehouse_id,
+    wm.branch_id,
+    wm.warehouse_name,
+    wm.warehouse_type,
+    wm.parent_warehouse_id,
+    CAST(wm.warehouse_name AS CHAR) AS warehouse_path,
+    1 AS level
+  FROM warehouse_mst wm
+  WHERE wm.parent_warehouse_id IS NULL
+    AND wm.branch_id IN :branch_ids  -- ✅ multiple branches here
+  UNION ALL
+  -- Recursive: bring in child warehouses within the same set of branches
+  SELECT 
+    child.warehouse_id,
+    child.branch_id,
+    child.warehouse_name,
+    child.warehouse_type,
+    child.parent_warehouse_id,
+    CONCAT(parent.warehouse_path, '-', child.warehouse_name),
+    parent.level + 1
+  FROM warehouse_mst child
+  JOIN warehouse_hierarchy parent 
+    ON child.parent_warehouse_id = parent.warehouse_id
+  AND child.branch_id IN :branch_ids  -- ✅ repeat here for recursion consistency
+)
+SELECT 
+  warehouse_id,
+  branch_id,
+  warehouse_name,
+  warehouse_type,
+  parent_warehouse_id,
+  warehouse_path,
+  level
+FROM warehouse_hierarchy
+ORDER BY branch_id, warehouse_path;
+"""
+  # allow SQLAlchemy text() to expand a Python list into the IN (:branch_ids) clause
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+
+def get_branch_list():
+    sql = """
+SELECT 
+  bm.branch_id,
+  bm.branch_name
+FROM branch_mst bm;
+"""
+    query = text(sql)
+    return query
+
+def cost_factor_table(branch_ids: list):
+    sql = """
+SELECT 
+cfm.branch_id,
+cfm.cost_factor_id ,
+cfm.dept_id ,
+dm.dept_desc ,
+cfm.cost_factor_name ,
+cfm.cost_factor_desc 
+from cost_factor_mst cfm 
+left join dept_mst dm on dm.dept_id = cfm.dept_id 
+where cfm.branch_id in :branch_ids 
+and (:search is null or cfm.cost_factor_name LIKE :search);
+"""
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+def get_dept_list_by_branch_id(branch_ids: list):
+    sql = """
+SELECT 
+  dm.dept_id,
+  dm.dept_desc,
+  dm.branch_id
+FROM dept_mst dm
+WHERE dm.branch_id IN :branch_ids;
+"""
+    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+    return query
+
+def cost_factor_table_by_id(cost_factor_id: int):
+    sql = """
+SELECT 
+cfm.branch_id,
+bm.branch_name,
+cfm.cost_factor_id ,
+cfm.dept_id ,
+dm.dept_desc ,
+cfm.cost_factor_name ,
+cfm.cost_factor_desc 
+from cost_factor_mst cfm 
+left join dept_mst dm on dm.dept_id = cfm.dept_id 
+left join branch_mst bm on bm.branch_id = cfm.branch_id
+where cfm.cost_factor_id = :cost_factor_id;
+"""
+    query = text(sql)
+    return query
 

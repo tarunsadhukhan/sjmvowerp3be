@@ -110,7 +110,7 @@ CREATE TABLE party_mst (
     supp_name VARCHAR(255),
     msme_certified INT,
     country_id INT,
-    party_type_id INT,
+    party_type_id VARCHAR(255),
     FOREIGN KEY (co_id) REFERENCES co_mst(co_id),
     FOREIGN KEY (entity_type_id) REFERENCES entity_type_mst(entity_type_id),
     FOREIGN KEY (country_id) REFERENCES country_mst(country_id)
@@ -210,7 +210,7 @@ CREATE TABLE item_minmax_mst (
     min_order_qty DOUBLE,
     lead_time INT,
     updated_by INT,
-    updated_date_tiime DATETIME,
+    updated_date_time DATETIME,
     active INT,
     FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
     FOREIGN KEY (item_id) REFERENCES item_mst(item_id)

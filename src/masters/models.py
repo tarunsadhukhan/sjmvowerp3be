@@ -4,8 +4,16 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy import Float
+
 from sqlmodel import Date
 from src.common.companyAdmin.models import CoMst
+
+try:
+    from src.common.companyAdmin.models import CoMst
+except Exception:
+    # optional import: some test environments may not have src.common dependencies available
+    CoMst = None
+
 
 Base = declarative_base()
 
@@ -88,7 +96,7 @@ class ItemTypeMaster(Base):
             min_order_qty = Column(Float)
             lead_time = Column(Integer)
             updated_by = Column(Integer)
-            updated_date_tiime = Column(DateTime)
+            updated_date_time = Column(DateTime)
             active = Column(Integer)
 
             # branch = relationship("BranchMst", foreign_keys=[branch_id])
@@ -109,6 +117,7 @@ class ItemTypeMaster(Base):
                 # item = relationship("ItemMst", foreign_keys=[item_id])
                 # map_from = relationship("UomMst", foreign_keys=[map_from_id])
                 # map_to = relationship("UomMst", foreign_keys=[map_to_id])
+
                 
                 
 class DeptMst(Base):
@@ -204,3 +213,89 @@ class ProjectMst(Base):
  #   def __repr__(self):
  #       return f"<ProjectMst(project_id={self.project_id}, prj_name={self.prj_name!r})>"
 # ...existing code...
+
+
+class PartyMst(Base):
+    __tablename__ = "party_mst"
+
+    party_id = Column(Integer, primary_key=True, autoincrement=True)
+    active = Column(Integer)
+    prefix = Column(String(25))
+    updated_date_time = Column(DateTime, default=func.now())
+    updated_by = Column(Integer)
+    phone_no = Column(String(25))
+    cin = Column(String(25))
+    co_id = Column(Integer)
+    supp_contact_person = Column(String(255))
+    supp_contact_designation = Column(String(255))
+    supp_email_id = Column(String(255))
+    supp_code = Column(String(25))
+    party_pan_no = Column(String(255))
+    entity_type_id = Column(Integer)
+    supp_name = Column(String(255))
+    msme_certified = Column(Integer)  # 1 = certified, 0 = not certified
+    country_id = Column(Integer)
+    party_type_id = Column(String(255))
+
+    # Relationships (optional, only if the related models exist)
+    # company = relationship("CoMst", foreign_keys=[co_id])
+    # entity_type = relationship("EntityTypeMst", foreign_keys=[entity_type_id])
+    # country = relationship("CountryMst", foreign_keys=[country_id])
+    branches = relationship(
+    "PartyBranchMst",
+    back_populates="party",
+    cascade="all, delete-orphan",
+    passive_deletes=True,
+    )
+
+class PartyBranchMst(Base):
+    __tablename__ = "party_branch_mst"
+
+    party_mst_branch_id = Column(Integer, primary_key=True, autoincrement=True)
+    party_id = Column(Integer, ForeignKey("party_mst.party_id"))
+    active = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
+    updated_by = Column(Integer)
+    gst_no = Column(String(255))
+    address = Column(String(255))
+    address_additional = Column(String(255))
+    zip_code = Column(Integer)
+    city_id = Column(Integer)
+    contact_no = Column(String(25))
+    contact_person = Column(String(255))
+
+    # party = relationship("PartyMst", back_populates="branches")
+    party = relationship("PartyMst", back_populates="branches")
+    # city = relationship("CityMst", foreign_keys=[city_id])
+
+    class EntityTypeMst(Base):
+        __tablename__ = "entity_type_mst"
+
+        entity_type_id = Column(Integer, primary_key=True, autoincrement=True)
+        entity_type_name = Column(String(30))
+class WarehouseMst(Base):
+    __tablename__ = "warehouse_mst"
+
+    warehouse_id = Column(Integer, primary_key=True, autoincrement=True)
+    warehouse_name = Column(String(30))
+    updated_date_time = Column(DateTime)
+    updated_by = Column(Integer)
+    warehouse_type = Column(String(20))
+    branch_id = Column(Integer)
+    parent_warehouse_id = Column(Integer)
+
+            # branch = relationship("BranchMst", foreign_keys=[branch_id])
+            # Optionally, add relationship for parent warehouse if needed
+            # parent_warehouse = relationship("WarehouseMst", remote_side=[warehouse_id])
+
+class CostFactorMst(Base):
+    __tablename__ = "cost_factor_mst"
+
+    cost_factor_id = Column(Integer, primary_key=True, autoincrement=True)
+    cost_factor_name = Column(String(255))
+    cost_factor_desc = Column(String(255))
+    branch_id = Column(Integer)
+    dept_id = Column(Integer)
+    updated_by = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
+
