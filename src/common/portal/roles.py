@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import  func
@@ -337,7 +338,8 @@ async def edit_role_portal(
                 menu_mapping = ConRoleMenuMap(
                     role_id=role_data.roleId,
                     menu_id=menu_access.menuId,
-                    access_type_id=access_type_id
+                    access_type_id=access_type_id,
+                    updated_by=user_id,
                 )
                 menu_mappings.append(menu_mapping)
             

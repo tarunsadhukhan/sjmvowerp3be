@@ -4,11 +4,16 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy import Float
+
+from sqlmodel import Date
+from src.common.companyAdmin.models import CoMst
+
 try:
     from src.common.companyAdmin.models import CoMst
 except Exception:
     # optional import: some test environments may not have src.common dependencies available
     CoMst = None
+
 
 Base = declarative_base()
 
@@ -112,6 +117,103 @@ class ItemTypeMaster(Base):
                 # item = relationship("ItemMst", foreign_keys=[item_id])
                 # map_from = relationship("UomMst", foreign_keys=[map_from_id])
                 # map_to = relationship("UomMst", foreign_keys=[map_to_id])
+
+                
+                
+class DeptMst(Base):
+    __tablename__ = 'dept_mst'
+
+    dept_id = Column(Integer, primary_key=True, autoincrement=True)
+    branch_id = Column(Integer, nullable=True)
+    created_by = Column(Integer, nullable=True)
+    dept_desc = Column(String(30), nullable=True)
+    dept_code = Column(String(30), nullable=True)
+    order_id = Column(Integer, nullable=True)
+    created_date = Column(DateTime, nullable=False, default=func.now())
+
+ #   def __repr__(self):
+        # include branch_id and dept_code for easier debugging
+ #       return (f"<DeptMst(dept_id={self.dept_id}, branch_id={self.branch_id}, "
+ #               f"dept_code={self.dept_code!r}, dept_desc={self.dept_desc!r})>")
+
+# ...existing code...
+
+
+# ...existing code...
+class SubDeptMst(Base):
+    __tablename__ = "sub_dept_mst"
+
+    sub_dept_id = Column(Integer, primary_key=True, autoincrement=True)
+    updated_by = Column(Integer, nullable=False)
+    sub_dept_code = Column(String(25), nullable=True)
+    sub_dept_desc = Column(String(30), nullable=True)
+    dept_id = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+    order_no = Column(Integer, nullable=True)
+
+    # optional relationship to DeptMst
+#    dept = relationship("DeptMst", foreign_keys=[dept_id])
+
+#    def __repr__(self):
+#        return f"<SubDeptMst(sub_dept_id={self.sub_dept_id}, dept_id={self.dept_id}, code={self.sub_dept_code!r})>"
+
+class MachineTypeMst(Base):
+    __tablename__ = "machine_type_mst"
+
+    machine_type_id = Column(Integer, primary_key=True, autoincrement=True)
+    machine_type_name = Column(String(255), nullable=True)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+    active = Column(Integer, nullable=True)
+ 
+    # relationship to DeptMst (optional, convenient for joins)
+    #dept = relationship("DeptMst", foreign_keys=[dept_id])
+
+
+class MachineMst(Base):
+    __tablename__ = "machine_mst"
+
+    machine_id = Column(Integer, primary_key=True, autoincrement=True)
+    dept_id = Column(Integer, ForeignKey("dept_mst.dept_id"), nullable=False)
+    machine_name = Column(String(255), nullable=False)
+    machine_type_id = Column(Integer, nullable=False)
+    updated_by = Column(Integer, nullable=False)
+    remarks = Column(String(255), nullable=True)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+    active = Column(Integer, nullable=False, default=1)
+    mech_posting_code = Column(Integer, nullable=True)
+    mech_code = Column(String(100), nullable=False)
+
+    # relationships
+  #  dept = relationship("DeptMst", foreign_keys=[dept_id])
+  #  machine_type = relationship("MachineTypeMst", foreign_keys=[machine_type_id])
+
+class ProjectMst(Base):
+    __tablename__ = "project_mst"
+
+    project_id = Column(Integer, primary_key=True, autoincrement=True)
+    prj_desc = Column(String(255), nullable=True)
+    prj_end_dt = Column(Date, nullable=True)
+    prj_name = Column(String(255), nullable=True)
+    prj_start_dt = Column(Date, nullable=True)
+    status_id = Column(Integer, nullable=True)
+    active = Column(Integer, nullable=False, default=1)
+    branch_id = Column(Integer, nullable=True)
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=True)
+    party_id = Column(Integer, nullable=True)
+    dept_id = Column(Integer, nullable=True)
+
+    # optional relationships for convenience
+ #   status = relationship("StatusMst", foreign_keys=[status_id], lazy="joined")
+ #   branch = relationship("BranchMst", foreign_keys=[branch_id], lazy="joined")
+ #   party = relationship("PartyMst", foreign_keys=[party_id], lazy="joined")
+ #   dept = relationship("DeptMst", foreign_keys=[dept_id], lazy="joined")
+
+ #   def __repr__(self):
+ #       return f"<ProjectMst(project_id={self.project_id}, prj_name={self.prj_name!r})>"
+# ...existing code...
+
 
 class PartyMst(Base):
     __tablename__ = "party_mst"

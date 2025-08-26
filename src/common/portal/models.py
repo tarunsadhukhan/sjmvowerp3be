@@ -34,7 +34,7 @@ class ConRoleMenuMap(Base):
     role_id = Column(Integer, ForeignKey('roles_mst.role_id'), nullable=False)
     menu_id = Column(Integer, nullable=False)
     access_type_id = Column(Integer, nullable=False)
-
+    updated_by = Column(Integer)
     role = relationship('conRoleMaster', backref='menu_mappings')
 
 class UserRoleMap(Base):
