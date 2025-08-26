@@ -1,9 +1,11 @@
 #from fastapi import Depends, Request, HTTPException, APIRouter, Query,path
+import select
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Path
 from typing import List, Optional
 from sqlalchemy.sql import text
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlmodel import insert
 from src.config.db import get_db_names, default_engine
 from src.authorization.utils import verify_access_token
 from src.common.ctrldskAdmin.schemas  import MenuResponse, PortalMenuMstSchema
@@ -299,6 +301,50 @@ async def create_portalmenucreate_data(
             session.flush()  # Get the ID without committing
             session.commit()
 
+
+            # Fetch the latest menu
+            menusql="""select * from vowconsole3.portal_menu_mst pmm order by pmm.menu_id desc limit 1"""
+            menusql = text(menusql)
+            with Session(default_engine) as session:
+                result = session.execute(menusql).fetchone()
+                if result:
+                    print(f"Latest menu: {result}")
+                    # You can access the latest menu details from the result
+                    latest_menu_id = result.menu_id
+                    latest_menu_name = result.menu_name
+                    # Do something with the latest menu details
+
+            # Fetch all org shortnames with status = 3
+            orgsql = """
+                select com.con_org_shortname  
+                from vowconsole3.con_org_master com 
+                where com.con_org_master_status = 3 and com.con_org_shortname="sls"
+            """
+            print(f"Executing orgsql: {orgsql}")
+            orgsql = text(orgsql)
+            orgs = session.execute(orgsql).fetchall()
+            print(f"Fetched {len(orgs) if orgs else 0} organizations", [org.con_org_shortname for org in orgs])
+            if orgs:
+                for org in orgs:
+                    orgshname = org.con_org_shortname
+                    # Prepare the insert SQL for each org
+                    menuinssql = f"""
+                        insert into {orgshname}.menu_mst 
+                        (menu_id, menu_name, menu_path, active, 
+                        menu_parent_id, menu_type_id, menu_icon, module_mst_id,order_by)
+                        select 
+                            menu_id, menu_name, menu_path, active, 
+                            menu_parent_id, menu_type_id, menu_icon,
+                            module_id,order_by
+                        from vowconsole3.portal_menu_mst 
+                        where menu_id = {latest_menu_id}
+                    """
+                    print('menu insert',menuinssql)                     
+                    session.execute(text(menuinssql))
+                session.commit()
+
+            #end the insert of latest menu            
+             
             return {
                 "message": f"Portal menu Created successfully for {payload.menu_name}",
                 "menu_id": new_menu.menu_id,

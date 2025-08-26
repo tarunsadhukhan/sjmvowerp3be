@@ -39,6 +39,7 @@ async def compmenuitems(
             menu_name = row.menu_name
             menu_path = row.menu_path
             menu_parent_id = row.menu_parent_id
+            access_type_id = row.access_type_id
             
             # Skip if menu is None (could happen if role doesn't have menu mappings)
             if menu_id is None:
@@ -57,7 +58,7 @@ async def compmenuitems(
                 companies[co_id]["branches"][branch_id] = {
                     "branch_id": branch_id,
                     "branch_name": branch_name,
-                    "menus": {}
+                    "menus": {},
                 }
             
             # Add menu to branch
@@ -65,7 +66,8 @@ async def compmenuitems(
                 "menu_id": menu_id,
                 "menu_name": menu_name,
                 "menu_path": menu_path,
-                "menu_parent_id": menu_parent_id
+                "menu_parent_id": menu_parent_id,
+                "access_type_id": access_type_id
             }
         
         # Convert to final structure

@@ -55,13 +55,15 @@ def get_approval_data(menu_id: int = None, branch_id: int = None):
 def get_portal_user_menus(user_id: int = None):
     sql = """
         select  urm.co_id ,cm.co_name , urm.branch_id,bm.branch_name ,  urm.role_id, rmm.menu_id, 
-        mm.menu_name, mm.menu_path, mm.menu_parent_id  
+        mm.menu_name, mm.menu_path, mm.menu_parent_id  , 
+        case when ccm.access_type =1 then 1 else rmm.access_type_id end as "access_type_id" 
         from user_role_map urm
         left join co_mst cm on cm.co_id= urm.co_id
         left join branch_mst bm on bm.branch_id = urm.branch_id
         left join role_menu_map rmm on rmm.role_id = urm.role_id
         left join menu_mst mm on mm.menu_id = rmm.menu_id and mm.active =1
-    where urm.user_id = :user_id;
+        left join control_co_module ccm on urm.co_id = ccm.co_id and ccm.module_id = mm.module_mst_id
+    where urm.user_id = :user_id and ifnull(ccm.access_type,0) not in (2) ;
     """
     query = text(sql)
     return query

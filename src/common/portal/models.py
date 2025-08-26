@@ -15,8 +15,8 @@ class ConUser(Base):
     password = Column(String(255))
     refresh_token = Column(String(255))
     active = Column(Boolean, nullable=False)
-    created_by_con_user = Column(Integer)
-    created_date_time = Column(DateTime, default=func.now())
+    updated_by_con_user = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
 
 class conRoleMaster(Base):
     __tablename__ = "roles_mst"
@@ -24,8 +24,8 @@ class conRoleMaster(Base):
     role_id = Column(Integer, primary_key=True, autoincrement=True)
     role_name = Column(String(255), nullable=False, unique=True)
     active = Column(Boolean)
-    created_by_con_user = Column(Integer)
-    created_date_time = Column(DateTime, default=func.now())
+    updated_by_con_user = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
 
 class ConRoleMenuMap(Base):
     __tablename__ = "role_menu_map"
@@ -34,7 +34,7 @@ class ConRoleMenuMap(Base):
     role_id = Column(Integer, ForeignKey('roles_mst.role_id'), nullable=False)
     menu_id = Column(Integer, nullable=False)
     access_type_id = Column(Integer, nullable=False)
-
+    updated_by = Column(Integer)
     role = relationship('conRoleMaster', backref='menu_mappings')
 
 class UserRoleMap(Base):
@@ -45,8 +45,8 @@ class UserRoleMap(Base):
     role_id = Column(Integer, ForeignKey("roles_mst.role_id"), nullable=False)
     co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=False)
-    created_by_con_user = Column(Integer)
-    created_at = Column(DateTime, default=func.now())
+    updated_by_con_user = Column(Integer)
+    updated_date_time = Column(DateTime, default=func.now())
 
     user = relationship("ConUser", foreign_keys=[user_id], backref="role_maps")
 
@@ -158,6 +158,7 @@ class ApprovalMst(Base):
         menu_parent_id = Column(Integer, ForeignKey("menu_mst.menu_id"))
         menu_type_id   = Column(Integer)
         menu_icon      = Column(String(255))
+        module_mst_id  = Column(Integer)
 
         parent   = relationship("MenuMst", remote_side=[menu_id],
                                 backref="children", foreign_keys=[menu_parent_id])
