@@ -826,15 +826,7 @@ ORDER BY branch_id, warehouse_path;
     return query
 
 
-def get_branch_list():
-    sql = """
-SELECT 
-  bm.branch_id,
-  bm.branch_name
-FROM branch_mst bm;
-"""
-    query = text(sql)
-    return query
+
 
 def cost_factor_table(branch_ids: list):
     sql = """
