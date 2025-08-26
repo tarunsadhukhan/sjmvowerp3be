@@ -74,8 +74,8 @@ class conRoleMaster(Base):
     con_role_name = Column(String(50), nullable=False)
     con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=False)
     status = Column(Integer, nullable=False)
-    created_by = Column(Integer, nullable=True)
-    created_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
     con_company_id = Column(Integer, nullable=True)
     is_enable = Column(Integer, nullable=False, default=1)
 
@@ -85,8 +85,8 @@ class ConUserRoleMapping(Base):
     con_user_role_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
     con_role_id = Column(Integer, ForeignKey('con_role_master.con_role_id'), nullable=False, index=True)
     con_user_id = Column(Integer, ForeignKey('con_user_master.con_user_id'), nullable=False, index=True)
-    created_by = Column(Integer, nullable=False, index=True)
-    created_date_time = Column(DateTime, nullable=True, server_default=func.now())
+    updated_by = Column(Integer, nullable=False, index=True)
+    updated_date_time = Column(DateTime, nullable=True, server_default=func.now())
 
 
 class CoMst(Base):
@@ -103,7 +103,7 @@ class CoMst(Base):
     city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
-    created_by_con_user = Column(Integer)
+    updated_by_con_user = Column(Integer)
     co_cin_no = Column(String(25))
     co_email_id = Column(String(255))
     co_pan_no = Column(String(25))
@@ -196,3 +196,35 @@ class DeptMst(Base):
 
     def __repr__(self):
         return f"<DeptMst(dept_id={self.dept_id}, dept_desc='{self.dept_desc}')>"
+    
+
+
+class CoConfig(Base):
+    __tablename__ = "co_config"
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), primary_key=True)
+    currency_id = Column(Integer, ForeignKey("currency_mst.currency_id"))
+    india_gst = Column(Boolean, default=False)
+    india_tds = Column(Boolean, default=False)
+    india_tcs = Column(Boolean, default=False)
+    back_date_allowable = Column(Boolean, default=False)
+    indent_required = Column(Boolean, default=False)
+    po_required = Column(Boolean, default=False)
+    material_inspection = Column(Boolean, default=False)
+    quotation_required = Column(Boolean, default=False)
+    do_required = Column(Boolean, default=False)
+    gst_linked = Column(Boolean, default=False)
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+
+    # Relationships
+    company = relationship("CoMst", backref="config")
+    currency = relationship("CurrencyMst", backref="co_configs")
+
+class CurrencyMst(Base):
+    __tablename__ = "currency_mst"
+    currency_id = Column(Integer, primary_key=True, autoincrement=True)
+    currency_prefix = Column(String(25), nullable=False)
+
+
+
+

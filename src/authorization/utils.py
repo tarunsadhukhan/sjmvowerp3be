@@ -2,8 +2,9 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import HTTPException, Depends, Cookie
+from fastapi import HTTPException, Depends, Cookie, Request, Response
 import jwt
+from sqlalchemy import text
 
 
 # Password Hashing
@@ -103,5 +104,53 @@ def verify_access_token(access_token: str = Cookie(None, alias="access_token")) 
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError as e:
         print(f"Token verification failed: {str(e)}")  # Debug
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+def get_current_user_with_refresh(
+    request: Request,
+    response: Response,
+    access_token: str = Cookie(None, alias="access_token")
+) -> dict:
+    if not access_token:
+        raise HTTPException(status_code=403, detail="No access token cookie provided")
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        try:
+            expired_payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
+            user_id = expired_payload.get("user_id")
+            if not user_id:
+                raise HTTPException(status_code=401, detail="Invalid token: no user_id")
+            from src.config.db import Session as DBSession, default_engine
+            with DBSession(default_engine) as session:
+                result = session.execute(
+                    text("SELECT refresh_token FROM con_user_master WHERE con_user_id = :user_id AND active = 1"),
+                    {"user_id": user_id}
+                ).fetchone()
+                if not result or not result[0]:
+                    raise HTTPException(status_code=401, detail="No refresh token found")
+                stored_token = result[0]
+                jwt.decode(stored_token, SECRET_KEY, algorithms=[ALGORITHM])
+                new_access_token = create_access_token({"user_id": user_id})
+                ENV = os.getenv("ENV", "development")
+                COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None
+                SECURE = True if ENV == "production" else False
+                SAMESITE = "None" if ENV == "production" else "Lax"
+                response.set_cookie(
+                    key="access_token",
+                    value=new_access_token,
+                    httponly=True,
+                    secure=SECURE,
+                    samesite=SAMESITE,
+                    path="/",
+                    domain=COOKIE_DOMAIN
+                )
+                return {"user_id": user_id}
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Refresh token expired")
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid refresh token: {str(e)}")
+    except jwt.InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 

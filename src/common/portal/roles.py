@@ -1,3 +1,4 @@
+import datetime
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import  func
@@ -172,8 +173,8 @@ async def create_role_portal(
             new_role = conRoleMaster(
                 role_name=role_data.roleName,
                 active=True,
-                created_by_con_user=user_id,
-                created_date_time=func.now()
+                updated_by_con_user=user_id,
+                updated_date_time=func.now()
             )
             
             tenant_session.add(new_role)
@@ -192,7 +193,8 @@ async def create_role_portal(
                     menu_mapping = ConRoleMenuMap(
                         role_id=role_id,
                         menu_id=menu_access.menuId,
-                        access_type_id=access_type_id
+                        access_type_id=access_type_id,
+                        updated_by=user_id
                     )
                     menu_mappings.append(menu_mapping)
             else:
@@ -200,6 +202,8 @@ async def create_role_portal(
                     menu_mapping = ConRoleMenuMap(
                         role_id=role_id,
                         menu_id=menu_id,
+                        updated_by=user_id,
+                        updated_date_time=func.now(),
                         access_type_id=1  # Default access type
                     )
                     menu_mappings.append(menu_mapping)
@@ -334,7 +338,8 @@ async def edit_role_portal(
                 menu_mapping = ConRoleMenuMap(
                     role_id=role_data.roleId,
                     menu_id=menu_access.menuId,
-                    access_type_id=access_type_id
+                    access_type_id=access_type_id,
+                    updated_by=user_id,
                 )
                 menu_mappings.append(menu_mapping)
             
