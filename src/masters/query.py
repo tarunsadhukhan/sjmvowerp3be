@@ -365,3 +365,297 @@ where (:search IS NULL OR
   OR im.item_make_name LIKE :search);"""
     query = text(sql)
     return query
+  
+  
+def get_dept_master(co_id: int = None, branch_ids: list = None):
+  print("Getting department master for co_id:", co_id, "branch_ids:", branch_ids)
+  sql = """
+  SELECT 
+    dm.dept_id AS id,
+    dm.dept_id AS dept_master_id,
+    dm.dept_code,
+    dm.dept_desc AS dept_name,
+    1 AS active,
+    bm.branch_name AS branch_display,
+    dm.branch_id
+  FROM sls.dept_mst dm
+  JOIN sls.branch_mst bm ON dm.branch_id = bm.branch_id
+  WHERE (:search IS NULL OR dm.dept_code LIKE :search OR dm.dept_desc LIKE :search)
+    {branch_filter}
+  """
+  branch_filter = ""
+
+  if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    branch_filter = "AND dm.branch_id IN :branch_ids"
+
+  sql = sql.format(branch_filter=branch_filter)
+  #print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
+
+
+def dept_master_validate_table(co_id: int = None, branch_ids: int = None):
+  sql = """
+  SELECT 
+    dm.dept_id AS id,
+    dm.dept_id AS dept_master_id,
+    dm.dept_code,
+    dm.dept_desc AS dept_name,
+    1 AS active,
+  FROM sls.dept_mst dm
+  WHERE 1=1
+    {branch_filter}
+  """
+  branch_filter = ""
+
+  if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    branch_filter = "AND dm.branch_id IN :branch_ids"
+
+  sql = sql.format(branch_filter=branch_filter)
+  print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
+
+
+
+def dept_master_create_setup( branch_ids: list = None):
+  print("Getting branch master for co_id:",  "branch_ids:", branch_ids)
+  sql = """
+  SELECT 
+  bm.branch_id,bm.branch_name
+  FROM  branch_mst bm 
+  WHERE bm.branch_id IN :branch_ids
+  """
+  branch_filter = ""
+
+  #if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    #branch_filter = "AND bm.branch_id IN :branch_ids"
+
+  #sql = sql.format(branch_filter=branch_filter)
+  #print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
+
+#type SubDeptRow = { id?: string | number; subdept_code?: string; subdept_name?: string; dept_name?: string; branch_display?: string; active?: number | boolean | string; order_by?: number | string };
+
+def get_subdept_master(co_id: int = None, branch_ids: list = None):
+  print("Getting sub-department master for co_id:", co_id, "branch_ids:", branch_ids)
+  sql = """
+  select sdm.sub_dept_id id,sdm.sub_dept_code subdept_code,sdm.sub_dept_desc subdept_name,dm.dept_desc dept_name,
+  bm.branch_name branch_display,1 active,dm.dept_id,bm.branch_id,sdm.order_no order_by  from sub_dept_mst sdm 
+  left join dept_mst dm on dm.dept_id =sdm.dept_id
+  left join branch_mst bm on bm.branch_id =dm.branch_id
+  WHERE (:search IS NULL OR dm.dept_code LIKE :search OR dm.dept_desc LIKE :search)
+    {branch_filter}
+  """
+  branch_filter = ""
+
+  if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    branch_filter = "AND dm.branch_id IN :branch_ids"
+
+  sql = sql.format(branch_filter=branch_filter)
+  #print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
+
+
+
+def get_branch_list(branch_ids: list = None):
+    sql = """
+    SELECT bm.branch_id, bm.branch_name
+    FROM sls.branch_mst bm
+    WHERE 1=1
+      {branch_filter}
+    """
+    branch_filter = ""
+    if branch_ids:
+        branch_filter = "AND bm.branch_id IN :branch_ids"
+    sql = sql.format(branch_filter=branch_filter)
+    q = text(sql)
+    if branch_ids:
+        q = q.bindparams(bindparam("branch_ids", expanding=True))
+    return q
+
+def get_dept_list( branch_ids: list = None):
+    sql = """
+    SELECT dm.dept_id AS dept_id, dm.dept_desc AS dept_name, dm.branch_id
+    FROM sls.dept_mst dm
+    WHERE 1=1
+      {branch_filter}
+    """
+    branch_filter = "AND dm.branch_id IN :branch_ids" if branch_ids else ""
+    sql = sql.format( branch_filter=branch_filter)
+    q = text(sql)
+    if branch_ids:
+        q = q.bindparams(bindparam("branch_ids", expanding=True))
+    return q
+
+# ...existing code...
+def get_mechine_type_list():
+    sql = """
+    SELECT mm.machine_type_id AS id, mm.machine_type_name AS mechine_type, mm.active
+    FROM machine_type_mst mm
+    WHERE mm.active=1
+    """
+    sql = sql
+    q = text(sql)
+    return q
+
+
+def get_proj_party_list(co_id: int = None, branch_ids: list = None):
+    # base SQL (no Python-format placeholders)
+    sql = """
+    SELECT party_id, supp_name party_name
+    FROM party_mst pm
+    WHERE FIND_IN_SET("2", REPLACE(REPLACE(party_type_id, "{", ""), "}", "")) > 0
+    """
+    # append branch filter if provided (use SQLAlchemy bind :branch_ids)
+    if branch_ids:
+        sql += "\n  AND pm.branch_id IN :branch_ids"
+
+    query = text(sql)
+
+    # attach expanding bind only when branch_ids is a list
+    if branch_ids:
+        query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+    return query
+
+
+
+def get_mechine_type_master_query():
+  print("Getting machine type master query")
+  sql = """
+  select mtm.machine_type_id id, mtm.machine_type_name mechine_type, active
+  from machine_type_mst mtm
+  WHERE (:search IS NULL OR mtm.machine_type_name LIKE :search )
+  """
+  query = text(sql)
+  return query
+
+
+
+def get_mechine_master(co_id: int = None, branch_ids: list = None):
+  print("Getting machine master for co_id:", co_id, "branch_ids:", branch_ids)
+  sql = """
+  select mm.machine_id id,mm.mech_code mechine_code,mm.machine_name mechine_name,
+  mtm.machine_type_name mechine_type_name,dm.dept_id ,dm.dept_desc dept_name,
+  bm.branch_id ,bm.branch_name branch_display,mm.active from machine_mst mm 
+  left join machine_type_mst mtm on mm.machine_type_id =mtm.machine_type_id  
+  left join dept_mst dm on dm.dept_id =mm.dept_id 
+  left join branch_mst bm on bm.branch_id =dm.branch_id
+  WHERE (:search IS NULL OR dm.dept_code LIKE :search OR dm.dept_desc LIKE :search)
+    {branch_filter}
+  """
+  branch_filter = ""
+
+  if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    branch_filter = "AND dm.branch_id IN :branch_ids"
+
+  sql = sql.format(branch_filter=branch_filter)
+  #print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
+
+def get_mechine_master_view(co_id: int = None, mechine_master_id = None):
+    sql = """
+    select mm.machine_id id,
+           mm.mech_code mechine_code,
+           mm.machine_name mechine_name,
+           mtm.machine_type_name mechine_type_name,
+           dm.dept_id,
+           dm.dept_desc dept_name,
+           bm.branch_id,
+           bm.branch_name branch_display,
+           mm.active,
+           mm.mech_posting_code
+    from machine_mst mm
+    left join machine_type_mst mtm on mm.machine_type_id = mtm.machine_type_id
+    left join dept_mst dm on dm.dept_id = mm.dept_id
+    left join branch_mst bm on bm.branch_id = dm.branch_id
+    WHERE 1=1
+      {id_filter}
+    """
+    id_filter = ""
+    if mechine_master_id is not None:
+        # if a list/tuple, use IN with expanding bind; otherwise use simple equality
+        if isinstance(mechine_master_id, (list, tuple)):
+            id_filter = "AND mm.machine_id IN :mechine_master_id"
+        else:
+            id_filter = "AND mm.machine_id = :mechine_master_id"
+
+    sql = sql.format(id_filter=id_filter)
+    query = text(sql)
+    return query
+  
+  
+  
+def get_project_master(co_id: int = None, branch_ids: list = None):
+  print("Getting project master for co_id:", co_id, "branch_ids:", branch_ids)
+  sql = """
+  select pm.project_id id,pm.project_id, pm.prj_name,pm.prj_desc,pm.branch_id,bm.branch_name branch_display,pm.branch_id,bm.branch_name,pm.dept_id,dm.dept_desc dept_name,pm2.supp_name ,
+  pm.prj_start_dt,pm.prj_end_dt ,  pm.status_id,sm.status_name,pm.active  from project_mst pm 
+  left join branch_mst bm on pm.branch_id =bm.branch_id
+  left join dept_mst dm on dm.dept_id =pm.dept_id
+  left join status_mst sm on pm.status_id =sm.status_id
+  left join party_mst pm2 on pm.party_id =pm2.party_id
+  WHERE (:search IS NULL OR dm.dept_desc LIKE :search OR pm.prj_name LIKE :search)
+    {branch_filter}
+  """
+  branch_filter = ""
+
+  if branch_ids:
+    # use an expanding bind placeholder without surrounding parentheses
+    # SQLAlchemy will expand the Python list into the proper comma-separated placeholder list
+    branch_filter = "AND pm.branch_id IN :branch_ids"
+
+  sql = sql.format(branch_filter=branch_filter)
+  #print("Generated SQL:", sql )
+  query = text(sql)
+
+  # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
+  if branch_ids:
+    query = query.bindparams(bindparam("branch_ids", expanding=True))
+
+  return query
+
