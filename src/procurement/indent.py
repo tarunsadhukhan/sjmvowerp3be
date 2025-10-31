@@ -1,15 +1,26 @@
-from fastapi import Depends, Request, HTTPException, APIRouter, Response, Cookie
+from fastapi import Depends, Request, HTTPException, APIRouter
 import os
-from sqlalchemy.sql import text
+import logging
 from sqlalchemy.orm import Session
 from src.config.db import get_db_names, default_engine, get_tenant_db
 from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
 from src.masters.models import CostFactorMst
 from src.masters.query import  get_branch_list, get_dept_list_by_branch_id, get_item_group_drodown
-from src.procurement.query import get_project, get_expense_types, get_item_by_group_id_purchaseable
-from src.procurement.query import get_item_make_by_group_id, get_item_uom_by_group_id
+from src.procurement.query import (
+	get_project,
+	get_expense_types,
+	get_item_by_group_id_purchaseable,
+	get_item_make_by_group_id,
+	get_item_uom_by_group_id,
+	insert_proc_indent,
+	insert_proc_indent_detail,
+	get_indent_table_query,
+	get_indent_table_count_query,
+)
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -133,3 +144,221 @@ async def get_indent_setup_2(
 		raise
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_indent_table")
+async def get_indent_table(
+	request: Request,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+	page: int = 1,
+	limit: int = 10,
+	search: str | None = None,
+	co_id: int | None = None,
+):
+	"""Return paginated procurement indent list."""
+
+	try:
+		page = max(page, 1)
+		limit = max(min(limit, 100), 1)
+		offset = (page - 1) * limit
+		search_like = None
+		if search:
+			search_like = f"%{search.strip()}%"
+
+		params = {
+			"co_id": co_id,
+			"search_like": search_like,
+			"limit": limit,
+			"offset": offset,
+		}
+
+		list_query = get_indent_table_query()
+		rows = db.execute(list_query, params).fetchall()
+		data = []
+		for row in rows:
+			mapped = dict(row._mapping)
+			indent_date = mapped.get("indent_date")
+			if hasattr(indent_date, "isoformat"):
+				indent_date = indent_date.isoformat()
+			data.append(
+				{
+					"indent_id": mapped.get("indent_id"),
+					"indent_no": mapped.get("indent_no"),
+					"indent_date": indent_date,
+					"branch_name": mapped.get("branch_name"),
+					"expense_type": mapped.get("expense_type_name"),
+					"status": mapped.get("status_name"),
+				}
+			)
+
+		count_query = get_indent_table_count_query()
+		count_params = {"co_id": co_id, "search_like": search_like}
+		total_row = db.execute(count_query, count_params).fetchone()
+		total = int(total_row[0]) if total_row and total_row[0] is not None else len(data)
+
+		return {
+			"data": data,
+			"page": page,
+			"pageSize": limit,
+			"total": total,
+		}
+	except HTTPException:
+		raise
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/create_indent")
+async def create_indent(
+	payload: dict,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""Create a procurement indent with detail rows."""
+
+	def to_int(value, field_name: str, required: bool = False) -> int | None:
+		if value is None or value == "":
+			if required:
+				raise HTTPException(status_code=400, detail=f"{field_name} is required")
+			return None
+		try:
+			return int(value)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+	def to_positive_float(value, field_name: str) -> float:
+		try:
+			qty = float(value)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+		if qty <= 0:
+			raise HTTPException(status_code=400, detail=f"{field_name} must be greater than zero")
+		return qty
+
+	try:
+		branch_id = to_int(payload.get("branch"), "branch", required=True)
+		expense_type_id = to_int(payload.get("expense_type"), "expense_type", required=True)
+		indent_type = payload.get("indent_type")
+		if not indent_type:
+			raise HTTPException(status_code=400, detail="indent_type is required")
+
+		date_str = payload.get("date")
+		if not date_str:
+			raise HTTPException(status_code=400, detail="date is required")
+		try:
+			indent_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+		except ValueError:
+			raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+		raw_items = payload.get("items")
+		if not isinstance(raw_items, list) or len(raw_items) == 0:
+			raise HTTPException(status_code=400, detail="At least one item row is required")
+
+		updated_by = to_int(token_data.get("user_id"), "updated_by")
+		created_at = datetime.utcnow()
+		indent_title_raw = payload.get("name")
+		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
+		header_remarks_raw = payload.get("remarks")
+		header_remarks = str(header_remarks_raw).strip() if header_remarks_raw else None
+		indent_no_value = to_int(payload.get("indent_no"), "indent_no", required=False)
+		project_id = to_int(payload.get("project"), "project")
+
+		normalized_items = []
+		for idx, item in enumerate(raw_items, start=1):
+			item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
+			qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
+			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+			item_make_id = to_int(item.get("item_make"), f"items[{idx}].item_make")
+			department_id = to_int(item.get("department"), f"items[{idx}].department")
+
+			remarks_raw = item.get("remarks")
+			remarks = str(remarks_raw).strip() if remarks_raw else None
+			if remarks:
+				remarks = remarks[:599]
+
+			normalized_items.append(
+				{
+					"item_id": item_id,
+					"qty": qty,
+					"uom_id": uom_id,
+					"item_make_id": item_make_id,
+					"remarks": remarks,
+					"dept_id": department_id,
+				}
+			)
+
+		logger.debug("Normalized indent items: %s", normalized_items)
+
+		insert_header_query = insert_proc_indent()
+		header_params = {
+			"indent_date": indent_date,
+			"indent_no": indent_no_value,
+			"active": 1,
+			"indent_type_id": indent_type,
+			"remarks": header_remarks,
+			"branch_id": branch_id,
+			"expense_type_id": expense_type_id,
+			"project_id": project_id,
+			"updated_by": updated_by,
+			"updated_date_time": created_at,
+			"status_id": None,
+			"indent_title": indent_title,
+		}
+
+		logger.info(
+			"Creating indent: branch=%s, indent_type=%s, expense_type=%s, item_rows=%s",
+			branch_id,
+			indent_type,
+			expense_type_id,
+			len(normalized_items),
+		)
+		logger.debug("Indent header params: %s", header_params)
+
+		result = db.execute(insert_header_query, header_params)
+		indent_id = result.lastrowid
+		if not indent_id:
+			raise HTTPException(status_code=500, detail="Failed to create indent header")
+
+		if indent_no_value is None:
+			indent_no_value = indent_id
+
+		detail_query = insert_proc_indent_detail()
+		for detail in normalized_items:
+			db.execute(
+				detail_query,
+				{
+					"indent_id": indent_id,
+					"required_by_days": None,
+					"active": 1,
+					"item_id": detail["item_id"],
+					"qty": detail["qty"],
+					"uom_id": detail["uom_id"],
+					"remarks": detail["remarks"],
+					"updated_by": updated_by,
+					"updated_date_time": created_at,
+					"item_make_id": detail["item_make_id"],
+					"dept_id": detail["dept_id"],
+				},
+			)
+
+		db.commit()
+		return {
+			"message": "Indent created successfully",
+			"indent_id": indent_id,
+			"indent_no": indent_no_value,
+		}
+	except HTTPException as exc:
+		db.rollback()
+		logger.warning("Indent create failed with HTTP error: %s", getattr(exc, "detail", exc))
+		raise
+	except Exception as e:
+		db.rollback()
+		logger.exception("Unexpected error while creating indent")
+		raise HTTPException(
+			status_code=500,
+			detail={
+				"message": "Failed to create indent",
+				"error": str(e),
+			},
+		)
