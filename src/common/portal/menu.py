@@ -1,35 +1,94 @@
-from fastapi import Depends, Request, HTTPException, APIRouter, Response
-from sqlalchemy.sql import text
+import logging
+import os
+import jwt
+from fastapi import Depends, HTTPException, APIRouter, Response, Cookie
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from src.config.db import get_db_names, default_engine, get_tenant_db
-from src.authorization.utils import get_current_user_with_refresh
-from src.common.companyAdmin.schemas import MenuResponse
-from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap
+from src.config.db import get_tenant_db
+from src.authorization.utils import create_access_token, SECRET_KEY, ALGORITHM
 from src.common.portal.query import get_portal_user_menus
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def get_portal_token_payload(
+    access_token: str = Cookie(None, alias="access_token")
+) -> dict:
+    if not access_token:
+        raise HTTPException(status_code=403, detail="No access token cookie provided")
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload["access_expired"] = False
+        return payload
+    except jwt.ExpiredSignatureError:
+        try:
+            payload = jwt.decode(
+                access_token,
+                SECRET_KEY,
+                algorithms=[ALGORITHM],
+                options={"verify_exp": False},
+            )
+            payload["access_expired"] = True
+            return payload
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(status_code=401, detail=f"Invalid token: {str(exc)}") from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(exc)}") from exc
 
 @router.get("/portal_menu_items")
 async def compmenuitems(
-    request: Request,
     response: Response,
-    token_data: dict = Depends(get_current_user_with_refresh),
+    token_data: dict = Depends(get_portal_token_payload),
     tenant_session: Session = Depends(get_tenant_db),
 ):
     user_id = token_data.get("user_id")
-    print(f" Token user_id: {user_id}")  # Debug
     if not user_id:
         raise HTTPException(status_code=403, detail="User ID not found in token")
-    print(f"✅ Authorized Request: Cookie User: {user_id}")
+    logger.debug("Authorized portal menu request for user %s", user_id)
     try:
+        if token_data.get("access_expired"):
+            refresh_result = tenant_session.execute(
+                text("SELECT refresh_token FROM user_mst WHERE user_id = :user_id AND active = 1"),
+                {"user_id": user_id},
+            ).fetchone()
+            if not refresh_result or not refresh_result[0]:
+                raise HTTPException(status_code=401, detail="No refresh token found")
+
+            refresh_token = refresh_result[0]
+            try:
+                jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+            except jwt.ExpiredSignatureError as exc:
+                raise HTTPException(status_code=401, detail="Refresh token expired") from exc
+            except jwt.InvalidTokenError as exc:
+                raise HTTPException(status_code=401, detail=f"Invalid refresh token: {str(exc)}") from exc
+
+            new_payload = {"user_id": user_id}
+            if token_data.get("type"):
+                new_payload["type"] = token_data.get("type")
+            new_access_token = create_access_token(new_payload)
+            env_value = os.getenv("ENV", "development")
+            cookie_domain = ".vowerp.co.in" if env_value == "production" else None
+            secure_flag = True if env_value == "production" else False
+            samesite_policy = "None" if env_value == "production" else "Lax"
+            response.set_cookie(
+                key="access_token",
+                value=new_access_token,
+                httponly=True,
+                secure=secure_flag,
+                samesite=samesite_policy,
+                path="/",
+                domain=cookie_domain,
+            )
+
         # Get menus for this user
         menu_query = get_portal_user_menus(user_id=user_id)
         menu_result = tenant_session.execute(menu_query, {"user_id": user_id}).fetchall()
-        print(f"Found {len(menu_result)} menu entries for user {user_id}")
-        
+        logger.debug("Found %s menu entries for user %s", len(menu_result), user_id)
+
         # Process results into nested structure
         companies = {}
-        
+
         for row in menu_result:
             co_id = row.co_id
             co_name = row.co_name
@@ -44,7 +103,7 @@ async def compmenuitems(
             # Skip if menu is None (could happen if role doesn't have menu mappings)
             if menu_id is None:
                 continue
-            
+
             # Add company if not exists
             if co_id not in companies:
                 companies[co_id] = {
@@ -52,7 +111,7 @@ async def compmenuitems(
                     "co_name": co_name,
                     "branches": {}
                 }
-            
+
             # Add branch if not exists for this company
             if branch_id not in companies[co_id]["branches"]:
                 companies[co_id]["branches"][branch_id] = {
@@ -78,7 +137,7 @@ async def compmenuitems(
                 "co_name": company["co_name"],
                 "branches": []
             }
-            
+
             for branch_id, branch in company["branches"].items():
                 branch_data = {
                     "branch_id": branch["branch_id"],
@@ -86,11 +145,13 @@ async def compmenuitems(
                     "menus": list(branch["menus"].values())
                 }
                 company_data["branches"].append(branch_data)
-            
+
             result.append(company_data)
         
         return result
-    except Exception as e:
-        print(f"Error getting portal menu items: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting portal menu items: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error getting portal menu items for user %s", user_id)
+        raise HTTPException(status_code=500, detail="Error getting portal menu items") from exc
 

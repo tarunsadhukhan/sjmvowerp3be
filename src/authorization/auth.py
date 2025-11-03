@@ -75,19 +75,23 @@ def login_user_console(
                 status_code=200
             )
 
-            # Set only access token cookie
+            # Set only access token cookie and ensure any legacy refresh cookie is cleared
             ENV = os.getenv("ENV", "development")
             COOKIE_DOMAIN = ".vowerp.co.in" if ENV == "production" else None
             SECURE = True if ENV == "production" else False
             SAMESITE = "None" if ENV == "production" else "Lax"
-            
-            # Set only access token cookie
+
             response.set_cookie(
                 key="access_token",
                 value=token,
                 httponly=True,
                 secure=SECURE,
                 samesite=SAMESITE,
+                path="/",
+                domain=COOKIE_DOMAIN
+            )
+            response.delete_cookie(
+                key="refresh_token",
                 path="/",
                 domain=COOKIE_DOMAIN
             )
@@ -234,6 +238,11 @@ def login_user(
                     httponly=True,
                     secure=SECURE,
                     samesite=SAMESITE,
+                    path="/",
+                    domain=COOKIE_DOMAIN
+                )
+                response.delete_cookie(
+                    key="refresh_token",
                     path="/",
                     domain=COOKIE_DOMAIN
                 )
