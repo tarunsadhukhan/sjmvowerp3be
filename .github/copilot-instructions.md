@@ -6,6 +6,14 @@ These notes help an AI coding agent get productive quickly in this backend repo 
 - FastAPI app in `src/main.py` that mounts many routers. The item master APIs live under `/api/itemMaster` in `src/masters/items.py`.
 - Multi-tenant DB approach: `src/config/db.py` derives the tenant DB name from request headers (subdomain, x-forwarded-host, referer or explicit `subdomain` header) and constructs a tenant MySQL URL. `get_tenant_db` yields a SQLAlchemy session bound to that tenant DB.
 - Data access: mix of SQLAlchemy ORM models (e.g. `src/masters/models.py`) and raw SQL Text queries in `src/masters/query.py`. Queries use `sqlalchemy.text()` with named bind params (e.g. `:co_id`, `:item_id`).
+- For table structure context, use the SQL prompts under `dbqueries/` (e.g. `procurement.sql`, `usertables.sql`); they describe how each table was generated and help when drafting new queries, models, or schemas.
+- Key folders under `src/`:
+  - `authorization/` — login flows, JWT refresh helpers, auth routers, and models used for validating users.
+  - `common/` — shared logic split by persona (`companyAdmin`, `ctrldskAdmin`, `portal`); utilities here are reused across modules and tenants.
+  - `config/` — project-wide configuration (database engines, CORS, environment loading). Treat this as the single source for connection/session helpers.
+  - `masters/` — APIs and data access for master data. Follows the pattern of `models.py`, `query.py`, and feature routers (e.g. `items.py`).
+  - Module folders (e.g. `procurement/`) — contain feature-specific endpoints. Each module should include `query.py` for SQL text, optional `models.py`/`schemas.py` for ORM/Pydantic definitions, and one or more router files (`indent.py`, etc.) that orchestrate requests. Modules may call into `masters` or `common` when business logic overlaps.
+  - When introducing a new module, mirror the `procurement/` structure so DB mutations and schemas stay discoverable even if only part of the stack (e.g. `models.py`) is used initially.
 
 2) How to run & test (developer workflow)
 - Local dev (venv): activate your Python environment and run the app with uvicorn: `uvicorn src.main:app --reload --host 0.0.0.0 --port 8000`.
