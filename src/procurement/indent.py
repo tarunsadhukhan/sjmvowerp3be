@@ -2,6 +2,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 import os
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 from src.config.db import get_db_names, default_engine, get_tenant_db
 from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
@@ -17,6 +18,10 @@ from src.procurement.query import (
 	insert_proc_indent_detail,
 	get_indent_table_query,
 	get_indent_table_count_query,
+	get_indent_by_id_query,
+	get_indent_detail_by_id_query,
+	update_proc_indent,
+	delete_proc_indent_detail,
 )
 from datetime import datetime
 
@@ -209,6 +214,124 @@ async def get_indent_table(
 		raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_indent_by_id")
+async def get_indent_by_id(
+	request: Request,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""Return indent details by ID with all line items."""
+	try:
+		# Get query parameters
+		q_indent_id = request.query_params.get("indent_id")
+		q_co_id = request.query_params.get("co_id")
+
+		if q_indent_id is None:
+			raise HTTPException(status_code=400, detail="indent_id is required")
+		if q_co_id is None:
+			raise HTTPException(status_code=400, detail="co_id is required")
+
+		try:
+			indent_id = int(q_indent_id)
+			co_id = int(q_co_id)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail="Invalid indent_id or co_id")
+
+		# Fetch header data
+		header_query = get_indent_by_id_query()
+		header_params = {"indent_id": indent_id, "co_id": co_id}
+		header_result = db.execute(header_query, header_params).fetchone()
+
+		if not header_result:
+			raise HTTPException(status_code=404, detail="Indent not found or access denied")
+
+		header = dict(header_result._mapping)
+
+		# Fetch line items
+		detail_query = get_indent_detail_by_id_query()
+		detail_params = {"indent_id": indent_id}
+		detail_results = db.execute(detail_query, detail_params).fetchall()
+		details = [dict(r._mapping) for r in detail_results]
+
+		# Get indent_type - it's stored as string ("regular", "open", "bom") in indent_type_id column
+		indent_type_id = header.get("indent_type_id")
+		if indent_type_id is None:
+			indent_type_str = ""
+		elif isinstance(indent_type_id, str):
+			# Already a string, use it directly
+			indent_type_str = indent_type_id
+		else:
+			# If it's numeric, map it (though it shouldn't be based on create logic)
+			indent_type_map = {
+				1: "regular",
+				2: "open",
+				3: "bom",
+				"1": "regular",
+				"2": "open",
+				"3": "bom",
+			}
+			indent_type_str = indent_type_map.get(indent_type_id, str(indent_type_id))
+
+		# Format dates - frontend expects YYYY-MM-DD format
+		indent_date = header.get("indent_date")
+		if indent_date and hasattr(indent_date, "date"):
+			# datetime object
+			indent_date_str = indent_date.date().isoformat()
+		elif indent_date and hasattr(indent_date, "isoformat"):
+			# date object
+			indent_date_str = indent_date.isoformat()
+		elif indent_date:
+			indent_date_str = str(indent_date)
+		else:
+			indent_date_str = ""
+
+		updated_at = header.get("updated_date_time")
+		updated_at_str = None
+		if updated_at:
+			if hasattr(updated_at, "isoformat"):
+				updated_at_str = updated_at.isoformat()
+			else:
+				updated_at_str = str(updated_at)
+
+		# Build response
+		response = {
+			"id": str(header.get("indent_id", "")),
+			"indentNo": str(header.get("indent_no", "")) if header.get("indent_no") else "",
+			"indentDate": indent_date_str,
+			"branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+			"indentType": indent_type_str,
+			"expenseType": str(header.get("expense_type_id", "")) if header.get("expense_type_id") else "",
+			"project": str(header.get("project_id", "")) if header.get("project_id") else None,
+			"requester": header.get("indent_title") if header.get("indent_title") else None,
+			"status": header.get("status_name") if header.get("status_name") else None,
+			"updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
+			"updatedAt": updated_at_str,
+			"remarks": header.get("remarks") if header.get("remarks") else None,
+			"lines": [],
+		}
+
+		# Map line items
+		for detail in details:
+			line = {
+				"id": str(detail.get("indent_dtl_id", "")) if detail.get("indent_dtl_id") else "",
+				"department": str(detail.get("dept_id", "")) if detail.get("dept_id") else None,
+				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
+				"item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+				"itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
+				"quantity": float(detail.get("qty", 0)) if detail.get("qty") is not None else 0,
+				"uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+				"remarks": detail.get("remarks") if detail.get("remarks") else None,
+			}
+			response["lines"].append(line)
+
+		return response
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.exception("Error fetching indent by ID")
+		raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/create_indent")
 async def create_indent(
 	payload: dict,
@@ -302,7 +425,7 @@ async def create_indent(
 			"project_id": project_id,
 			"updated_by": updated_by,
 			"updated_date_time": created_at,
-			"status_id": None,
+			"status_id": 21,
 			"indent_title": indent_title,
 		}
 
@@ -359,6 +482,186 @@ async def create_indent(
 			status_code=500,
 			detail={
 				"message": "Failed to create indent",
+				"error": str(e),
+			},
+		)
+
+
+@router.put("/update_indent")
+async def update_indent(
+	payload: dict,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""Update a procurement indent with detail rows."""
+	def to_int(value, field_name: str, required: bool = False) -> int | None:
+		if value is None or value == "":
+			if required:
+				raise HTTPException(status_code=400, detail=f"{field_name} is required")
+			return None
+		try:
+			return int(value)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+	def to_positive_float(value, field_name: str) -> float:
+		try:
+			qty = float(value)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+		if qty <= 0:
+			raise HTTPException(status_code=400, detail=f"{field_name} must be greater than zero")
+		return qty
+
+	try:
+		indent_id = to_int(payload.get("id"), "id", required=True)
+		branch_id = to_int(payload.get("branch"), "branch", required=True)
+		expense_type_id = to_int(payload.get("expense_type"), "expense_type", required=True)
+		indent_type = payload.get("indent_type")
+		if not indent_type:
+			raise HTTPException(status_code=400, detail="indent_type is required")
+
+		date_str = payload.get("date")
+		if not date_str:
+			raise HTTPException(status_code=400, detail="date is required")
+		try:
+			indent_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+		except ValueError:
+			raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+		raw_items = payload.get("items")
+		if not isinstance(raw_items, list) or len(raw_items) == 0:
+			raise HTTPException(status_code=400, detail="At least one item row is required")
+
+		updated_by = to_int(token_data.get("user_id"), "updated_by")
+		updated_at = datetime.utcnow()
+		indent_title_raw = payload.get("name")
+		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
+		header_remarks_raw = payload.get("remarks")
+		header_remarks = str(header_remarks_raw).strip() if header_remarks_raw else None
+		project_id = to_int(payload.get("project"), "project")
+
+		# Verify indent exists (basic check - full access control handled by branch_id validation)
+		# We'll verify the indent exists by checking if we can fetch it
+		# The actual co_id validation happens through branch access
+		check_query = text("SELECT indent_id FROM proc_indent WHERE indent_id = :indent_id AND active = 1")
+		check_result = db.execute(check_query, {"indent_id": indent_id}).fetchone()
+		if not check_result:
+			raise HTTPException(status_code=404, detail="Indent not found or inactive")
+
+		normalized_items = []
+		for idx, item in enumerate(raw_items, start=1):
+			item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
+			qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
+			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+			item_make_id = to_int(item.get("item_make"), f"items[{idx}].item_make")
+			department_id = to_int(item.get("department"), f"items[{idx}].department")
+
+			remarks_raw = item.get("remarks")
+			remarks = str(remarks_raw).strip() if remarks_raw else None
+			if remarks:
+				remarks = remarks[:599]
+
+			normalized_items.append(
+				{
+					"item_id": item_id,
+					"qty": qty,
+					"uom_id": uom_id,
+					"item_make_id": item_make_id,
+					"remarks": remarks,
+					"dept_id": department_id,
+				}
+			)
+
+		logger.debug("Normalized indent items for update: %s", normalized_items)
+
+		# Get existing indent_no, active, and status_id to preserve them
+		# This also helps avoid trigger issues by ensuring all columns are present
+		existing_query = text("SELECT indent_no, active, status_id FROM proc_indent WHERE indent_id = :indent_id")
+		existing_result = db.execute(existing_query, {"indent_id": indent_id}).fetchone()
+		if not existing_result:
+			raise HTTPException(status_code=404, detail="Indent not found")
+		existing_indent_no = existing_result[0] if existing_result[0] is not None else None
+		existing_active = existing_result[1] if existing_result[1] is not None else 1
+		existing_status_id = existing_result[2] if existing_result[2] is not None else None
+
+		# Update header
+		update_header_query = update_proc_indent()
+		header_params = {
+			"indent_id": indent_id,
+			"indent_date": indent_date,
+			"branch_id": branch_id,
+			"indent_type_id": indent_type,
+			"expense_type_id": expense_type_id,
+			"project_id": project_id,
+			"indent_title": indent_title,
+			"remarks": header_remarks,
+			"updated_by": updated_by,
+			"updated_date_time": updated_at,
+			"indent_no": existing_indent_no,
+			"active": existing_active,
+			"status_id": existing_status_id,
+		}
+
+		logger.info(
+			"Updating indent: indent_id=%s, branch=%s, indent_type=%s, expense_type=%s, item_rows=%s",
+			indent_id,
+			branch_id,
+			indent_type,
+			expense_type_id,
+			len(normalized_items),
+		)
+		logger.debug("Indent header update params: %s", header_params)
+
+		db.execute(update_header_query, header_params)
+
+		# Soft delete existing detail rows
+		delete_detail_query = delete_proc_indent_detail()
+		db.execute(
+			delete_detail_query,
+			{
+				"indent_id": indent_id,
+				"updated_by": updated_by,
+				"updated_date_time": updated_at,
+			},
+		)
+
+		# Insert new detail rows
+		detail_query = insert_proc_indent_detail()
+		for detail in normalized_items:
+			db.execute(
+				detail_query,
+				{
+					"indent_id": indent_id,
+					"required_by_days": None,
+					"active": 1,
+					"item_id": detail["item_id"],
+					"qty": detail["qty"],
+					"uom_id": detail["uom_id"],
+					"remarks": detail["remarks"],
+					"updated_by": updated_by,
+					"updated_date_time": updated_at,
+					"item_make_id": detail["item_make_id"],
+					"dept_id": detail["dept_id"],
+				},
+			)
+
+		db.commit()
+		return {
+			"message": "Indent updated successfully",
+			"indent_id": indent_id,
+		}
+	except HTTPException as exc:
+		db.rollback()
+		logger.warning("Indent update failed with HTTP error: %s", getattr(exc, "detail", exc))
+		raise
+	except Exception as e:
+		db.rollback()
+		logger.exception("Unexpected error while updating indent")
+		raise HTTPException(
+			status_code=500,
+			detail={
+				"message": "Failed to update indent",
 				"error": str(e),
 			},
 		)

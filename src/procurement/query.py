@@ -148,3 +148,87 @@ WHERE (:co_id IS NULL OR bm.co_id = :co_id)
                 OR etm.expense_type_name LIKE :search_like
             );"""
         return text(sql)
+
+
+def get_indent_by_id_query():
+    sql = """SELECT
+        pi.indent_id,
+        pi.indent_no,
+        pi.indent_date,
+        pi.branch_id,
+        bm.branch_name,
+        pi.indent_type_id,
+        pi.expense_type_id,
+        etm.expense_type_name,
+        pi.project_id,
+        pm.prj_name AS project_name,
+        pi.indent_title,
+        pi.remarks,
+        pi.status_id,
+        sm.status_name,
+        pi.updated_by,
+        pi.updated_date_time
+    FROM proc_indent AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
+    LEFT JOIN project_mst AS pm ON pm.project_id = pi.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
+    WHERE pi.indent_id = :indent_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_indent_detail_by_id_query():
+    sql = """SELECT
+        pid.indent_dtl_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
+        pid.qty,
+        pid.uom_id,
+        um.uom_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.dept_id,
+        dm.dept_desc AS dept_name,
+        pid.remarks
+    FROM proc_indent_dtl AS pid
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
+    WHERE pid.indent_id = :indent_id
+        AND pid.active = 1
+    ORDER BY pid.indent_dtl_id;"""
+    return text(sql)
+
+
+def update_proc_indent():
+    sql = """UPDATE proc_indent SET
+        indent_date = :indent_date,
+        branch_id = :branch_id,
+        indent_type_id = :indent_type_id,
+        expense_type_id = :expense_type_id,
+        project_id = :project_id,
+        indent_title = :indent_title,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        indent_no = COALESCE(:indent_no, indent_no),
+        active = COALESCE(:active, active),
+        status_id = COALESCE(:status_id, status_id)
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def delete_proc_indent_detail():
+    sql = """UPDATE proc_indent_dtl SET
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
