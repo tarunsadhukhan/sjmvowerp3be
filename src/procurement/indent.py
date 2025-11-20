@@ -193,13 +193,34 @@ async def get_indent_table(
 		data = []
 		for row in rows:
 			mapped = dict(row._mapping)
-			indent_date = mapped.get("indent_date")
-			if hasattr(indent_date, "isoformat"):
-				indent_date = indent_date.isoformat()
+			indent_date_obj = mapped.get("indent_date")
+			indent_date = indent_date_obj
+			if hasattr(indent_date_obj, "isoformat"):
+				indent_date = indent_date_obj.isoformat()
+			
+			# Format indent_no if it exists
+			raw_indent_no = mapped.get("indent_no")
+			formatted_indent_no = ""
+			if raw_indent_no is not None and raw_indent_no != 0:
+				try:
+					indent_no_int = int(raw_indent_no) if raw_indent_no else None
+					co_prefix = mapped.get("co_prefix")
+					branch_prefix = mapped.get("branch_prefix")
+					formatted_indent_no = format_indent_no(
+						indent_no=indent_no_int,
+						co_prefix=co_prefix,
+						branch_prefix=branch_prefix,
+						indent_date=indent_date_obj,
+						document_type="INDENT"
+					)
+				except Exception as e:
+					logger.exception("Error formatting indent number in list, using raw value")
+					formatted_indent_no = str(raw_indent_no) if raw_indent_no else ""
+			
 			data.append(
 				{
 					"indent_id": mapped.get("indent_id"),
-					"indent_no": mapped.get("indent_no"),
+					"indent_no": formatted_indent_no,
 					"indent_date": indent_date,
 					"branch_name": mapped.get("branch_name"),
 					"expense_type": mapped.get("expense_type_name"),
@@ -342,11 +363,30 @@ async def get_indent_by_id(
 			except Exception as e:
 				logger.exception("Error calculating permissions, continuing without them")
 				permissions = None
-
+		
+		# Format indent_no if it exists
+		raw_indent_no = header.get("indent_no")
+		formatted_indent_no = ""
+		if raw_indent_no is not None and raw_indent_no != 0:
+			try:
+				indent_no_int = int(raw_indent_no) if raw_indent_no else None
+				co_prefix = header.get("co_prefix")
+				branch_prefix = header.get("branch_prefix")
+				formatted_indent_no = format_indent_no(
+					indent_no=indent_no_int,
+					co_prefix=co_prefix,
+					branch_prefix=branch_prefix,
+					indent_date=indent_date,
+					document_type="INDENT"
+				)
+			except Exception as e:
+				logger.exception("Error formatting indent number, using raw value")
+				formatted_indent_no = str(raw_indent_no) if raw_indent_no else ""
+		
 		# Build response
 		response = {
 			"id": str(header.get("indent_id", "")),
-			"indentNo": str(header.get("indent_no", "")) if header.get("indent_no") else "",
+			"indentNo": formatted_indent_no,
 			"indentDate": indent_date_str,
 			"branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
 			"indentType": indent_type_str,
@@ -718,6 +758,111 @@ async def update_indent(
 			status_code=500,
 			detail=str(e),
 		)
+
+
+# ==================== INDENT NUMBER FORMATTING ====================
+
+def calculate_financial_year(indent_date) -> str:
+	"""Calculate financial year in YY-YY format from a date.
+	
+	Financial year: April 1 to March 31
+	- If month >= 4 (April-December): FY = YY-YY (e.g., April 2025 = 25-26)
+	- If month < 4 (January-March): FY = (YY-1)-YY (e.g., January 2025 = 24-25)
+	
+	Args:
+		indent_date: Date object, datetime object, or date string
+		
+	Returns:
+		Financial year string in YY-YY format (e.g., "25-26")
+	"""
+	try:
+		# Handle different date formats
+		if hasattr(indent_date, "year") and hasattr(indent_date, "month"):
+			# Date object
+			year = indent_date.year
+			month = indent_date.month
+		elif hasattr(indent_date, "date"):
+			# Datetime object
+			date_obj = indent_date.date()
+			year = date_obj.year
+			month = date_obj.month
+		else:
+			# String or other format - try to parse
+			if isinstance(indent_date, str):
+				try:
+					date_obj = datetime.strptime(indent_date, "%Y-%m-%d").date()
+				except ValueError:
+					date_obj = datetime.fromisoformat(indent_date).date()
+			else:
+				date_obj = datetime.fromisoformat(str(indent_date)).date()
+			year = date_obj.year
+			month = date_obj.month
+		
+		# Calculate financial year
+		if month >= 4:
+			# April-December: FY = current year to next year
+			fy_start = year % 100
+			fy_end = (year + 1) % 100
+		else:
+			# January-March: FY = previous year to current year
+			fy_start = (year - 1) % 100
+			fy_end = year % 100
+		
+		return f"{fy_start:02d}-{fy_end:02d}"
+	except Exception as e:
+		logger.exception(f"Error calculating financial year from {indent_date}")
+		# Fallback to current year if date parsing fails
+		now = datetime.now()
+		current_year = now.year
+		current_month = now.month
+		if current_month >= 4:
+			return f"{current_year % 100:02d}-{(current_year + 1) % 100:02d}"
+		else:
+			return f"{(current_year - 1) % 100:02d}-{current_year % 100:02d}"
+
+
+def format_indent_no(
+	indent_no: Optional[int],
+	co_prefix: Optional[str],
+	branch_prefix: Optional[str],
+	indent_date,
+	document_type: str = "INDENT"
+) -> str:
+	"""Format indent number as "co_prefix/branch_prefix/document_type/financial_year/indent_no".
+	
+	Args:
+		indent_no: Numeric indent number (from database)
+		co_prefix: Company prefix from co_mst
+		branch_prefix: Branch prefix from branch_mst
+		indent_date: Date for calculating financial year
+		document_type: Document type prefix (default: "INDENT")
+		
+	Returns:
+		Formatted indent number string (e.g., "ABC/MAIN/INDENT/25-26/1")
+		Returns empty string if indent_no is None or 0
+	"""
+	# Return empty string if indent_no is not set
+	if indent_no is None or indent_no == 0:
+		return ""
+	
+	# Calculate financial year
+	fy = calculate_financial_year(indent_date)
+	
+	# Get prefixes with fallbacks (use empty string if None)
+	co_pref = co_prefix or ""
+	branch_pref = branch_prefix or ""
+	
+	# Build formatted string: co_prefix/branch_prefix/document_type/financial_year/indent_no
+	# Filter out empty prefixes but keep structure for non-empty parts
+	parts = []
+	if co_pref:
+		parts.append(co_pref)
+	if branch_pref:
+		parts.append(branch_pref)
+	# Always include document_type, financial_year, and indent_no
+	parts.extend([document_type, fy, str(indent_no)])
+	
+	return "/".join(parts)
 
 
 # ==================== APPROVAL FLOW FUNCTIONS ====================

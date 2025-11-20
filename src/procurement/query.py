@@ -117,10 +117,14 @@ def get_indent_table_query():
         pi.indent_no,
         pi.indent_date,
         bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
         etm.expense_type_name,
         sm.status_name
 FROM proc_indent AS pi
 LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
 LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
 LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
 WHERE (:co_id IS NULL OR bm.co_id = :co_id)
@@ -157,6 +161,9 @@ def get_indent_by_id_query():
         pi.indent_date,
         pi.branch_id,
         bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
         pi.indent_type_id,
         pi.expense_type_id,
         etm.expense_type_name,
@@ -174,6 +181,7 @@ def get_indent_by_id_query():
         END AS approval_level
     FROM proc_indent AS pi
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
     LEFT JOIN project_mst AS pm ON pm.project_id = pi.project_id
     LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
