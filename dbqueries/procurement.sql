@@ -392,6 +392,7 @@ CREATE TABLE proc_indent (
     updated_date_time INT,
     status_id INT,
     indent_title VARCHAR(255),
+    appoval_level INT,
     FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
     FOREIGN KEY (expense_type_id) REFERENCES expense_type_mst(expense_type_id),
     FOREIGN KEY (status_id) REFERENCES status_mst(status_id)
@@ -411,6 +412,7 @@ CREATE TABLE proc_indent_dtl (
     updated_date_time DATETIME,
     item_make_id INT,
     dept_id INT,
+    state INT,
     FOREIGN KEY (indent_id) REFERENCES proc_indent(indent_id),
     FOREIGN KEY (item_id) REFERENCES item_mst(item_id),
     FOREIGN KEY (uom_id) REFERENCES uom_mst(uom_id),

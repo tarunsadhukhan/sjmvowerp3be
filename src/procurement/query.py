@@ -167,7 +167,11 @@ def get_indent_by_id_query():
         pi.status_id,
         sm.status_name,
         pi.updated_by,
-        pi.updated_date_time
+        pi.updated_date_time,
+        CASE 
+            WHEN pi.status_id = 20 THEN pi.approval_level 
+            ELSE NULL 
+        END AS approval_level
     FROM proc_indent AS pi
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
     LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
@@ -231,4 +235,145 @@ def delete_proc_indent_detail():
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
     WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def get_approval_flow_by_menu_branch():
+    """Get approval flow details for a specific menu and branch.
+    Returns all approval levels configured for the menu/branch combination.
+    """
+    sql = """SELECT
+        am.approval_mst_id,
+        am.menu_id,
+        am.user_id,
+        am.branch_id,
+        am.approval_level,
+        am.max_amount_single,
+        am.day_max_amount,
+        am.month_max_amount,
+        um.user_name,
+        mm.menu_name
+    FROM approval_mst am
+    LEFT JOIN user_mst um ON um.user_id = am.user_id
+    LEFT JOIN menu_mst mm ON mm.menu_id = am.menu_id
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id
+    ORDER BY am.approval_level ASC;"""
+    return text(sql)
+
+
+def get_user_approval_level():
+    """Get the approval level of a specific user for a menu and branch."""
+    sql = """SELECT
+        am.approval_level,
+        am.max_amount_single,
+        am.day_max_amount,
+        am.month_max_amount
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id
+        AND am.user_id = :user_id
+    LIMIT 1;"""
+    return text(sql)
+
+
+def get_max_approval_level():
+    """Get the maximum approval level configured for a menu and branch."""
+    sql = """SELECT MAX(am.approval_level) as max_level
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id;"""
+    return text(sql)
+
+
+def get_user_consumed_amounts():
+    """Get amounts already consumed by user for the day and month.
+    This aggregates amounts from documents approved by the user today/this month.
+    Note: This needs to be customized based on which table stores the document amounts.
+    """
+    sql = """SELECT
+        COALESCE(SUM(CASE WHEN DATE(pi.updated_date_time) = CURDATE() THEN 1 ELSE 0 END), 0) as day_count,
+        COALESCE(SUM(CASE WHEN YEAR(pi.updated_date_time) = YEAR(CURDATE()) 
+                          AND MONTH(pi.updated_date_time) = MONTH(CURDATE()) THEN 1 ELSE 0 END), 0) as month_count
+    FROM proc_indent pi
+    WHERE pi.approval_level = :approval_level
+        AND pi.status_id = 3
+        AND EXISTS (
+            SELECT 1 FROM approval_mst am
+            WHERE am.menu_id = :menu_id
+                AND am.branch_id = :branch_id
+                AND am.user_id = :user_id
+                AND am.approval_level = :approval_level
+        );"""
+    return text(sql)
+
+
+def check_approval_mst_exists():
+    """Check if approval_mst has any entries for a menu and branch."""
+    sql = """SELECT COUNT(*) as count
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id;"""
+    return text(sql)
+
+
+def get_user_edit_access():
+    """Check if user has edit access (access_type_id >= 4) for a menu and branch."""
+    sql = """SELECT 
+        MAX(CASE WHEN ccm.access_type = 1 THEN 1 ELSE rmm.access_type_id END) as max_access_type_id
+    FROM user_role_map urm
+    LEFT JOIN role_menu_map rmm ON rmm.role_id = urm.role_id
+    LEFT JOIN menu_mst mm ON mm.menu_id = rmm.menu_id AND mm.active = 1
+    LEFT JOIN control_co_module ccm ON urm.co_id = ccm.co_id AND ccm.module_id = mm.module_mst_id
+    WHERE urm.user_id = :user_id
+        AND urm.branch_id = :branch_id
+        AND rmm.menu_id = :menu_id
+        AND IFNULL(ccm.access_type, 0) NOT IN (2);"""
+    return text(sql)
+
+
+def update_indent_status():
+    """Update indent status and approval level. Optionally update indent_no."""
+    sql = """UPDATE proc_indent SET
+        status_id = :status_id,
+        approval_level = :approval_level,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        indent_no = CASE 
+            WHEN :indent_no IS NOT NULL THEN :indent_no 
+            ELSE indent_no 
+        END
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def get_max_indent_no_for_branch_fy():
+    """Get the maximum indent_no for a branch within a financial year.
+    
+    Financial year: April 1 to March 31
+    - If month >= 4 (April-December): FY = year-04-01 to (year+1)-03-31
+    - If month < 4 (January-March): FY = (year-1)-04-01 to year-03-31
+    """
+    sql = """SELECT COALESCE(MAX(pi.indent_no), 0) as max_indent_no
+    FROM proc_indent pi
+    WHERE pi.branch_id = :branch_id
+        AND pi.indent_date >= :fy_start_date
+        AND pi.indent_date <= :fy_end_date
+        AND pi.indent_no IS NOT NULL;"""
+    return text(sql)
+
+
+def get_indent_with_approval_info():
+    """Get indent details including approval level and status."""
+    sql = """SELECT
+        pi.indent_id,
+        pi.status_id,
+        pi.approval_level,
+        pi.branch_id,
+        pi.indent_date,
+        pi.indent_no,
+        bm.co_id
+    FROM proc_indent pi
+    LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    WHERE pi.indent_id = :indent_id;"""
     return text(sql)
