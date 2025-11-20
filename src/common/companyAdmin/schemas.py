@@ -38,6 +38,7 @@ class CoCreate(BaseModel):
 
 class BranchCreate(BaseModel):
     branch_name: str
+    branch_prefix: Optional[str] = None
     co_id: int
     branch_address1: str
     branch_address2: Optional[str] = None
