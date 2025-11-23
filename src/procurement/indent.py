@@ -31,6 +31,7 @@ from src.procurement.query import (
 	check_approval_mst_exists,
 	get_user_edit_access,
 	get_max_indent_no_for_branch_fy,
+	get_all_approved_indents_query,
 )
 from datetime import datetime
 from typing import Optional
@@ -230,18 +231,111 @@ async def get_indent_table(
 
 		count_query = get_indent_table_count_query()
 		count_params = {"co_id": co_id, "search_like": search_like}
-		total_row = db.execute(count_query, count_params).fetchone()
-		total = int(total_row[0]) if total_row and total_row[0] is not None else len(data)
+		count_result = db.execute(count_query, count_params).scalar()
+		total = int(count_result) if count_result is not None else 0
 
 		return {
 			"data": data,
-			"page": page,
-			"pageSize": limit,
 			"total": total,
 		}
 	except HTTPException:
 		raise
 	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_all_approved_indents")
+async def get_all_approved_indents(
+	request: Request,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+	branch_id: int | None = None,
+	co_id: int | None = None,
+):
+	"""Get all approved indents (status_id = 3) for dropdown selection."""
+	try:
+		# Priority: 1. co_id from query params, 2. co_id from token_data, 3. derive from branch_id
+		filter_co_id = co_id
+		
+		if filter_co_id is None:
+			# Try to get from token_data
+			user_co_id = token_data.get("co_id")
+			if user_co_id:
+				filter_co_id = user_co_id
+		
+		if filter_co_id is None and branch_id:
+			# If we have branch_id but no co_id, get co_id from branch
+			# Query branch_mst directly to get co_id
+			from sqlalchemy.sql import text
+			branch_sql = text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id")
+			branch_result = db.execute(branch_sql, {"branch_id": branch_id}).fetchone()
+			if branch_result:
+				filter_co_id = branch_result[0] if isinstance(branch_result, tuple) else branch_result._mapping.get("co_id")
+		
+		# If still no co_id, raise error
+		if filter_co_id is None:
+			raise HTTPException(status_code=400, detail="Company ID is required. Please provide co_id or branch_id.")
+		
+		query = get_all_approved_indents_query()
+		params = {"branch_id": branch_id, "co_id": filter_co_id}
+		results = db.execute(query, params).fetchall()
+		
+		data = []
+		for row in results:
+			mapped = row._mapping
+			indent_id = mapped.get("indent_id")
+			if not indent_id:
+				continue
+			
+			# Format indent_no
+			raw_indent_no = mapped.get("indent_no")
+			formatted_indent_no = ""
+			if raw_indent_no is not None and raw_indent_no != 0:
+				try:
+					indent_date_str = mapped.get("indent_date")
+					indent_date_obj = None
+					if indent_date_str:
+						if isinstance(indent_date_str, str):
+							indent_date_obj = datetime.strptime(indent_date_str, "%Y-%m-%d").date()
+						else:
+							indent_date_obj = indent_date_str
+					
+					indent_no_int = int(raw_indent_no) if raw_indent_no else None
+					co_prefix = mapped.get("co_prefix")
+					branch_prefix = mapped.get("branch_prefix")
+					formatted_indent_no = format_indent_no(
+						indent_no=indent_no_int,
+						co_prefix=co_prefix,
+						branch_prefix=branch_prefix,
+						indent_date=indent_date_obj,
+						document_type="INDENT"
+					)
+				except Exception as e:
+					logger.exception("Error formatting indent number, using raw value")
+					formatted_indent_no = str(raw_indent_no) if raw_indent_no else ""
+			
+			indent_date = mapped.get("indent_date")
+			if indent_date:
+				if isinstance(indent_date, str):
+					indent_date = indent_date
+				else:
+					indent_date = indent_date.strftime("%Y-%m-%d") if hasattr(indent_date, "strftime") else str(indent_date)
+			else:
+				indent_date = ""
+			
+			data.append({
+				"indent_id": indent_id,
+				"indent_no": formatted_indent_no,
+				"indent_date": indent_date,
+				"branch_name": mapped.get("branch_name") or "",
+				"expense_type": mapped.get("expense_type_name") or "",
+			})
+		
+		return {"data": data}
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.exception("Error fetching approved indents")
 		raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -382,7 +476,7 @@ async def get_indent_by_id(
 			except Exception as e:
 				logger.exception("Error formatting indent number, using raw value")
 				formatted_indent_no = str(raw_indent_no) if raw_indent_no else ""
-		
+
 		# Build response
 		response = {
 			"id": str(header.get("indent_id", "")),

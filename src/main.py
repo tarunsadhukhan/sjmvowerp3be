@@ -22,6 +22,7 @@ from src.masters.departments import router as dept_router
 from src.masters.mechineMaster import router as machine_router
 from src.masters.projectMaster import router as project_router 
 from src.procurement.indent import router as indent_router
+from src.procurement.po import router as po_router
 from src.masters.party import router as party_router
 
 from src.masters.items import router as item_router
@@ -80,6 +81,7 @@ app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["maste
 app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
+app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
 
 
 
