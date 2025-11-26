@@ -363,10 +363,10 @@ def format_po_no(
 def calculate_gst_amounts(
 	amount: float,
 	tax_percentage: float,
-	billing_state_id: int,
-	shipping_state_id: int,
+	source_state_id: int,
+	destination_state_id: int,
 ) -> dict:
-	"""Calculate GST amounts based on billing and shipping states.
+	"""Calculate GST amounts based on source (supplier) and destination (shipping) states.
 	
 	Returns dict with:
 	- i_tax_percentage: IGST percentage
@@ -377,7 +377,7 @@ def calculate_gst_amounts(
 	- c_tax_amount: CGST amount
 	- tax_amount: Total tax amount
 	"""
-	if billing_state_id == shipping_state_id:
+	if source_state_id == destination_state_id:
 		# Same state: Split tax into SGST and CGST (each half)
 		sgst_pct = tax_percentage / 2.0
 		cgst_pct = tax_percentage / 2.0
@@ -464,10 +464,10 @@ async def create_po(
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
-		# Get billing and shipping state IDs for GST calculation
-		billing_branch_query = text("SELECT state_id FROM branch_mst WHERE branch_id = :branch_id")
-		billing_result = db.execute(billing_branch_query, {"branch_id": billing_branch_id}).fetchone()
-		billing_state_id = billing_result[0] if billing_result else None
+		# Get supplier and shipping state IDs for GST calculation
+		supplier_branch_query = text("SELECT state_id FROM party_branch_mst WHERE branch_id = :branch_id")
+		supplier_result = db.execute(supplier_branch_query, {"branch_id": supplier_branch_id}).fetchone()
+		supplier_state_id = supplier_result[0] if supplier_result else None
 		
 		shipping_branch_query = text("SELECT state_id FROM branch_mst WHERE branch_id = :branch_id")
 		shipping_result = db.execute(shipping_branch_query, {"branch_id": shipping_branch_id}).fetchone()
@@ -543,11 +543,41 @@ async def create_po(
 			net_amount += amount
 			
 			# Calculate GST if india_gst is enabled
-			if india_gst and billing_state_id and shipping_state_id and tax_percentage > 0:
-				gst_amounts = calculate_gst_amounts(amount, tax_percentage, billing_state_id, shipping_state_id)
-				total_igst += gst_amounts["i_tax_amount"]
-				total_sgst += gst_amounts["s_tax_amount"]
-				total_cgst += gst_amounts["c_tax_amount"]
+			if india_gst and tax_percentage > 0:
+				# Use values from frontend
+				i_tax_amount = to_float(item.get("igst_amount"), f"items[{idx}].igst_amount")
+				c_tax_amount = to_float(item.get("cgst_amount"), f"items[{idx}].cgst_amount")
+				s_tax_amount = to_float(item.get("sgst_amount"), f"items[{idx}].sgst_amount")
+				tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
+				
+				if tax_amount > 0:
+					# Determine percentages based on amounts
+					if i_tax_amount > 0:
+						i_tax_percentage = tax_percentage
+						c_tax_percentage = 0.0
+						s_tax_percentage = 0.0
+					else:
+						i_tax_percentage = 0.0
+						c_tax_percentage = tax_percentage / 2.0
+						s_tax_percentage = tax_percentage / 2.0
+					
+					gst_amounts = {
+						"i_tax_percentage": i_tax_percentage,
+						"s_tax_percentage": s_tax_percentage,
+						"c_tax_percentage": c_tax_percentage,
+						"i_tax_amount": i_tax_amount,
+						"s_tax_amount": s_tax_amount,
+						"c_tax_amount": c_tax_amount,
+						"tax_amount": tax_amount,
+						"tax_pct": tax_percentage,
+						"stax_percentage": s_tax_percentage + c_tax_percentage,
+					}
+					
+					total_igst += i_tax_amount
+					total_sgst += s_tax_amount
+					total_cgst += c_tax_amount
+				else:
+					gst_amounts = None
 			else:
 				gst_amounts = None
 			
@@ -583,13 +613,13 @@ async def create_po(
 			
 			# GST for additional charges (if applicable)
 			gst_amounts = None
-			if india_gst and billing_state_id and shipping_state_id:
+			if india_gst and supplier_state_id and shipping_state_id:
 				# Get tax percentage from additional_charges_master or use default
 				addl_query = text("SELECT default_value FROM additional_charges_master WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
 				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
-					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, billing_state_id, shipping_state_id)
+					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]
 					total_sgst += gst_amounts["s_tax_amount"]
 					total_cgst += gst_amounts["c_tax_amount"]
@@ -1020,10 +1050,10 @@ async def update_po(
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
-		# Get billing and shipping state IDs for GST calculation
-		billing_branch_query = text("SELECT state_id FROM branch_mst WHERE branch_id = :branch_id")
-		billing_result = db.execute(billing_branch_query, {"branch_id": billing_branch_id}).fetchone()
-		billing_state_id = billing_result[0] if billing_result else None
+		# Get supplier and shipping state IDs for GST calculation
+		supplier_branch_query = text("SELECT state_id FROM party_branch_mst WHERE branch_id = :branch_id")
+		supplier_result = db.execute(supplier_branch_query, {"branch_id": supplier_branch_id}).fetchone()
+		supplier_state_id = supplier_result[0] if supplier_result else None
 		
 		shipping_branch_query = text("SELECT state_id FROM branch_mst WHERE branch_id = :branch_id")
 		shipping_result = db.execute(shipping_branch_query, {"branch_id": shipping_branch_id}).fetchone()
@@ -1099,11 +1129,41 @@ async def update_po(
 			net_amount += amount
 			
 			# Calculate GST if india_gst is enabled
-			if india_gst and billing_state_id and shipping_state_id and tax_percentage > 0:
-				gst_amounts = calculate_gst_amounts(amount, tax_percentage, billing_state_id, shipping_state_id)
-				total_igst += gst_amounts["i_tax_amount"]
-				total_sgst += gst_amounts["s_tax_amount"]
-				total_cgst += gst_amounts["c_tax_amount"]
+			if india_gst and tax_percentage > 0:
+				# Use values from frontend
+				i_tax_amount = to_float(item.get("igst_amount"), f"items[{idx}].igst_amount")
+				c_tax_amount = to_float(item.get("cgst_amount"), f"items[{idx}].cgst_amount")
+				s_tax_amount = to_float(item.get("sgst_amount"), f"items[{idx}].sgst_amount")
+				tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
+				
+				if tax_amount > 0:
+					# Determine percentages based on amounts
+					if i_tax_amount > 0:
+						i_tax_percentage = tax_percentage
+						c_tax_percentage = 0.0
+						s_tax_percentage = 0.0
+					else:
+						i_tax_percentage = 0.0
+						c_tax_percentage = tax_percentage / 2.0
+						s_tax_percentage = tax_percentage / 2.0
+					
+					gst_amounts = {
+						"i_tax_percentage": i_tax_percentage,
+						"s_tax_percentage": s_tax_percentage,
+						"c_tax_percentage": c_tax_percentage,
+						"i_tax_amount": i_tax_amount,
+						"s_tax_amount": s_tax_amount,
+						"c_tax_amount": c_tax_amount,
+						"tax_amount": tax_amount,
+						"tax_pct": tax_percentage,
+						"stax_percentage": s_tax_percentage + c_tax_percentage,
+					}
+					
+					total_igst += i_tax_amount
+					total_sgst += s_tax_amount
+					total_cgst += c_tax_amount
+				else:
+					gst_amounts = None
 			else:
 				gst_amounts = None
 			
@@ -1139,12 +1199,12 @@ async def update_po(
 			
 			# GST for additional charges (if applicable)
 			gst_amounts = None
-			if india_gst and billing_state_id and shipping_state_id:
+			if india_gst and supplier_state_id and shipping_state_id:
 				addl_query = text("SELECT default_value FROM additional_charges_master WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
 				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
-					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, billing_state_id, shipping_state_id)
+					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]
 					total_sgst += gst_amounts["s_tax_amount"]
 					total_cgst += gst_amounts["c_tax_amount"]

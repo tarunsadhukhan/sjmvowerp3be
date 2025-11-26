@@ -142,6 +142,38 @@ rows = db.execute(q, {"co_id": int(co_id), "search": f"%{search}%"}).fetchall()
 data = [dict(r._mapping) for r in rows]
 ```
 
+## Backend Implementation Patterns In Practice
+
+- **Router files mirror business domains.** For example, `src/procurement/po.py` and `src/masters/items.py` each expose an `APIRouter`, define dependencies (`Request`, `Session = Depends(get_tenant_db)`, `token_data = Depends(get_current_user_with_refresh)`), and group related helper functions such as `format_po_no` or `sanitize_int`.
+- **SQL lives next to the domain.** Every module has a `query.py` (e.g., `src/procurement/query.py`) that only returns `sqlalchemy.text()` clauses. Routers import these builders, execute them with `db.execute(query, params)`, and translate rows via `dict(row._mapping)`.
+- **Mix of ORM and text queries.** CRUD-style operations (e.g., item creation in `src/masters/items.py`) use SQLAlchemy models, while reporting/list endpoints stay on raw SQL for predictable SQL and easier reuse across tenants.
+- **Result shaping happens post-query.** Routes normalize values (dates via `.isoformat()`, decimals to `float`, always include keys like `po_value`, etc.) to keep the response contract stable across callers.
+- **Logging & error handling.** Routers configure `logger = logging.getLogger(__name__)` and wrap handlers in `try/except`, raising `HTTPException` for expected failures and logging unexpected ones.
+- **Helper utilities are centralized.** Cross-module helpers (responses, timestamp formatting, tenant validation) reside in `src/common/utils.py`, while domain-specific helpers stay near their usage for clarity.
+
+## Maintainability, Readability & Reusability Guidelines
+
+### General
+- Keep new routers consistent: declare `router = APIRouter(...)`, enforce `co_id` early, and always depend on `get_tenant_db` and `get_current_user_with_refresh` unless a specific endpoint is public.
+- Store every new SQL snippet inside the module’s `query.py` file (even small `SELECT`s) so routers stay focused on orchestration logic.
+- When reading rows, prefer `.mappings()` or `dict(row._mapping)` and normalize types before returning. This prevents frontend conditionals sprinkled across pages like `createPO`.
+- Use `create_response()` from `src/common/utils.py` (or mirror its `{ "data": [...] }` contract) so all APIs share the same shape.
+
+### Smaller Functions & Helpers
+- Favor **short, pure helper functions** (≤25 lines) for repeated transforms such as input sanitization, payload flattening, or GST math. Keep them typed and side-effect free so they can be re-used in other routers or hooks (see `format_po_no()` and `calculate_gst_amounts()` in `src/procurement/po.py`).
+- If the helper is domain-agnostic (dates, numbers, dict merges), move it to `src/common/utils.py`. Otherwise co-locate directly under the router and export only when another module needs it.
+- Document non-obvious helper behavior with a one-line comment (e.g., why sanitization allows strings, how financial year is derived) to reduce re-implementation risk.
+- Avoid nesting large helper definitions inside route handlers. Define them at module scope so they can be unit-tested and imported elsewhere.
+- Reuse validation helpers such as the `sanitize_int()` pattern in `src/masters/items.py` instead of inlining ad-hoc parsing inside each endpoint. This keeps request handling predictable and readable.
+
+### Error Handling & Transactions
+- Wrap DB writes in `try/except`, call `db.rollback()` on failure, and surface meaningful HTTP status codes. Reads can re-raise `HTTPException` untouched.
+- When you need cross-cutting validations (headers, tenant IDs), rely on FastAPI dependencies (`Depends`) rather than manual checks inside each handler.
+
+### Testing & Extensibility
+- Extracting reusable helpers makes it trivial to add unit tests under `src/test/` without spinning up FastAPI. Keep signatures simple (`dict` / `TypedDict` in, `dict` out) to minimize fixtures.
+- Whenever a route orchestrates multiple queries, consider a lightweight service function (pure python) that the route calls. This keeps request handling thin and lets the service be reused by background tasks or scheduled jobs.
+
 ## Key Files to Reference
 
 ### When building new endpoints:
@@ -268,5 +300,5 @@ When adding new endpoints:
 
 ---
 
-**Last Updated:** [Update this date when you modify this file]
+**Last Updated:** 2025-11-26
 
