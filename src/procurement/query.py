@@ -589,7 +589,7 @@ def insert_proc_po():
         contact_no,
         contact_person,
         updated_by,
-        update_date_time,
+        updated_date_time,
         approval_level
     ) VALUES (
         :credit_days,
@@ -618,7 +618,7 @@ def insert_proc_po():
         :contact_no,
         :contact_person,
         :updated_by,
-        :update_date_time,
+        :updated_date_time,
         :approval_level
     );"""
     return text(sql)
@@ -641,7 +641,7 @@ def insert_proc_po_dtl():
         active,
         indent_dtl_id,
         updated_by,
-        update_date_time,
+        updated_date_time,
         state
     ) VALUES (
         :po_id,
@@ -658,7 +658,7 @@ def insert_proc_po_dtl():
         :active,
         :indent_dtl_id,
         :updated_by,
-        :update_date_time,
+        :updated_date_time,
         :state
     );"""
     return text(sql)
@@ -737,7 +737,7 @@ def update_proc_po():
         contact_no = :contact_no,
         contact_person = :contact_person,
         updated_by = :updated_by,
-        update_date_time = :update_date_time,
+        updated_date_time = :updated_date_time,
         po_no = COALESCE(:po_no, po_no),
         status_id = COALESCE(:status_id, status_id),
         approval_level = :approval_level
@@ -750,7 +750,7 @@ def delete_proc_po_dtl():
     sql = """UPDATE proc_po_dtl SET
         active = 0,
         updated_by = :updated_by,
-        update_date_time = :update_date_time
+        updated_date_time = :updated_date_time
     WHERE po_id = :po_id;"""
     return text(sql)
 
@@ -813,7 +813,7 @@ def get_po_by_id_query():
         pp.status_id,
         sm.status_name,
         pp.updated_by,
-        pp.update_date_time,
+        pp.updated_date_time AS update_date_time,
         CASE 
             WHEN pp.status_id = 20 THEN pp.approval_level 
             ELSE NULL 
@@ -959,7 +959,7 @@ def update_po_status():
         status_id = :status_id,
         approval_level = :approval_level,
         updated_by = :updated_by,
-        update_date_time = :update_date_time,
+        updated_date_time = :updated_date_time,
         po_no = CASE 
             WHEN :po_no IS NOT NULL THEN :po_no 
             ELSE po_no 

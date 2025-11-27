@@ -114,6 +114,18 @@ async def get_po_setup_1(
 		co_config_result = db.execute(co_config_query, {"co_id": co_id}).fetchone()
 		co_config = dict(co_config_result._mapping) if co_config_result else {}
 
+		indent_required_value = co_config.get("indent_required") if co_config else None
+		if isinstance(indent_required_value, str):
+			indent_required_enabled = indent_required_value.strip().lower() not in {"0", "false", "no", ""}
+		else:
+			indent_required_enabled = bool(indent_required_value)
+
+		item_groups = []
+		if not indent_required_enabled:
+			itemgrp_query = get_item_group_drodown(co_id=co_id)
+			itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
+			item_groups = [dict(r._mapping) for r in itemgrp_result]
+
 		# Company branch addresses (for billing and shipping)
 		# Filter by co_id only (not branch_id) to show all company branch addresses
 		branch_addresses_query = get_company_branch_addresses(co_id=co_id, branch_id=None)
@@ -142,6 +154,7 @@ async def get_po_setup_1(
 			"expense_types": expense_types,
 			"co_config": co_config,
 			"branch_addresses": branch_addresses,  # Company branch addresses for billing and shipping
+			"item_groups": item_groups,
 		}
 	except HTTPException:
 		raise
@@ -444,7 +457,7 @@ async def create_po(
 		supplier_branch_id = to_int(payload.get("supplier_branch"), "supplier_branch", required=True)
 		billing_branch_id = to_int(payload.get("billing_address"), "billing_address", required=True)
 		shipping_branch_id = to_int(payload.get("shipping_address"), "shipping_address", required=True)
-		project_id = to_int(payload.get("project"), "project", required=True)
+		project_id = to_int(payload.get("project"), "project")
 		
 		date_str = payload.get("date")
 		if not date_str:
@@ -465,7 +478,14 @@ async def create_po(
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
 		# Get supplier and shipping state IDs for GST calculation
-		supplier_branch_query = text("SELECT state_id FROM party_branch_mst WHERE branch_id = :branch_id")
+		supplier_branch_query = text(
+			"""
+			SELECT cm.state_id
+			FROM party_branch_mst pbm
+			LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+			WHERE pbm.party_mst_branch_id = :branch_id
+			"""
+		)
 		supplier_result = db.execute(supplier_branch_query, {"branch_id": supplier_branch_id}).fetchone()
 		supplier_state_id = supplier_result[0] if supplier_result else None
 		
@@ -665,7 +685,7 @@ async def create_po(
 			"contact_no": contact_no,
 			"contact_person": contact_person,
 			"updated_by": updated_by,
-			"update_date_time": created_at,
+			"updated_date_time": created_at,
 			"approval_level": None,
 		}
 		
@@ -692,7 +712,7 @@ async def create_po(
 				"active": 1,
 				"indent_dtl_id": item["indent_dtl_id"],
 				"updated_by": updated_by,
-				"update_date_time": created_at,
+				"updated_date_time": created_at,
 				"state": 1,
 			}
 			result = db.execute(detail_query, detail_params)
@@ -1030,7 +1050,7 @@ async def update_po(
 		supplier_branch_id = to_int(payload.get("supplier_branch"), "supplier_branch", required=True)
 		billing_branch_id = to_int(payload.get("billing_address"), "billing_address", required=True)
 		shipping_branch_id = to_int(payload.get("shipping_address"), "shipping_address", required=True)
-		project_id = to_int(payload.get("project"), "project", required=True)
+		project_id = to_int(payload.get("project"), "project")
 		
 		date_str = payload.get("date")
 		if not date_str:
@@ -1051,7 +1071,14 @@ async def update_po(
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
 		# Get supplier and shipping state IDs for GST calculation
-		supplier_branch_query = text("SELECT state_id FROM party_branch_mst WHERE branch_id = :branch_id")
+		supplier_branch_query = text(
+			"""
+			SELECT cm.state_id
+			FROM party_branch_mst pbm
+			LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+			WHERE pbm.party_mst_branch_id = :branch_id
+			"""
+		)
 		supplier_result = db.execute(supplier_branch_query, {"branch_id": supplier_branch_id}).fetchone()
 		supplier_state_id = supplier_result[0] if supplier_result else None
 		
@@ -1252,7 +1279,7 @@ async def update_po(
 			"contact_no": contact_no,
 			"contact_person": contact_person,
 			"updated_by": updated_by,
-			"update_date_time": updated_at,
+			"updated_date_time": updated_at,
 			"po_no": existing_po_no,
 			"status_id": existing_status_id,
 			"approval_level": None,
@@ -1265,7 +1292,7 @@ async def update_po(
 		db.execute(delete_detail_query, {
 			"po_id": po_id,
 			"updated_by": updated_by,
-			"update_date_time": updated_at,
+			"updated_date_time": updated_at,
 		})
 		
 		# Delete existing GST records
@@ -1294,7 +1321,7 @@ async def update_po(
 				"active": 1,
 				"indent_dtl_id": item["indent_dtl_id"],
 				"updated_by": updated_by,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"state": 1,
 			}
 			result = db.execute(detail_query, detail_params)
@@ -1366,6 +1393,24 @@ async def update_po(
 		)
 
 
+@router.post("/save_po")
+async def save_po(
+	payload: dict,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""Create or update a PO from the new UI using a single endpoint."""
+	try:
+		if payload.get("id"):
+			return await update_po(payload, db=db, token_data=token_data)
+		return await create_po(payload, db=db, token_data=token_data)
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.exception("Error saving PO (create/update)")
+		raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== APPROVAL FUNCTIONS ====================
 
 def process_po_approval_with_value(
@@ -1399,7 +1444,7 @@ def process_po_approval_with_value(
 					"status_id": 20,  # Pending Approval
 					"approval_level": 1,  # Start at level 1
 					"updated_by": user_id,
-					"update_date_time": updated_at,
+					"updated_date_time": updated_at,
 					"po_no": None,  # Don't update po_no
 				}
 			)
@@ -1479,7 +1524,7 @@ def process_po_approval_with_value(
 				"status_id": new_status_id,
 				"approval_level": new_approval_level,
 				"updated_by": user_id,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"po_no": None,  # Don't update po_no
 			}
 		)
@@ -1670,7 +1715,7 @@ async def open_po(
 			"status_id": 1,  # Open
 			"approval_level": None,  # Reset approval level
 			"updated_by": user_id,
-			"update_date_time": updated_at,
+			"updated_date_time": updated_at,
 			"po_no": new_po_no if new_po_no is not None else None,  # Pass None to keep existing, or new value
 		}
 		
@@ -1749,7 +1794,7 @@ async def cancel_draft_po(
 				"status_id": 6,  # Cancelled
 				"approval_level": None,
 				"updated_by": user_id,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"po_no": None,  # Don't update po_no
 			}
 		)
@@ -1827,7 +1872,7 @@ async def reopen_po(
 				"status_id": new_status_id,
 				"approval_level": None,
 				"updated_by": user_id,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"po_no": None,  # Don't update po_no
 			}
 		)
@@ -1901,7 +1946,7 @@ async def send_po_for_approval(
 				"status_id": 20,  # Pending Approval
 				"approval_level": 1,  # Start at level 1
 				"updated_by": user_id,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"po_no": None,  # Don't update po_no
 			}
 		)
@@ -1973,7 +2018,7 @@ async def reject_po(
 				"status_id": 4,  # Rejected
 				"approval_level": None,
 				"updated_by": user_id,
-				"update_date_time": updated_at,
+				"updated_date_time": updated_at,
 				"po_no": None,  # Don't update po_no
 			}
 		)

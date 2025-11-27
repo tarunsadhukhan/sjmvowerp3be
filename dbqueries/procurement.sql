@@ -457,7 +457,7 @@ CREATE TABLE proc_price_enquiry_response_dtl (
 CREATE TABLE proc_po (
     po_id INT PRIMARY KEY AUTO_INCREMENT,
     updated_by INT,
-    update_date_time DATETIME,
+    updated_date_time DATETIME,
     credit_days INT,
     delivery_instructions VARCHAR(255),
     expected_delivery_days INT,
