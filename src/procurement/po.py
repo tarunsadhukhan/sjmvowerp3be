@@ -329,6 +329,7 @@ async def get_po_table(
 					"po_date": po_date,
 					"supplier_name": mapped.get("supp_name") or "",
 					"po_value": po_value,
+					"branch_id": mapped.get("branch_id"),
 					"branch_name": mapped.get("branch_name") or "",
 					"project_name": mapped.get("project_name") or None,
 					"status": mapped.get("status_name") or "Pending",

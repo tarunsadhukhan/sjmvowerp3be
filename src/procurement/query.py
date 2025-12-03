@@ -184,6 +184,7 @@ def get_po_table_query():
         pp.po_date,
         pm.supp_name,
         pp.total_amount AS po_value,
+        pp.branch_id,
         bm.branch_name,
         prjm.prj_name AS project_name,
         sm.status_name,
