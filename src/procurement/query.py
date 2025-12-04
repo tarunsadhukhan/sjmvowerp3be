@@ -533,6 +533,7 @@ def get_indent_line_items_for_po(indent_id: int):
         pid.indent_dtl_id,
         pi.indent_id,
         pi.indent_no,
+        pi.expense_type_id,
         pid.item_id,
         im.item_code,
         im.item_name,
@@ -591,7 +592,8 @@ def insert_proc_po():
         contact_person,
         updated_by,
         updated_date_time,
-        approval_level
+        approval_level,
+        expense_type_id
     ) VALUES (
         :credit_days,
         :delivery_instructions,
@@ -620,7 +622,8 @@ def insert_proc_po():
         :contact_person,
         :updated_by,
         :updated_date_time,
-        :approval_level
+        :approval_level,
+        :expense_type_id
     );"""
     return text(sql)
 
@@ -741,7 +744,8 @@ def update_proc_po():
         updated_date_time = :updated_date_time,
         po_no = COALESCE(:po_no, po_no),
         status_id = COALESCE(:status_id, status_id),
-        approval_level = :approval_level
+        approval_level = :approval_level,
+        expense_type_id = :expense_type_id
     WHERE po_id = :po_id;"""
     return text(sql)
 
@@ -818,7 +822,8 @@ def get_po_by_id_query():
         CASE 
             WHEN pp.status_id = 20 THEN pp.approval_level 
             ELSE NULL 
-        END AS approval_level
+        END AS approval_level,
+        pp.expense_type_id
     FROM proc_po AS pp
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id

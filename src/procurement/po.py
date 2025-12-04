@@ -237,6 +237,7 @@ async def get_indent_line_items(
 
 		return {
 			"indent_id": indent_id,
+			"expenseType": str(line_items[0].get("expense_type_id", "")) if line_items and line_items[0].get("expense_type_id") else "",
 			"line_items": line_items,
 		}
 	except HTTPException:
@@ -688,6 +689,7 @@ async def create_po(
 			"updated_by": updated_by,
 			"updated_date_time": created_at,
 			"approval_level": None,
+			"expense_type_id": expense_type_id,
 		}
 		
 		result = db.execute(insert_header_query, header_params)
@@ -929,19 +931,20 @@ async def get_po_by_id(
 			"billingState": header.get("billing_state_name") if header.get("billing_state_name") else None,
 			"shippingAddress": str(header.get("shipping_branch_id", "")) if header.get("shipping_branch_id") else "",
 			"shippingState": header.get("shipping_state_name") if header.get("shipping_state_name") else None,
-		"project": str(header.get("project_id", "")) if header.get("project_id") else "",
-		"creditTerm": header.get("credit_days"),
+			"project": str(header.get("project_id", "")) if header.get("project_id") else "",
+			"expenseType": str(header.get("expense_type_id", "")) if header.get("expense_type_id") else "",
+			"creditTerm": header.get("credit_days"),
 			"deliveryTimeline": header.get("expected_delivery_days"),
-			"contactPerson": header.get("contact_person"),
-			"contactNo": header.get("contact_no"),
-			"footerNote": header.get("footer_notes"),
-			"internalNote": header.get("remarks"),
-			"termsConditions": header.get("terms_conditions"),
-			"netAmount": float(header.get("net_amount", 0)) if header.get("net_amount") else 0,
-			"totalAmount": float(header.get("total_amount", 0)) if header.get("total_amount") else 0,
-			"advancePercentage": float(header.get("advance_value", 0)) if header.get("advance_value") else 0,
-			"advanceAmount": float(header.get("advance_amount", 0)) if header.get("advance_amount") else 0,
-			"status": header.get("status_name") if header.get("status_name") else None,
+			"contactPerson": header.get("contact_person") or "",
+			"contactNo": header.get("contact_no") or "",
+			"footerNote": header.get("footer_notes") or "",
+			"internalNote": header.get("remarks") or "",
+			"termsConditions": header.get("terms_conditions") or "",
+			"netAmount": float(header.get("net_amount") or 0),
+			"totalAmount": float(header.get("total_amount") or 0),
+			"advancePercentage": float(header.get("advance_value") or 0),
+			"advanceAmount": float(header.get("advance_amount") or 0),
+			"status": header.get("status_name") or "",
 			"statusId": header.get("status_id"),
 			"approvalLevel": approval_level,
 			"updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
@@ -1068,6 +1071,7 @@ async def update_po(
 		footer_notes = payload.get("footer_note", "").strip() or None
 		remarks = payload.get("internal_note", "").strip() or None
 		terms_conditions = payload.get("terms_conditions", "").strip() or None
+		expense_type_id = to_int(payload.get("expense_type"), "expense_type")
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
@@ -1282,13 +1286,11 @@ async def update_po(
 			"updated_by": updated_by,
 			"updated_date_time": updated_at,
 			"po_no": existing_po_no,
-			"status_id": existing_status_id,
+			"status_id": None,
 			"approval_level": None,
+			"expense_type_id": expense_type_id,
 		}
-		
 		db.execute(update_header_query, header_params)
-		
-		# Soft delete existing line items
 		delete_detail_query = delete_proc_po_dtl()
 		db.execute(delete_detail_query, {
 			"po_id": po_id,

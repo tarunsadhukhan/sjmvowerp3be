@@ -484,6 +484,7 @@ CREATE TABLE proc_po (
     contact_no VARCHAR(25),
     contact_person VARCHAR(30),
     approval_level INT,
+    expense_type_id INT,
     FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
     FOREIGN KEY (status_id) REFERENCES status_mst(status_id)
     -- Add other FKs as needed for project_id, supplier_id, etc.
