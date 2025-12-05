@@ -476,6 +476,7 @@ async def create_po(
 		footer_notes = payload.get("footer_note", "").strip() or None
 		remarks = payload.get("internal_note", "").strip() or None
 		terms_conditions = payload.get("terms_conditions", "").strip() or None
+		expense_type_id = to_int(payload.get("expense_type"), "expense_type")
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
