@@ -1468,15 +1468,17 @@ def process_po_approval_with_value(
 		
 		# Get user's approval level and limits
 		user_level_query = get_user_approval_level()
+		logger.info(f"Checking approval permission: menu_id={menu_id}, branch_id={branch_id}, user_id={user_id}")
 		user_level_result = db.execute(
 			user_level_query,
 			{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
 		).fetchone()
 		
 		if not user_level_result:
+			logger.warning(f"No approval permission found for menu_id={menu_id}, branch_id={branch_id}, user_id={user_id}")
 			raise HTTPException(
 				status_code=403,
-				detail="User does not have approval permission for this menu and branch."
+				detail=f"User does not have approval permission for this menu and branch. (menu_id={menu_id}, branch_id={branch_id}, user_id={user_id})"
 			)
 		
 		user_data = dict(user_level_result._mapping)
@@ -2039,5 +2041,125 @@ async def reject_po(
 	except Exception as e:
 		db.rollback()
 		logger.exception("Error rejecting PO")
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clone_po")
+async def clone_po(
+	payload: dict,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""Clone a PO (create a new PO with same details as the original)."""
+	try:
+		po_id = payload.get("po_id")
+		branch_id = payload.get("branch_id")
+		
+		if not po_id:
+			raise HTTPException(status_code=400, detail="po_id is required")
+		if not branch_id:
+			raise HTTPException(status_code=400, detail="branch_id is required")
+		
+		try:
+			po_id = int(po_id)
+			branch_id = int(branch_id)
+		except (TypeError, ValueError):
+			raise HTTPException(status_code=400, detail="Invalid po_id or branch_id")
+		
+		user_id = int(token_data.get("user_id"))
+		
+		# Get original PO header
+		po_query = get_po_header_query()
+		po_result = db.execute(po_query, {"po_id": po_id}).fetchone()
+		if not po_result:
+			raise HTTPException(status_code=404, detail="PO not found")
+		
+		original = dict(po_result._mapping)
+		
+		# Get original PO line items
+		dtl_query = get_po_dtl_query()
+		dtl_results = db.execute(dtl_query, {"po_id": po_id}).fetchall()
+		
+		# Create new PO header (as Draft, no PO number yet)
+		created_at = datetime.utcnow()
+		new_po_no = None  # Will be generated when opened/approved
+		
+		insert_header = insert_proc_po()
+		header_params = {
+			"credit_days": original.get("credit_days"),
+			"delivery_instructions": original.get("delivery_instructions"),
+			"expected_delivery_days": original.get("expected_delivery_days"),
+			"footer_notes": original.get("footer_notes"),
+			"po_date": datetime.utcnow().date(),  # Use current date
+			"po_no": new_po_no,
+			"remarks": original.get("remarks"),
+			"delivery_mode": original.get("delivery_mode"),
+			"terms_conditions": original.get("terms_conditions"),
+			"branch_id": branch_id,
+			"project_id": original.get("project_id"),
+			"supplier_id": original.get("supplier_id"),
+			"supplier_branch_id": original.get("supplier_branch_id"),
+			"billing_branch_id": original.get("billing_branch_id"),
+			"shipping_branch_id": original.get("shipping_branch_id"),
+			"total_amount": original.get("total_amount") or 0,
+			"net_amount": original.get("net_amount") or 0,
+			"status_id": 21,  # Drafted
+			"advance_type": original.get("advance_type"),
+			"advance_value": original.get("advance_value") or 0,
+			"advance_amount": original.get("advance_amount") or 0,
+			"contact_no": original.get("contact_no"),
+			"contact_person": original.get("contact_person"),
+			"created_by": user_id,
+			"created_date_time": created_at,
+			"updated_by": user_id,
+			"updated_date_time": created_at,
+			"approval_level": None,
+		}
+		
+		result = db.execute(insert_header, header_params)
+		new_po_id = result.lastrowid
+		
+		# Clone line items (without indent reference since it's a new PO)
+		detail_query = insert_proc_po_dtl()
+		for dtl_row in dtl_results:
+			dtl = dict(dtl_row._mapping)
+			detail_params = {
+				"po_id": new_po_id,
+				"item_id": dtl.get("item_id"),
+				"hsn_code": dtl.get("hsn_code"),
+				"item_make_id": dtl.get("item_make_id"),
+				"qty": dtl.get("qty"),
+				"rate": dtl.get("rate"),
+				"uom_id": dtl.get("uom_id"),
+				"remarks": dtl.get("remarks"),
+				"discount_mode": dtl.get("discount_mode"),
+				"discount_value": dtl.get("discount_value"),
+				"discount_amount": dtl.get("discount_amount"),
+				"created_by": user_id,
+				"created_date_time": created_at,
+				"updated_by": user_id,
+				"updated_date_time": created_at,
+				"indent_dtl_id": None,  # Don't copy indent reference
+				"i_tax_percentage": dtl.get("i_tax_percentage"),
+				"s_tax_percentage": dtl.get("s_tax_percentage"),
+				"c_tax_percentage": dtl.get("c_tax_percentage"),
+				"tax_percentage": dtl.get("tax_percentage"),
+				"tax_amount": dtl.get("tax_amount"),
+			}
+			db.execute(detail_query, detail_params)
+		
+		db.commit()
+		
+		return {
+			"status": "success",
+			"id": str(new_po_id),
+			"message": "PO cloned successfully.",
+		}
+	except HTTPException:
+		db.rollback()
+		raise
+	except Exception as e:
+		db.rollback()
+		logger.exception("Error cloning PO")
 		raise HTTPException(status_code=500, detail=str(e))
 
