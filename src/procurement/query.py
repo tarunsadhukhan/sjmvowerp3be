@@ -186,9 +186,11 @@ def get_po_table_query():
         pp.total_amount AS po_value,
         pp.branch_id,
         bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
         prjm.prj_name AS project_name,
-        sm.status_name,
-        bm.co_id
+        sm.status_name
     FROM proc_po AS pp
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id

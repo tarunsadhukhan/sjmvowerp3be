@@ -323,10 +323,28 @@ async def get_po_table(
 				except (TypeError, ValueError):
 					po_value = None
 			
+			# Format po_no if it exists
+			raw_po_no = mapped.get("po_no")
+			formatted_po_no = ""
+			if raw_po_no is not None and raw_po_no != 0:
+				try:
+					po_no_int = int(raw_po_no) if raw_po_no else None
+					co_prefix = mapped.get("co_prefix")
+					branch_prefix = mapped.get("branch_prefix")
+					formatted_po_no = format_po_no(
+						po_no=po_no_int,
+						co_prefix=co_prefix,
+						branch_prefix=branch_prefix,
+						po_date=po_date_obj,
+					)
+				except Exception as e:
+					logger.exception("Error formatting PO number in list, using raw value")
+					formatted_po_no = str(raw_po_no) if raw_po_no else ""
+			
 			data.append(
 				{
 					"po_id": mapped.get("po_id"),
-					"po_no": mapped.get("po_no") or "",
+					"po_no": formatted_po_no,
 					"po_date": po_date,
 					"supplier_name": mapped.get("supp_name") or "",
 					"po_value": po_value,
