@@ -961,6 +961,65 @@ def get_po_with_approval_info():
     return text(sql)
 
 
+def get_po_header_query():
+    """Get PO header by ID for cloning (simplified, no co_id filter)."""
+    sql = """SELECT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pp.branch_id,
+        pp.supplier_id,
+        pp.supplier_branch_id,
+        pp.billing_branch_id,
+        pp.shipping_branch_id,
+        pp.project_id,
+        pp.credit_days,
+        pp.expected_delivery_days,
+        pp.contact_person,
+        pp.contact_no,
+        pp.footer_notes,
+        pp.remarks,
+        pp.terms_conditions,
+        pp.delivery_mode,
+        pp.delivery_instructions,
+        pp.total_amount,
+        pp.net_amount,
+        pp.advance_type,
+        pp.advance_value,
+        pp.advance_amount,
+        pp.status_id,
+        pp.expense_type_id
+    FROM proc_po AS pp
+    WHERE pp.po_id = :po_id;"""
+    return text(sql)
+
+
+def get_po_dtl_query():
+    """Get PO line items by PO ID for cloning."""
+    sql = """SELECT
+        pod.po_dtl_id,
+        pod.po_id,
+        pod.item_id,
+        pod.item_group_id,
+        pod.item_make_id,
+        pod.item_code,
+        pod.item_name,
+        pod.quantity,
+        pod.uom_id,
+        pod.rate,
+        pod.amount,
+        pod.discount_type,
+        pod.discount_value,
+        pod.discount_amount,
+        pod.net_amount,
+        pod.remarks,
+        pod.department_id,
+        pod.indent_dtl_id
+    FROM proc_po_dtl AS pod
+    WHERE pod.po_id = :po_id;"""
+    return text(sql)
+
+
 def update_po_status():
     """Update PO status and approval level. Optionally update po_no."""
     sql = """UPDATE proc_po SET
