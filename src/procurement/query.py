@@ -224,6 +224,70 @@ def get_po_table_count_query():
     return text(sql)
 
 
+def get_inward_table_query():
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pm.party_id AS supplier_id,
+        pm.supp_name AS supplier_name,
+        sm.status_name
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = (
+        SELECT DISTINCT ppd.po_id 
+        FROM proc_inward_dtl AS pid 
+        LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+        WHERE pid.inward_id = pi.inward_id
+        LIMIT 1
+    )
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY pi.inward_date DESC, pi.inward_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_inward_table_count_query():
+    sql = """SELECT COUNT(1) AS total
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = (
+        SELECT DISTINCT ppd.po_id 
+        FROM proc_inward_dtl AS pid 
+        LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+        WHERE pid.inward_id = pi.inward_id
+        LIMIT 1
+    )
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
 def get_indent_by_id_query():
     sql = """SELECT
         pi.indent_id,

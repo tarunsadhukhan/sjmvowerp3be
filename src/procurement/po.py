@@ -189,6 +189,16 @@ async def get_po_setup_2(
 		except Exception:
 			raise HTTPException(status_code=400, detail="Invalid item_group")
 
+		# Get item group info (code and name)
+		item_group_query = text("""
+			SELECT item_grp_code, item_grp_name
+			FROM item_grp_mst
+			WHERE item_grp_id = :item_group_id
+		""")
+		item_group_result = db.execute(item_group_query, {"item_group_id": item_group_id}).fetchone()
+		item_grp_code = item_group_result.item_grp_code if item_group_result else None
+		item_grp_name = item_group_result.item_grp_name if item_group_result else None
+
 		# Get items purchasable in this group
 		items_query = get_item_by_group_id_purchaseable(item_group_id=item_group_id)
 		items_result = db.execute(items_query, {"item_group_id": item_group_id}).fetchall()
@@ -205,6 +215,8 @@ async def get_po_setup_2(
 		uoms = [dict(r._mapping) for r in uoms_result]
 
 		return {
+			"item_grp_code": item_grp_code,
+			"item_grp_name": item_grp_name,
 			"items": items,
 			"makes": makes,
 			"uoms": uoms,
