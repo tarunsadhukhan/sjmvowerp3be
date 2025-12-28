@@ -7,7 +7,14 @@ from src.authorization.utils import get_current_user_with_refresh
 from src.procurement.query import (
     get_inward_table_query,
     get_inward_table_count_query,
+    get_suppliers_with_party_type_1,
+    get_supplier_branches,
+    get_item_by_group_id_purchaseable,
+    get_item_make_by_group_id,
+    get_item_uom_by_group_id,
 )
+from src.masters.query import get_item_group_drodown, get_branch_list
+from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import calculate_financial_year
 
 logger = logging.getLogger(__name__)
@@ -165,6 +172,124 @@ async def get_inward_table(
         logger.exception("Error fetching Inward table")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+
+@router.get("/get_inward_setup_1")
+async def get_inward_setup_1(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    branch_id: int | None = None,
+    co_id: int | None = None,
+):
+    """Return suppliers, item_groups, and co_config for inward/GRN creation."""
+    try:
+        # Get query parameters
+        q_branch_id = request.query_params.get("branch_id")
+        q_co_id = request.query_params.get("co_id")
+        if q_branch_id is not None:
+            try:
+                branch_id = int(q_branch_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid branch_id")
+        if q_co_id is not None:
+            try:
+                co_id = int(q_co_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        if co_id is None:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        # Branches
+        branch_ids_list = [branch_id] if branch_id is not None else None
+        branchquery = get_branch_list(branch_ids=branch_ids_list) if branch_ids_list else get_branch_list()
+        branch_result = db.execute(branchquery, {"branch_ids": branch_ids_list} if branch_ids_list else {}).fetchall()
+        branches = [dict(r._mapping) for r in branch_result]
+
+        # Suppliers (party_type_id contains 1)
+        supplier_query = get_suppliers_with_party_type_1(co_id=co_id)
+        supplier_result = db.execute(supplier_query, {"co_id": co_id}).fetchall()
+        suppliers = [dict(r._mapping) for r in supplier_result]
+
+        # Add branches to each supplier
+        for supplier in suppliers:
+            supplier_id = supplier.get("party_id")
+            if supplier_id:
+                try:
+                    supplier_branch_query = get_supplier_branches(party_id=supplier_id)
+                    supplier_branch_result = db.execute(supplier_branch_query, {"party_id": supplier_id}).fetchall()
+                    supplier["branches"] = [dict(r._mapping) for r in supplier_branch_result]
+                except Exception as e:
+                    logger.exception(f"Error fetching branches for supplier {supplier_id}")
+                    supplier["branches"] = []
+
+        # Item groups
+        itemgrp_query = get_item_group_drodown(co_id=co_id)
+        itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
+        item_groups = [dict(r._mapping) for r in itemgrp_result]
+
+        # Co config
+        co_config_query = get_co_config_by_id_query(co_id)
+        co_config_result = db.execute(co_config_query, {"co_id": co_id}).fetchone()
+        co_config = dict(co_config_result._mapping) if co_config_result else {}
+
+        return {
+            "branches": branches,
+            "suppliers": suppliers,
+            "item_groups": item_groups,
+            "co_config": co_config,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching inward setup 1")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/get_inward_setup_2")
+async def get_inward_setup_2(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    item_group: int | None = None,
+):
+    """Return items, makes, and UOMs for a given item group (for manual line item entry)."""
+    try:
+        q_item_group = request.query_params.get("item_group")
+        if q_item_group is not None:
+            try:
+                item_group = int(q_item_group)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid item_group")
+
+        if item_group is None:
+            raise HTTPException(status_code=400, detail="item_group is required")
+
+        # Items for the group
+        items_query = get_item_by_group_id_purchaseable(item_group_id=item_group)
+        items_result = db.execute(items_query, {"item_group_id": item_group}).fetchall()
+        items = [dict(r._mapping) for r in items_result]
+
+        # Makes for the group
+        makes_query = get_item_make_by_group_id(item_group_id=item_group)
+        makes_result = db.execute(makes_query, {"item_group_id": item_group}).fetchall()
+        makes = [dict(r._mapping) for r in makes_result]
+
+        # UOMs for the group
+        uom_query = get_item_uom_by_group_id(item_group_id=item_group)
+        uom_result = db.execute(uom_query, {"item_group_id": item_group}).fetchall()
+        uoms = [dict(r._mapping) for r in uom_result]
+
+        return {
+            "items": items,
+            "makes": makes,
+            "uoms": uoms,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching inward setup 2")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 # from fastapi import Depends, Request, HTTPException, APIRouter
