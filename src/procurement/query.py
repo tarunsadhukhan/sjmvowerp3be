@@ -1097,3 +1097,101 @@ def update_po_status():
         END
     WHERE po_id = :po_id;"""
     return text(sql)
+
+
+def get_approved_pos_by_supplier_query():
+    """
+    Get approved POs for a specific supplier that have pending items to receive.
+    Only returns POs with status_id = 3 (Approved) that still have line items 
+    with pending quantities (ordered qty - received qty > 0).
+    """
+    sql = """SELECT DISTINCT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pp.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        pp.supplier_id,
+        pm.supp_name AS supplier_name,
+        pm.supp_code AS supplier_code,
+        pp.status_id,
+        sm.status_name,
+        pp.total_amount,
+        pp.net_amount,
+        pp.remarks,
+        cm.co_prefix
+    FROM proc_po pp
+    INNER JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    INNER JOIN party_mst pm ON pm.party_id = pp.supplier_id
+    LEFT JOIN status_mst sm ON sm.status_id = pp.status_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    WHERE pp.supplier_id = :supplier_id
+        AND pp.status_id = 3  -- Approved status
+        AND EXISTS (
+            SELECT 1 FROM proc_po_dtl pod
+            LEFT JOIN (
+                SELECT po_dtl_id, COALESCE(SUM(inward_qty), 0) as received_qty
+                FROM proc_inward_dtl
+                WHERE active = 1
+                GROUP BY po_dtl_id
+            ) recv ON recv.po_dtl_id = pod.po_dtl_id
+            WHERE pod.po_id = pp.po_id
+                AND pod.active = 1
+                AND (pod.qty - COALESCE(recv.received_qty, 0)) > 0
+        )
+        AND (:branch_id IS NULL OR pp.branch_id = :branch_id)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    ORDER BY pp.po_date DESC, pp.po_no DESC;"""
+    return text(sql)
+
+
+def get_po_line_items_for_inward_query():
+    """
+    Get PO line items for inward/GRN entry with pending quantities.
+    Calculates pending qty as (ordered_qty - received_qty).
+    Only returns items with pending_qty > 0.
+    """
+    sql = """SELECT
+        pod.po_dtl_id,
+        pod.po_id,
+        pp.po_no,
+        pp.po_date,
+        pod.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id AS item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pod.item_make_id,
+        imk.item_make_name,
+        pod.qty AS ordered_qty,
+        pod.uom_id,
+        um.uom_name,
+        pod.rate,
+        pod.remarks,
+        im.tax_percentage,
+        COALESCE(recv.received_qty, 0) AS received_qty,
+        (pod.qty - COALESCE(recv.received_qty, 0)) AS pending_qty,
+        (pod.qty * pod.rate) AS amount,
+        bm.branch_prefix,
+        cm.co_prefix
+    FROM proc_po_dtl pod
+    INNER JOIN proc_po pp ON pp.po_id = pod.po_id
+    INNER JOIN item_mst im ON im.item_id = pod.item_id
+    LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make imk ON imk.item_make_id = pod.item_make_id
+    LEFT JOIN uom_mst um ON um.uom_id = pod.uom_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    LEFT JOIN (
+        SELECT po_dtl_id, COALESCE(SUM(inward_qty), 0) as received_qty
+        FROM proc_inward_dtl
+        WHERE active = 1
+        GROUP BY po_dtl_id
+    ) recv ON recv.po_dtl_id = pod.po_dtl_id
+    WHERE pod.po_id = :po_id
+        AND pod.active = 1
+        AND (pod.qty - COALESCE(recv.received_qty, 0)) > 0
+    ORDER BY pod.po_dtl_id;"""
+    return text(sql)

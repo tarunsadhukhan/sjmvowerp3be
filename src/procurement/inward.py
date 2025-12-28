@@ -12,6 +12,8 @@ from src.procurement.query import (
     get_item_by_group_id_purchaseable,
     get_item_make_by_group_id,
     get_item_uom_by_group_id,
+    get_approved_pos_by_supplier_query,
+    get_po_line_items_for_inward_query,
 )
 from src.masters.query import get_item_group_drodown, get_branch_list
 from src.common.companyAdmin.query import get_co_config_by_id_query
@@ -289,6 +291,195 @@ async def get_inward_setup_2(
         raise
     except Exception as e:
         logger.exception("Error fetching inward setup 2")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/get_approved_pos_by_supplier")
+async def get_approved_pos_by_supplier(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    supplier_id: int | None = None,
+    branch_id: int | None = None,
+    co_id: int | None = None,
+):
+    """
+    Return approved POs for a specific supplier that have pending items to receive.
+    Used in Inward/GRN creation to select from which PO to receive goods.
+    """
+    try:
+        # Parse query parameters
+        q_supplier_id = request.query_params.get("supplier_id")
+        q_branch_id = request.query_params.get("branch_id")
+        q_co_id = request.query_params.get("co_id")
+
+        if q_supplier_id is not None:
+            try:
+                supplier_id = int(q_supplier_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid supplier_id")
+
+        if q_branch_id is not None:
+            try:
+                branch_id = int(q_branch_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+        if q_co_id is not None:
+            try:
+                co_id = int(q_co_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        if supplier_id is None:
+            raise HTTPException(status_code=400, detail="supplier_id is required")
+
+        params = {
+            "supplier_id": supplier_id,
+            "branch_id": branch_id,
+            "co_id": co_id,
+        }
+
+        query = get_approved_pos_by_supplier_query()
+        rows = db.execute(query, params).fetchall()
+
+        data = []
+        for row in rows:
+            mapped = dict(row._mapping)
+
+            # Format PO date
+            po_date_obj = mapped.get("po_date")
+            po_date_str = ""
+            if po_date_obj:
+                if hasattr(po_date_obj, "isoformat"):
+                    po_date_str = po_date_obj.isoformat()
+                else:
+                    po_date_str = str(po_date_obj)
+
+            # Format PO number
+            raw_po_no = mapped.get("po_no")
+            formatted_po_no = ""
+            if raw_po_no is not None:
+                try:
+                    co_prefix = mapped.get("co_prefix")
+                    branch_prefix = mapped.get("branch_prefix")
+                    formatted_po_no = format_po_no(
+                        po_no=int(raw_po_no) if str(raw_po_no).isdigit() else None,
+                        co_prefix=co_prefix,
+                        branch_prefix=branch_prefix,
+                        po_date=po_date_obj,
+                    )
+                    if not formatted_po_no:
+                        formatted_po_no = str(raw_po_no)
+                except Exception:
+                    formatted_po_no = str(raw_po_no) if raw_po_no else ""
+
+            data.append({
+                "po_id": mapped.get("po_id"),
+                "po_no": formatted_po_no,
+                "po_date": po_date_str,
+                "branch_id": mapped.get("branch_id"),
+                "branch_name": mapped.get("branch_name") or "",
+                "supplier_id": mapped.get("supplier_id"),
+                "supplier_name": mapped.get("supplier_name") or "",
+                "supplier_code": mapped.get("supplier_code") or "",
+                "status_id": mapped.get("status_id"),
+                "status_name": mapped.get("status_name") or "Approved",
+                "total_amount": mapped.get("total_amount"),
+                "net_amount": mapped.get("net_amount"),
+                "remarks": mapped.get("remarks") or "",
+            })
+
+        return {"data": data, "total": len(data)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching approved POs by supplier")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/get_po_line_items")
+async def get_po_line_items(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    po_id: int | None = None,
+):
+    """
+    Return PO line items for inward/GRN entry with pending quantities.
+    Only returns items with pending_qty > 0 (ordered - already received).
+    """
+    try:
+        q_po_id = request.query_params.get("po_id")
+        if q_po_id is not None:
+            try:
+                po_id = int(q_po_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid po_id")
+
+        if po_id is None:
+            raise HTTPException(status_code=400, detail="po_id is required")
+
+        query = get_po_line_items_for_inward_query()
+        rows = db.execute(query, {"po_id": po_id}).fetchall()
+
+        line_items = []
+        for row in rows:
+            mapped = dict(row._mapping)
+
+            # Format PO number
+            raw_po_no = mapped.get("po_no")
+            po_date_obj = mapped.get("po_date")
+            formatted_po_no = ""
+            if raw_po_no is not None:
+                try:
+                    co_prefix = mapped.get("co_prefix")
+                    branch_prefix = mapped.get("branch_prefix")
+                    formatted_po_no = format_po_no(
+                        po_no=int(raw_po_no) if str(raw_po_no).isdigit() else None,
+                        co_prefix=co_prefix,
+                        branch_prefix=branch_prefix,
+                        po_date=po_date_obj,
+                    )
+                    if not formatted_po_no:
+                        formatted_po_no = str(raw_po_no)
+                except Exception:
+                    formatted_po_no = str(raw_po_no) if raw_po_no else ""
+
+            line_items.append({
+                "po_dtl_id": mapped.get("po_dtl_id"),
+                "po_id": mapped.get("po_id"),
+                "po_no": formatted_po_no,
+                "item_id": mapped.get("item_id"),
+                "item_code": mapped.get("item_code") or "",
+                "item_name": mapped.get("item_name") or "",
+                "item_grp_id": mapped.get("item_grp_id"),
+                "item_grp_code": mapped.get("item_grp_code") or "",
+                "item_grp_name": mapped.get("item_grp_name") or "",
+                "item_make_id": mapped.get("item_make_id"),
+                "item_make_name": mapped.get("item_make_name") or "",
+                "ordered_qty": mapped.get("ordered_qty") or 0,
+                "received_qty": mapped.get("received_qty") or 0,
+                "pending_qty": mapped.get("pending_qty") or 0,
+                "uom_id": mapped.get("uom_id"),
+                "uom_name": mapped.get("uom_name") or "",
+                "rate": mapped.get("rate") or 0,
+                "amount": mapped.get("amount") or 0,
+                "remarks": mapped.get("remarks") or "",
+                "tax_percentage": mapped.get("tax_percentage"),
+            })
+
+        return {
+            "po_id": po_id,
+            "line_items": line_items,
+            "total": len(line_items),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching PO line items for inward")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
