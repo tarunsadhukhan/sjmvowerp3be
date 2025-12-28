@@ -148,10 +148,13 @@ async def party_create(
         if co_id is None:
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
-        # derive updated_by from token
-        updated_by = None
+        # derive updated_by from token - required field, default to 0 if not available
+        updated_by = 0
         if token_data and token_data.get("user_id"):
-            updated_by = int(token_data.get("user_id")) if str(token_data.get("user_id")).isdigit() else None
+            try:
+                updated_by = int(token_data.get("user_id"))
+            except (ValueError, TypeError):
+                updated_by = 0
 
         # Build PartyMst
         # normalize party_type into DB format like {3,2}
@@ -218,6 +221,9 @@ async def party_create(
         raise
     except Exception as e:
         db.rollback()
+        import traceback
+        print(f"party_create error: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.post("/party_edit")
@@ -243,10 +249,13 @@ async def party_edit(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid party_id")
 
-        # derive updated_by from token
-        updated_by = None
+        # derive updated_by from token - required field, default to 0 if not available
+        updated_by = 0
         if token_data and token_data.get("user_id"):
-            updated_by = int(token_data.get("user_id")) if str(token_data.get("user_id")).isdigit() else None
+            try:
+                updated_by = int(token_data.get("user_id"))
+            except (ValueError, TypeError):
+                updated_by = 0
 
         # Fetch existing party
         party = db.query(PartyMst).filter(PartyMst.party_id == party_id_int, PartyMst.co_id == int(co_id)).one_or_none()
