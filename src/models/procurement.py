@@ -226,7 +226,7 @@ class ProcInward(Base):
     ewaybill_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     bill_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     ship_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    inspection_check: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    inspection_check: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     inspection_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     inspection_approved_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sr_no: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
