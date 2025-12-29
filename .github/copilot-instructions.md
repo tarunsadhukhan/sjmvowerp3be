@@ -6,7 +6,7 @@ These notes help an AI coding agent get productive quickly in this backend repo 
 - FastAPI app in `src/main.py` that mounts many routers. The item master APIs live under `/api/itemMaster` in `src/masters/items.py`.
 - Multi-tenant DB approach: `src/config/db.py` derives the tenant DB name from request headers (subdomain, x-forwarded-host, referer or explicit `subdomain` header) and constructs a tenant MySQL URL. `get_tenant_db` yields a SQLAlchemy session bound to that tenant DB.
 - Data access: mix of SQLAlchemy ORM models (e.g. `src/masters/models.py`) and raw SQL Text queries in `src/masters/query.py`. Queries use `sqlalchemy.text()` with named bind params (e.g. `:co_id`, `:item_id`).
-- For table structure context, use the SQL prompts under `dbqueries/` (e.g. `procurement.sql`, `usertables.sql`); they describe how each table was generated and help when drafting new queries, models, or schemas.
+- **IMPORTANT**: For table structure context, **prefer using the ORM models** in `src/models/` (e.g., `src/models/procurement.py` for procurement tables like `ProcInward`, `ProcInwardDtl`, `ProcPo`, etc.). These models reflect the **current database schema** and should be the authoritative source for column names and types. The SQL files under `dbqueries/` (e.g., `procurement.sql`, `usertables.sql`) may be **outdated** and should only be used as secondary reference for understanding table relationships or generating initial migrations.
 - Key folders under `src/`:
   - `authorization/` — login flows, JWT refresh helpers, auth routers, and models used for validating users.
   - `common/` — shared logic split by persona (`companyAdmin`, `ctrldskAdmin`, `portal`); utilities here are reused across modules and tenants.

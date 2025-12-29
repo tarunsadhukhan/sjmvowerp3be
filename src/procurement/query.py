@@ -288,6 +288,86 @@ def get_inward_table_count_query():
     return text(sql)
 
 
+def get_inward_by_id_query():
+    """Fetch inward header by inward_id with related branch, supplier, and status."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.challan_no,
+        pi.challan_date,
+        pi.invoice_date,
+        pi.invoice_amount,
+        pi.vehicle_number,
+        pi.driver_name,
+        pi.receipts_remarks AS remarks,
+        pi.project_id,
+        prj.prj_name AS project_name,
+        pi.sr_status AS status_id,
+        sm.status_name,
+        pi.updated_by,
+        pi.updated_date_time,
+        pi.gross_amount,
+        pi.net_amount
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN project_mst AS prj ON prj.project_id = pi.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE pi.inward_id = :inward_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_inward_detail_by_id_query():
+    """Fetch inward line items by inward_id with item and PO details."""
+    sql = """SELECT
+        pid.inward_dtl_id,
+        pid.inward_id,
+        pid.po_dtl_id,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.inward_qty AS quantity,
+        pid.uom_id,
+        um.uom_name,
+        pid.rate,
+        pid.amount,
+        pid.remarks,
+        pid.status_id,
+        bm.branch_prefix,
+        cm.co_prefix
+    FROM proc_inward_dtl AS pid
+    LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    WHERE pid.inward_id = :inward_id
+        AND pid.active = 1
+    ORDER BY pid.inward_dtl_id;"""
+    return text(sql)
+
+
 def get_indent_by_id_query():
     sql = """SELECT
         pi.indent_id,
@@ -1192,4 +1272,86 @@ def get_po_line_items_for_inward_query():
         AND pod.active = 1
         AND (pod.qty - COALESCE(recv.received_qty, 0)) > 0
     ORDER BY pod.po_dtl_id;"""
+    return text(sql)
+
+
+def insert_proc_inward():
+    """Insert a new proc_inward header record."""
+    sql = """INSERT INTO proc_inward (
+    inward_sequence_no,
+    supplier_id,
+    vehicle_number,
+    driver_name,
+    inward_date,
+    despatch_remarks,
+    receipts_remarks,
+    updated_date_time,
+    updated_by,
+    challan_no,
+    challan_date,
+    invoice_amount,
+    invoice_date,
+    branch_id,
+    project_id,
+    gross_amount,
+    net_amount
+) VALUES (
+    :inward_sequence_no,
+    :supplier_id,
+    :vehicle_number,
+    :driver_name,
+    :inward_date,
+    :despatch_remarks,
+    :receipts_remarks,
+    :updated_date_time,
+    :updated_by,
+    :challan_no,
+    :challan_date,
+    :invoice_amount,
+    :invoice_date,
+    :branch_id,
+    :project_id,
+    :gross_amount,
+    :net_amount
+);"""
+    return text(sql)
+
+
+def insert_proc_inward_dtl():
+    """Insert a new proc_inward_dtl line item record."""
+    sql = """INSERT INTO proc_inward_dtl (
+    inward_id,
+    po_dtl_id,
+    item_id,
+    item_make_id,
+    description,
+    remarks,
+    challan_qty,
+    inward_qty,
+    uom_id,
+    rate,
+    amount,
+    warehouse_id,
+    active,
+    status_id,
+    updated_date_time,
+    updated_by
+) VALUES (
+    :inward_id,
+    :po_dtl_id,
+    :item_id,
+    :item_make_id,
+    :description,
+    :remarks,
+    :challan_qty,
+    :inward_qty,
+    :uom_id,
+    :rate,
+    :amount,
+    :warehouse_id,
+    :active,
+    :status_id,
+    :updated_date_time,
+    :updated_by
+);"""
     return text(sql)

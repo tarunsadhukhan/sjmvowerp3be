@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -7,6 +8,8 @@ from src.authorization.utils import get_current_user_with_refresh
 from src.procurement.query import (
     get_inward_table_query,
     get_inward_table_count_query,
+    get_inward_by_id_query,
+    get_inward_detail_by_id_query,
     get_suppliers_with_party_type_1,
     get_supplier_branches,
     get_item_by_group_id_purchaseable,
@@ -14,6 +17,8 @@ from src.procurement.query import (
     get_item_uom_by_group_id,
     get_approved_pos_by_supplier_query,
     get_po_line_items_for_inward_query,
+    insert_proc_inward,
+    insert_proc_inward_dtl,
 )
 from src.masters.query import get_item_group_drodown, get_branch_list
 from src.common.companyAdmin.query import get_co_config_by_id_query
@@ -396,6 +401,368 @@ async def get_po_line_items(
     except Exception as e:
         logger.exception("Error fetching PO line items for inward")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/get_inward_by_id")
+async def get_inward_by_id(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Return inward/GRN details by ID with all line items."""
+    try:
+        # Get query parameters
+        q_inward_id = request.query_params.get("inward_id")
+        q_co_id = request.query_params.get("co_id")
+
+        if q_inward_id is None:
+            raise HTTPException(status_code=400, detail="inward_id is required")
+        if q_co_id is None:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        try:
+            inward_id = int(q_inward_id)
+            co_id = int(q_co_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid inward_id or co_id")
+
+        # Fetch header data
+        header_query = get_inward_by_id_query()
+        header_params = {"inward_id": inward_id, "co_id": co_id}
+        header_result = db.execute(header_query, header_params).fetchone()
+
+        if not header_result:
+            raise HTTPException(status_code=404, detail="Inward not found or access denied")
+
+        header = dict(header_result._mapping)
+
+        # Fetch line items
+        detail_query = get_inward_detail_by_id_query()
+        detail_params = {"inward_id": inward_id}
+        detail_results = db.execute(detail_query, detail_params).fetchall()
+        details = [dict(r._mapping) for r in detail_results]
+
+        # Format dates - frontend expects YYYY-MM-DD format
+        inward_date = header.get("inward_date")
+        if inward_date and hasattr(inward_date, "isoformat"):
+            inward_date_str = inward_date.isoformat()
+        elif inward_date:
+            inward_date_str = str(inward_date)
+        else:
+            inward_date_str = ""
+
+        challan_date = header.get("challan_date")
+        if challan_date and hasattr(challan_date, "isoformat"):
+            challan_date_str = challan_date.isoformat()
+        else:
+            challan_date_str = str(challan_date) if challan_date else None
+
+        invoice_date = header.get("invoice_date")
+        if invoice_date and hasattr(invoice_date, "isoformat"):
+            invoice_date_str = invoice_date.isoformat()
+        else:
+            invoice_date_str = str(invoice_date) if invoice_date else None
+
+        updated_at = header.get("updated_date_time")
+        updated_at_str = None
+        if updated_at:
+            if hasattr(updated_at, "isoformat"):
+                updated_at_str = updated_at.isoformat()
+            else:
+                updated_at_str = str(updated_at)
+
+        # Get status_id
+        status_id = header.get("status_id")
+        branch_id = header.get("branch_id")
+
+        # Format inward number
+        raw_inward_no = header.get("inward_sequence_no")
+        formatted_inward_no = ""
+        if raw_inward_no is not None and raw_inward_no != 0:
+            try:
+                inward_no_int = int(raw_inward_no) if raw_inward_no else None
+                co_prefix = header.get("co_prefix")
+                branch_prefix = header.get("branch_prefix")
+                formatted_inward_no = format_inward_no(
+                    inward_sequence_no=inward_no_int,
+                    co_prefix=co_prefix,
+                    branch_prefix=branch_prefix,
+                    inward_date=inward_date,
+                )
+            except Exception as e:
+                logger.exception("Error formatting inward number, using raw value")
+                formatted_inward_no = str(raw_inward_no) if raw_inward_no else ""
+
+        # Build response matching InwardDetails type from frontend
+        response = {
+            "id": str(header.get("inward_id", "")),
+            "inwardNo": formatted_inward_no,
+            "inwardDate": inward_date_str,
+            "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+            "branchId": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+            "supplier": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
+            "supplierId": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
+            "challanNo": header.get("challan_no") if header.get("challan_no") else None,
+            "challanDate": challan_date_str,
+            "invoiceNo": None,  # No invoice_no column in current schema
+            "invoiceDate": invoice_date_str,
+            "vehicleNo": header.get("vehicle_number") if header.get("vehicle_number") else None,
+            "transporterName": header.get("driver_name") if header.get("driver_name") else None,
+            "remarks": header.get("remarks") if header.get("remarks") else None,
+            "status": header.get("status_name") if header.get("status_name") else None,
+            "statusId": status_id,
+            "approvalLevel": None,  # Not implemented for inward yet
+            "maxApprovalLevel": None,
+            "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
+            "updatedAt": updated_at_str,
+            "lines": [],
+        }
+
+        # Map line items
+        for detail in details:
+            # Format PO number for line item
+            po_no_formatted = ""
+            raw_po_no = detail.get("po_no")
+            if raw_po_no is not None and raw_po_no != 0:
+                try:
+                    po_no_formatted = extract_formatted_po_no(detail)
+                except Exception:
+                    po_no_formatted = str(raw_po_no) if raw_po_no else ""
+
+            line = {
+                "id": str(detail.get("inward_dtl_id", "")) if detail.get("inward_dtl_id") else "",
+                "poDtlId": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else None,
+                "poNo": po_no_formatted,
+                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
+                "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+                "itemCode": detail.get("item_code") if detail.get("item_code") else None,
+                "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
+                "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
+                "rate": float(detail.get("rate", 0)) if detail.get("rate") is not None else 0,
+                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+                "amount": float(detail.get("amount", 0)) if detail.get("amount") is not None else 0,
+                "remarks": detail.get("remarks") if detail.get("remarks") else None,
+            }
+            response["lines"].append(line)
+
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching inward by ID")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/create_inward")
+async def create_inward(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Create a procurement inward/GRN with detail rows."""
+
+    def to_int(value, field_name: str, required: bool = False) -> int | None:
+        if value is None or value == "":
+            if required:
+                raise HTTPException(status_code=400, detail=f"{field_name} is required")
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+    def to_positive_float(value, field_name: str, allow_zero: bool = False) -> float:
+        if value is None or value == "":
+            if allow_zero:
+                return 0.0
+            raise HTTPException(status_code=400, detail=f"{field_name} is required")
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+        if not allow_zero and num <= 0:
+            raise HTTPException(status_code=400, detail=f"{field_name} must be greater than zero")
+        if num < 0:
+            raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
+        return num
+
+    try:
+        # Parse required header fields
+        branch_id = to_int(payload.get("branch"), "branch", required=True)
+        supplier_id = to_int(payload.get("supplier"), "supplier", required=True)
+
+        date_str = payload.get("inward_date")
+        if not date_str:
+            raise HTTPException(status_code=400, detail="inward_date is required")
+        try:
+            inward_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid inward_date format, expected YYYY-MM-DD")
+
+        # Parse optional header fields
+        challan_no = payload.get("challan_no")
+        if challan_no:
+            challan_no = str(challan_no).strip()[:255]
+        
+        challan_date_str = payload.get("challan_date")
+        challan_date = None
+        if challan_date_str:
+            try:
+                challan_date = datetime.strptime(str(challan_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                pass  # Ignore invalid date
+
+        invoice_no = payload.get("invoice_no")
+        invoice_date_str = payload.get("invoice_date")
+        invoice_date = None
+        if invoice_date_str:
+            try:
+                invoice_date = datetime.strptime(str(invoice_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                pass  # Ignore invalid date
+
+        vehicle_no = payload.get("vehicle_no")
+        if vehicle_no:
+            vehicle_no = str(vehicle_no).strip()[:25]
+
+        transporter_name = payload.get("transporter_name")
+        if transporter_name:
+            transporter_name = str(transporter_name).strip()[:30]
+
+        remarks = payload.get("remarks")
+        if remarks:
+            remarks = str(remarks).strip()[:500]
+
+        project_id = to_int(payload.get("project_id"), "project_id")
+
+        # Parse items
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list) or len(raw_items) == 0:
+            raise HTTPException(status_code=400, detail="At least one item row is required")
+
+        updated_by = to_int(token_data.get("user_id"), "updated_by")
+        created_at = datetime.utcnow()
+
+        # Normalize line items
+        normalized_items = []
+        total_amount = 0.0
+        for idx, item in enumerate(raw_items, start=1):
+            po_dtl_id = to_int(item.get("po_dtl_id"), f"items[{idx}].po_dtl_id")
+            item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
+            qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
+            rate = to_positive_float(item.get("rate"), f"items[{idx}].rate", allow_zero=True)
+            uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+            item_make_id = to_int(item.get("item_make"), f"items[{idx}].item_make")
+            warehouse_id = to_int(item.get("warehouse_id"), f"items[{idx}].warehouse_id")
+
+            item_remarks = item.get("remarks")
+            if item_remarks:
+                item_remarks = str(item_remarks).strip()[:255]
+
+            amount = qty * rate
+            total_amount += amount
+
+            normalized_items.append({
+                "po_dtl_id": po_dtl_id,
+                "item_id": item_id,
+                "qty": qty,
+                "rate": rate,
+                "uom_id": uom_id,
+                "item_make_id": item_make_id,
+                "warehouse_id": warehouse_id,
+                "remarks": item_remarks,
+                "amount": amount,
+            })
+
+        logger.debug("Normalized inward items: %s", normalized_items)
+
+        # Insert header
+        insert_header_query = insert_proc_inward()
+        header_params = {
+            "inward_sequence_no": None,  # Will be set to inward_id after insert
+            "supplier_id": supplier_id,
+            "vehicle_number": vehicle_no,
+            "driver_name": transporter_name,
+            "inward_date": inward_date,
+            "despatch_remarks": None,
+            "receipts_remarks": remarks,
+            "updated_date_time": created_at,
+            "updated_by": updated_by,
+            "challan_no": challan_no,
+            "challan_date": challan_date,
+            "invoice_amount": None,
+            "invoice_date": invoice_date,
+            "branch_id": branch_id,
+            "project_id": project_id,
+            "gross_amount": total_amount,
+            "net_amount": total_amount,
+        }
+
+        logger.info(
+            "Creating inward: branch=%s, supplier=%s, item_rows=%s",
+            branch_id,
+            supplier_id,
+            len(normalized_items),
+        )
+        logger.debug("Inward header params: %s", header_params)
+
+        result = db.execute(insert_header_query, header_params)
+        inward_id = result.lastrowid
+        if not inward_id:
+            raise HTTPException(status_code=500, detail="Failed to create inward header")
+
+        # Update inward_sequence_no to match inward_id
+        from sqlalchemy import text
+        db.execute(
+            text("UPDATE proc_inward SET inward_sequence_no = :seq WHERE inward_id = :id"),
+            {"seq": inward_id, "id": inward_id}
+        )
+
+        # Insert detail rows
+        detail_query = insert_proc_inward_dtl()
+        for detail in normalized_items:
+            db.execute(
+                detail_query,
+                {
+                    "inward_id": inward_id,
+                    "po_dtl_id": detail["po_dtl_id"],
+                    "item_id": detail["item_id"],
+                    "item_make_id": detail["item_make_id"],
+                    "description": None,
+                    "remarks": detail["remarks"],
+                    "challan_qty": detail["qty"],
+                    "inward_qty": detail["qty"],
+                    "uom_id": detail["uom_id"],
+                    "rate": detail["rate"],
+                    "amount": detail["amount"],
+                    "warehouse_id": detail["warehouse_id"],
+                    "active": 1,
+                    "status_id": 21,  # Draft status
+                    "updated_date_time": created_at,
+                    "updated_by": updated_by,
+                },
+            )
+
+        db.commit()
+        return {
+            "message": "Inward created successfully",
+            "inward_id": inward_id,
+            "inward_no": inward_id,  # Using inward_id as sequence for now
+        }
+    except HTTPException as exc:
+        db.rollback()
+        logger.warning("Inward create failed with HTTP error: %s", getattr(exc, "detail", exc))
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Unexpected error while creating inward")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to create inward",
+                "error": str(e),
+            },
+        )
 
 
 # from fastapi import Depends, Request, HTTPException, APIRouter
