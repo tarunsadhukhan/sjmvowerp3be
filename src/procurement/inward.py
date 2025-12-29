@@ -18,6 +18,7 @@ from src.procurement.query import (
 from src.masters.query import get_item_group_drodown, get_branch_list
 from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import calculate_financial_year
+from src.procurement.po import format_po_no, extract_formatted_po_no
 
 logger = logging.getLogger(__name__)
 
@@ -44,30 +45,6 @@ def format_inward_no(
     if branch_pref:
         parts.append(branch_pref)
     parts.extend(["GRN", fy, str(inward_sequence_no)])
-    
-    return "/".join(parts)
-
-
-def format_po_no(
-    po_no: Optional[int],
-    co_prefix: Optional[str],
-    branch_prefix: Optional[str],
-    po_date,
-) -> str:
-    """Format PO number as 'co_prefix/branch_prefix/PO/financial_year/po_no'."""
-    if po_no is None or po_no == 0:
-        return ""
-    
-    fy = calculate_financial_year(po_date)
-    co_pref = co_prefix or ""
-    branch_pref = branch_prefix or ""
-    
-    parts = []
-    if co_pref:
-        parts.append(co_pref)
-    if branch_pref:
-        parts.append(branch_pref)
-    parts.extend(["PO", fy, str(po_no)])
     
     return "/".join(parts)
 
@@ -129,24 +106,8 @@ async def get_inward_table(
                     logger.exception("Error formatting Inward number in list, using raw value")
                     formatted_inward_no = str(raw_inward_no) if raw_inward_no else ""
             
-            # Format PO number
-            raw_po_no = mapped.get("po_no")
-            po_date_obj = mapped.get("po_date")
-            formatted_po_no = ""
-            if raw_po_no is not None and raw_po_no != 0:
-                try:
-                    po_no_int = int(raw_po_no) if raw_po_no else None
-                    co_prefix = mapped.get("co_prefix")
-                    branch_prefix = mapped.get("branch_prefix")
-                    formatted_po_no = format_po_no(
-                        po_no=po_no_int,
-                        co_prefix=co_prefix,
-                        branch_prefix=branch_prefix,
-                        po_date=po_date_obj,
-                    )
-                except Exception as e:
-                    logger.exception("Error formatting PO number in inward list, using raw value")
-                    formatted_po_no = str(raw_po_no) if raw_po_no else ""
+            # Format PO number using helper
+            formatted_po_no = extract_formatted_po_no(mapped)
             
             data.append(
                 {
@@ -301,17 +262,20 @@ async def get_approved_pos_by_supplier(
     token_data: dict = Depends(get_current_user_with_refresh),
     supplier_id: int | None = None,
     branch_id: int | None = None,
-    co_id: int | None = None,
 ):
     """
     Return approved POs for a specific supplier that have pending items to receive.
     Used in Inward/GRN creation to select from which PO to receive goods.
+    
+    Parameters:
+    - supplier_id (required): Filter by supplier
+    - branch_id (optional): Filter by branch
+    - status_id = 3 (hardcoded in query): Only approved POs
     """
     try:
         # Parse query parameters
         q_supplier_id = request.query_params.get("supplier_id")
         q_branch_id = request.query_params.get("branch_id")
-        q_co_id = request.query_params.get("co_id")
 
         if q_supplier_id is not None:
             try:
@@ -325,19 +289,12 @@ async def get_approved_pos_by_supplier(
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid branch_id")
 
-        if q_co_id is not None:
-            try:
-                co_id = int(q_co_id)
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid co_id")
-
         if supplier_id is None:
             raise HTTPException(status_code=400, detail="supplier_id is required")
 
         params = {
             "supplier_id": supplier_id,
             "branch_id": branch_id,
-            "co_id": co_id,
         }
 
         query = get_approved_pos_by_supplier_query()
@@ -349,30 +306,10 @@ async def get_approved_pos_by_supplier(
 
             # Format PO date
             po_date_obj = mapped.get("po_date")
-            po_date_str = ""
-            if po_date_obj:
-                if hasattr(po_date_obj, "isoformat"):
-                    po_date_str = po_date_obj.isoformat()
-                else:
-                    po_date_str = str(po_date_obj)
+            po_date_str = po_date_obj.isoformat() if hasattr(po_date_obj, "isoformat") else str(po_date_obj) if po_date_obj else ""
 
-            # Format PO number
-            raw_po_no = mapped.get("po_no")
-            formatted_po_no = ""
-            if raw_po_no is not None:
-                try:
-                    co_prefix = mapped.get("co_prefix")
-                    branch_prefix = mapped.get("branch_prefix")
-                    formatted_po_no = format_po_no(
-                        po_no=int(raw_po_no) if str(raw_po_no).isdigit() else None,
-                        co_prefix=co_prefix,
-                        branch_prefix=branch_prefix,
-                        po_date=po_date_obj,
-                    )
-                    if not formatted_po_no:
-                        formatted_po_no = str(raw_po_no)
-                except Exception:
-                    formatted_po_no = str(raw_po_no) if raw_po_no else ""
+            # Format PO number using helper
+            formatted_po_no = extract_formatted_po_no(mapped)
 
             data.append({
                 "po_id": mapped.get("po_id"),
@@ -382,12 +319,6 @@ async def get_approved_pos_by_supplier(
                 "branch_name": mapped.get("branch_name") or "",
                 "supplier_id": mapped.get("supplier_id"),
                 "supplier_name": mapped.get("supplier_name") or "",
-                "supplier_code": mapped.get("supplier_code") or "",
-                "status_id": mapped.get("status_id"),
-                "status_name": mapped.get("status_name") or "Approved",
-                "total_amount": mapped.get("total_amount"),
-                "net_amount": mapped.get("net_amount"),
-                "remarks": mapped.get("remarks") or "",
             })
 
         return {"data": data, "total": len(data)}
@@ -428,24 +359,8 @@ async def get_po_line_items(
         for row in rows:
             mapped = dict(row._mapping)
 
-            # Format PO number
-            raw_po_no = mapped.get("po_no")
-            po_date_obj = mapped.get("po_date")
-            formatted_po_no = ""
-            if raw_po_no is not None:
-                try:
-                    co_prefix = mapped.get("co_prefix")
-                    branch_prefix = mapped.get("branch_prefix")
-                    formatted_po_no = format_po_no(
-                        po_no=int(raw_po_no) if str(raw_po_no).isdigit() else None,
-                        co_prefix=co_prefix,
-                        branch_prefix=branch_prefix,
-                        po_date=po_date_obj,
-                    )
-                    if not formatted_po_no:
-                        formatted_po_no = str(raw_po_no)
-                except Exception:
-                    formatted_po_no = str(raw_po_no) if raw_po_no else ""
+            # Format PO number using helper
+            formatted_po_no = extract_formatted_po_no(mapped)
 
             line_items.append({
                 "po_dtl_id": mapped.get("po_dtl_id"),

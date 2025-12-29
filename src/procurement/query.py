@@ -1102,8 +1102,16 @@ def update_po_status():
 def get_approved_pos_by_supplier_query():
     """
     Get approved POs for a specific supplier that have pending items to receive.
-    Only returns POs with status_id = 3 (Approved) that still have line items 
-    with pending quantities (ordered qty - received qty > 0).
+    
+    Search parameters:
+    - supplier_id (required): Filter by supplier
+    - branch_id (optional): Filter by branch
+    - status_id = 3 (hardcoded): Only approved POs
+    
+    Returns fields needed for PO number formatting (extract_formatted_po_no):
+    - po_no, po_date, co_prefix, branch_prefix
+    
+    Also returns display fields for dropdown selection.
     """
     sql = """SELECT DISTINCT
         pp.po_id,
@@ -1112,37 +1120,27 @@ def get_approved_pos_by_supplier_query():
         pp.branch_id,
         bm.branch_name,
         bm.branch_prefix,
+        cm.co_prefix,
         pp.supplier_id,
-        pm.supp_name AS supplier_name,
-        pm.supp_code AS supplier_code,
-        pp.status_id,
-        sm.status_name,
-        pp.total_amount,
-        pp.net_amount,
-        pp.remarks,
-        cm.co_prefix
+        pm.supp_name AS supplier_name
     FROM proc_po pp
     INNER JOIN branch_mst bm ON bm.branch_id = pp.branch_id
     INNER JOIN party_mst pm ON pm.party_id = pp.supplier_id
-    LEFT JOIN status_mst sm ON sm.status_id = pp.status_id
-    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    INNER JOIN co_mst cm ON cm.co_id = bm.co_id
     WHERE pp.supplier_id = :supplier_id
-        AND pp.status_id = 3  -- Approved status
+        AND pp.status_id = 3
+        AND (:branch_id IS NULL OR pp.branch_id = :branch_id)
         AND EXISTS (
             SELECT 1 FROM proc_po_dtl pod
-            LEFT JOIN (
-                SELECT po_dtl_id, COALESCE(SUM(inward_qty), 0) as received_qty
-                FROM proc_inward_dtl
-                WHERE active = 1
-                GROUP BY po_dtl_id
-            ) recv ON recv.po_dtl_id = pod.po_dtl_id
             WHERE pod.po_id = pp.po_id
                 AND pod.active = 1
-                AND (pod.qty - COALESCE(recv.received_qty, 0)) > 0
+                AND (pod.qty - COALESCE((
+                    SELECT SUM(pid.inward_qty)
+                    FROM proc_inward_dtl pid
+                    WHERE pid.po_dtl_id = pod.po_dtl_id AND pid.active = 1
+                ), 0)) > 0
         )
-        AND (:branch_id IS NULL OR pp.branch_id = :branch_id)
-        AND (:co_id IS NULL OR bm.co_id = :co_id)
-    ORDER BY pp.po_date DESC, pp.po_no DESC;"""
+    ORDER BY pp.po_date DESC, pp.po_id DESC;"""
     return text(sql)
 
 

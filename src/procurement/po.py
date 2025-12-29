@@ -326,9 +326,7 @@ async def get_po_table(
 		for row in rows:
 			mapped = dict(row._mapping)
 			po_date_obj = mapped.get("po_date")
-			po_date = po_date_obj
-			if hasattr(po_date_obj, "isoformat"):
-				po_date = po_date_obj.isoformat()
+			po_date = po_date_obj.isoformat() if hasattr(po_date_obj, "isoformat") else po_date_obj
 			
 			po_value = mapped.get("po_value")
 			if po_value is not None:
@@ -337,23 +335,8 @@ async def get_po_table(
 				except (TypeError, ValueError):
 					po_value = None
 			
-			# Format po_no if it exists
-			raw_po_no = mapped.get("po_no")
-			formatted_po_no = ""
-			if raw_po_no is not None and raw_po_no != 0:
-				try:
-					po_no_int = int(raw_po_no) if raw_po_no else None
-					co_prefix = mapped.get("co_prefix")
-					branch_prefix = mapped.get("branch_prefix")
-					formatted_po_no = format_po_no(
-						po_no=po_no_int,
-						co_prefix=co_prefix,
-						branch_prefix=branch_prefix,
-						po_date=po_date_obj,
-					)
-				except Exception as e:
-					logger.exception("Error formatting PO number in list, using raw value")
-					formatted_po_no = str(raw_po_no) if raw_po_no else ""
+			# Format po_no using helper
+			formatted_po_no = extract_formatted_po_no(mapped)
 			
 			data.append(
 				{
@@ -405,6 +388,48 @@ def format_po_no(
 	parts.extend(["PO", fy, str(po_no)])
 	
 	return "/".join(parts)
+
+
+def extract_formatted_po_no(
+	mapped: dict,
+	po_no_key: str = "po_no",
+	po_date_key: str = "po_date",
+) -> str:
+	"""Extract and format PO number from a mapped row.
+	
+	This helper extracts po_no, co_prefix, branch_prefix, and po_date from a 
+	mapped database row and returns the formatted PO number string.
+	
+	Args:
+		mapped: Dictionary from database row (dict(row._mapping))
+		po_no_key: Key for raw PO number in mapped dict (default: "po_no")
+		po_date_key: Key for PO date in mapped dict (default: "po_date")
+	
+	Returns:
+		Formatted PO number string or empty string if po_no is None/0
+	"""
+	raw_po_no = mapped.get(po_no_key)
+	if raw_po_no is None or raw_po_no == 0:
+		return ""
+	
+	try:
+		po_no_int = int(raw_po_no) if str(raw_po_no).isdigit() else None
+		if po_no_int is None:
+			return str(raw_po_no) if raw_po_no else ""
+		
+		co_prefix = mapped.get("co_prefix")
+		branch_prefix = mapped.get("branch_prefix")
+		po_date = mapped.get(po_date_key)
+		
+		formatted = format_po_no(
+			po_no=po_no_int,
+			co_prefix=co_prefix,
+			branch_prefix=branch_prefix,
+			po_date=po_date,
+		)
+		return formatted if formatted else str(raw_po_no)
+	except Exception:
+		return str(raw_po_no) if raw_po_no else ""
 
 
 def calculate_gst_amounts(
@@ -894,23 +919,8 @@ async def get_po_by_id(
 			else:
 				updated_at_str = str(updated_at)
 		
-		# Format PO number
-		raw_po_no = header.get("po_no")
-		formatted_po_no = ""
-		if raw_po_no is not None and raw_po_no != 0:
-			try:
-				po_no_int = int(raw_po_no) if raw_po_no else None
-				co_prefix = header.get("co_prefix")
-				branch_prefix = header.get("branch_prefix")
-				formatted_po_no = format_po_no(
-					po_no=po_no_int,
-					co_prefix=co_prefix,
-					branch_prefix=branch_prefix,
-					po_date=po_date,
-				)
-			except Exception as e:
-				logger.exception("Error formatting PO number, using raw value")
-				formatted_po_no = str(raw_po_no) if raw_po_no else ""
+		# Format PO number using helper
+		formatted_po_no = extract_formatted_po_no(header)
 		
 		# Get approval_level (only when status_id = 20)
 		approval_level = header.get("approval_level")
