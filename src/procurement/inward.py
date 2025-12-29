@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import Optional
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -494,6 +495,14 @@ async def get_inward_by_id(
                 logger.exception("Error formatting inward number, using raw value")
                 formatted_inward_no = str(raw_inward_no) if raw_inward_no else ""
 
+        # Helper to format dates
+        def format_date_field(date_val):
+            if date_val and hasattr(date_val, "isoformat"):
+                return date_val.isoformat()
+            elif date_val:
+                return str(date_val)
+            return None
+
         # Build response matching InwardDetails type from frontend
         response = {
             "id": str(header.get("inward_id", "")),
@@ -507,9 +516,16 @@ async def get_inward_by_id(
             "challanDate": challan_date_str,
             "invoiceNo": None,  # No invoice_no column in current schema
             "invoiceDate": invoice_date_str,
+            "invoiceRecvdDate": format_date_field(header.get("invoice_recvd_date")),
             "vehicleNo": header.get("vehicle_number") if header.get("vehicle_number") else None,
-            "transporterName": header.get("driver_name") if header.get("driver_name") else None,
-            "remarks": header.get("remarks") if header.get("remarks") else None,
+            "driverName": header.get("driver_name") if header.get("driver_name") else None,
+            "driverContactNo": header.get("driver_contact_no") if header.get("driver_contact_no") else None,
+            "consignmentNo": header.get("consignment_no") if header.get("consignment_no") else None,
+            "consignmentDate": format_date_field(header.get("consignment_date")),
+            "ewaybillno": header.get("ewaybillno") if header.get("ewaybillno") else None,
+            "ewaybillDate": format_date_field(header.get("ewaybill_date")),
+            "despatchRemarks": header.get("despatch_remarks") if header.get("despatch_remarks") else None,
+            "receiptsRemarks": header.get("receipts_remarks") if header.get("receipts_remarks") else None,
             "status": header.get("status_name") if header.get("status_name") else None,
             "statusId": status_id,
             "approvalLevel": None,  # Not implemented for inward yet
@@ -622,17 +638,61 @@ async def create_inward(
             except ValueError:
                 pass  # Ignore invalid date
 
+        # Invoice received date
+        invoice_recvd_date_str = payload.get("invoice_recvd_date")
+        invoice_recvd_date = None
+        if invoice_recvd_date_str:
+            try:
+                invoice_recvd_date = datetime.strptime(str(invoice_recvd_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                pass  # Ignore invalid date
+
         vehicle_no = payload.get("vehicle_no")
         if vehicle_no:
             vehicle_no = str(vehicle_no).strip()[:25]
 
-        transporter_name = payload.get("transporter_name")
-        if transporter_name:
-            transporter_name = str(transporter_name).strip()[:30]
+        driver_name = payload.get("driver_name")
+        if driver_name:
+            driver_name = str(driver_name).strip()[:30]
 
-        remarks = payload.get("remarks")
-        if remarks:
-            remarks = str(remarks).strip()[:500]
+        driver_contact_no = payload.get("driver_contact_no")
+        if driver_contact_no:
+            driver_contact_no = str(driver_contact_no).strip()[:25]
+
+        # Consignment fields
+        consignment_no = payload.get("consignment_no")
+        if consignment_no:
+            consignment_no = str(consignment_no).strip()[:255]
+
+        consignment_date_str = payload.get("consignment_date")
+        consignment_date = None
+        if consignment_date_str:
+            try:
+                consignment_date = datetime.strptime(str(consignment_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                pass  # Ignore invalid date
+
+        # E-Way Bill fields
+        ewaybillno = payload.get("ewaybillno")
+        if ewaybillno:
+            ewaybillno = str(ewaybillno).strip()[:255]
+
+        ewaybill_date_str = payload.get("ewaybill_date")
+        ewaybill_date = None
+        if ewaybill_date_str:
+            try:
+                ewaybill_date = datetime.strptime(str(ewaybill_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                pass  # Ignore invalid date
+
+        # Remarks fields
+        despatch_remarks = payload.get("despatch_remarks")
+        if despatch_remarks:
+            despatch_remarks = str(despatch_remarks).strip()[:500]
+
+        receipts_remarks = payload.get("receipts_remarks")
+        if receipts_remarks:
+            receipts_remarks = str(receipts_remarks).strip()[:500]
 
         project_id = to_int(payload.get("project_id"), "project_id")
 
@@ -683,16 +743,22 @@ async def create_inward(
             "inward_sequence_no": None,  # Will be set to inward_id after insert
             "supplier_id": supplier_id,
             "vehicle_number": vehicle_no,
-            "driver_name": transporter_name,
+            "driver_name": driver_name,
+            "driver_contact_number": driver_contact_no,
             "inward_date": inward_date,
-            "despatch_remarks": None,
-            "receipts_remarks": remarks,
+            "despatch_remarks": despatch_remarks,
+            "receipts_remarks": receipts_remarks,
             "updated_date_time": created_at,
             "updated_by": updated_by,
             "challan_no": challan_no,
             "challan_date": challan_date,
             "invoice_amount": None,
             "invoice_date": invoice_date,
+            "invoice_recvd_date": invoice_recvd_date,
+            "consignment_no": consignment_no,
+            "consignment_date": consignment_date,
+            "ewaybillno": ewaybillno,
+            "ewaybill_date": ewaybill_date,
             "branch_id": branch_id,
             "project_id": project_id,
             "gross_amount": total_amount,
@@ -761,6 +827,164 @@ async def create_inward(
             status_code=500,
             detail={
                 "message": "Failed to create inward",
+                "error": str(e),
+            },
+        )
+
+
+@router.put("/update_inward")
+async def update_inward(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Update an existing inward/GRN record with header and line items."""
+    from src.procurement.query import update_proc_inward, update_proc_inward_dtl
+
+    try:
+        body = await request.json()
+        inward_id = body.get("id")
+        if not inward_id:
+            raise HTTPException(status_code=400, detail="Inward ID is required")
+
+        updated_by = token_data.get("user_id") if token_data else None
+        updated_at = datetime.now()
+
+        # Parse header fields
+        branch_id = body.get("branch")
+        supplier_id = body.get("supplier")
+        inward_date = body.get("inward_date")
+        vehicle_number = body.get("vehicle_no")
+        driver_name = body.get("driver_name")
+        driver_contact_no = body.get("driver_contact_no")
+        challan_no = body.get("challan_no")
+        challan_date = body.get("challan_date")
+        invoice_date = body.get("invoice_date")
+        invoice_recvd_date = body.get("invoice_recvd_date")
+        consignment_no = body.get("consignment_no")
+        consignment_date = body.get("consignment_date")
+        ewaybillno = body.get("ewaybillno")
+        ewaybill_date = body.get("ewaybill_date")
+        despatch_remarks = body.get("despatch_remarks")
+        receipts_remarks = body.get("receipts_remarks")
+
+        # Convert dates
+        inward_date_obj = None
+        if inward_date:
+            try:
+                inward_date_obj = datetime.strptime(inward_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        challan_date_obj = None
+        if challan_date:
+            try:
+                challan_date_obj = datetime.strptime(challan_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        invoice_date_obj = None
+        if invoice_date:
+            try:
+                invoice_date_obj = datetime.strptime(invoice_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        invoice_recvd_date_obj = None
+        if invoice_recvd_date:
+            try:
+                invoice_recvd_date_obj = datetime.strptime(invoice_recvd_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        consignment_date_obj = None
+        if consignment_date:
+            try:
+                consignment_date_obj = datetime.strptime(consignment_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        ewaybill_date_obj = None
+        if ewaybill_date:
+            try:
+                ewaybill_date_obj = datetime.strptime(ewaybill_date[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        # Update header
+        header_params = {
+            "inward_id": int(inward_id),
+            "supplier_id": int(supplier_id) if supplier_id else None,
+            "vehicle_number": vehicle_number,
+            "driver_name": driver_name,
+            "driver_contact_number": driver_contact_no,
+            "inward_date": inward_date_obj,
+            "despatch_remarks": despatch_remarks,
+            "receipts_remarks": receipts_remarks,
+            "challan_no": challan_no,
+            "challan_date": challan_date_obj,
+            "invoice_date": invoice_date_obj,
+            "invoice_recvd_date": invoice_recvd_date_obj,
+            "consignment_no": consignment_no,
+            "consignment_date": consignment_date_obj,
+            "ewaybillno": ewaybillno,
+            "ewaybill_date": ewaybill_date_obj,
+            "branch_id": int(branch_id) if branch_id else None,
+            "updated_date_time": updated_at,
+            "updated_by": updated_by,
+        }
+
+        update_header_query = update_proc_inward()
+        db.execute(update_header_query, header_params)
+
+        # Update line items
+        items = body.get("items", [])
+        for item in items:
+            item_id = item.get("item")
+            inward_qty = item.get("quantity")
+            uom_id = item.get("uom")
+            remarks = item.get("remarks")
+            po_dtl_id = item.get("po_dtl_id")
+
+            # Get existing inward_dtl_id from po_dtl_id
+            find_dtl_query = text("""
+                SELECT inward_dtl_id FROM proc_inward_dtl 
+                WHERE inward_id = :inward_id AND po_dtl_id = :po_dtl_id
+            """)
+            dtl_result = db.execute(find_dtl_query, {"inward_id": int(inward_id), "po_dtl_id": int(po_dtl_id) if po_dtl_id else None}).fetchone()
+
+            if dtl_result:
+                inward_dtl_id = dtl_result[0]
+                update_dtl_query = update_proc_inward_dtl()
+                db.execute(
+                    update_dtl_query,
+                    {
+                        "inward_dtl_id": inward_dtl_id,
+                        "item_id": int(item_id) if item_id else None,
+                        "remarks": remarks,
+                        "inward_qty": float(inward_qty) if inward_qty else 0,
+                        "uom_id": int(uom_id) if uom_id else None,
+                        "updated_date_time": updated_at,
+                        "updated_by": updated_by,
+                    },
+                )
+
+        db.commit()
+        return {
+            "message": "Inward updated successfully",
+            "inward_id": inward_id,
+        }
+    except HTTPException as exc:
+        db.rollback()
+        logger.warning("Inward update failed with HTTP error: %s", getattr(exc, "detail", exc))
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Unexpected error while updating inward")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to update inward",
                 "error": str(e),
             },
         )

@@ -306,9 +306,16 @@ def get_inward_by_id_query():
         pi.challan_date,
         pi.invoice_date,
         pi.invoice_amount,
+        pi.invoice_recvd_date,
         pi.vehicle_number,
         pi.driver_name,
-        pi.receipts_remarks AS remarks,
+        pi.driver_contact_number AS driver_contact_no,
+        pi.consignment_no,
+        pi.consignment_date,
+        pi.ewaybillno,
+        pi.ewaybill_date,
+        pi.despatch_remarks,
+        pi.receipts_remarks,
         pi.project_id,
         prj.prj_name AS project_name,
         pi.sr_status AS status_id,
@@ -1283,6 +1290,7 @@ def insert_proc_inward():
     supplier_id,
     vehicle_number,
     driver_name,
+    driver_contact_number,
     inward_date,
     despatch_remarks,
     receipts_remarks,
@@ -1292,6 +1300,11 @@ def insert_proc_inward():
     challan_date,
     invoice_amount,
     invoice_date,
+    invoice_recvd_date,
+    consignment_no,
+    consignment_date,
+    ewaybillno,
+    ewaybill_date,
     branch_id,
     project_id,
     gross_amount,
@@ -1301,6 +1314,7 @@ def insert_proc_inward():
     :supplier_id,
     :vehicle_number,
     :driver_name,
+    :driver_contact_number,
     :inward_date,
     :despatch_remarks,
     :receipts_remarks,
@@ -1310,6 +1324,11 @@ def insert_proc_inward():
     :challan_date,
     :invoice_amount,
     :invoice_date,
+    :invoice_recvd_date,
+    :consignment_no,
+    :consignment_date,
+    :ewaybillno,
+    :ewaybill_date,
     :branch_id,
     :project_id,
     :gross_amount,
@@ -1355,6 +1374,44 @@ def insert_proc_inward_dtl():
     :updated_date_time,
     :updated_by
 );"""
+    return text(sql)
+
+
+def update_proc_inward():
+    """Update an existing proc_inward header record."""
+    sql = """UPDATE proc_inward SET
+    supplier_id = :supplier_id,
+    vehicle_number = :vehicle_number,
+    driver_name = :driver_name,
+    driver_contact_number = :driver_contact_number,
+    inward_date = :inward_date,
+    despatch_remarks = :despatch_remarks,
+    receipts_remarks = :receipts_remarks,
+    challan_no = :challan_no,
+    challan_date = :challan_date,
+    invoice_date = :invoice_date,
+    invoice_recvd_date = :invoice_recvd_date,
+    consignment_no = :consignment_no,
+    consignment_date = :consignment_date,
+    ewaybillno = :ewaybillno,
+    ewaybill_date = :ewaybill_date,
+    branch_id = :branch_id,
+    updated_date_time = :updated_date_time,
+    updated_by = :updated_by
+WHERE inward_id = :inward_id;"""
+    return text(sql)
+
+
+def update_proc_inward_dtl():
+    """Update an existing proc_inward_dtl line item record."""
+    sql = """UPDATE proc_inward_dtl SET
+    item_id = :item_id,
+    remarks = :remarks,
+    inward_qty = :inward_qty,
+    uom_id = :uom_id,
+    updated_date_time = :updated_date_time,
+    updated_by = :updated_by
+WHERE inward_dtl_id = :inward_dtl_id;"""
     return text(sql)
 
 
@@ -1618,10 +1675,15 @@ def get_inward_for_sr_query():
         pi.invoice_recvd_date,
         pi.challan_no,
         pi.challan_date,
+        pi.vehicle_number,
+        pi.driver_name,
+        pi.driver_contact_number AS driver_contact_no,
         pi.consignment_no,
         pi.consignment_date,
         pi.ewaybillno,
         pi.ewaybill_date,
+        pi.despatch_remarks,
+        pi.receipts_remarks,
         pi.sr_value,
         pi.sr_remarks,
         pi.gross_amount,
