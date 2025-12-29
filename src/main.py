@@ -24,6 +24,10 @@ from src.masters.projectMaster import router as project_router
 from src.procurement.indent import router as indent_router
 from src.procurement.po import router as po_router
 from src.procurement.inward import router as inward_router
+from src.procurement.material_inspection import router as material_inspection_router
+from src.procurement.sr import router as sr_router
+from src.procurement.drcr_note import router as drcr_note_router
+from src.procurement.billpass import router as billpass_router
 from src.masters.party import router as party_router
 
 from src.masters.items import router as item_router
@@ -84,6 +88,10 @@ app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["mas
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
 app.include_router(inward_router, prefix="/api/procurementInward", tags=["procurement-inward"])
+app.include_router(material_inspection_router, prefix="/api/materialInspection", tags=["procurement-material-inspection"])
+app.include_router(sr_router, prefix="/api/storesReceipt", tags=["procurement-stores-receipt"])
+app.include_router(drcr_note_router, prefix="/api/drcrNote", tags=["procurement-drcr-note"])
+app.include_router(billpass_router, prefix="/api/billPass", tags=["procurement-bill-pass"])
 
 
 

@@ -125,6 +125,7 @@ async def get_inward_table(
                     "po_no": formatted_po_no,
                     "supplier_id": mapped.get("supplier_id"),
                     "supplier_name": mapped.get("supplier_name") or "",
+                    "inspection_check": bool(mapped.get("inspection_check")),
                     "status": mapped.get("status_name") or "Pending",
                 }
             )
