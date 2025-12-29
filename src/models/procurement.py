@@ -271,6 +271,7 @@ class ProcInwardDtl(Base):
     po_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # bigint in DB
     item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     item_make_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    accepted_item_make_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     hsn_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -281,6 +282,7 @@ class ProcInwardDtl(Base):
     reasons: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    accepted_rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     discount_mode: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     discount_value: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
