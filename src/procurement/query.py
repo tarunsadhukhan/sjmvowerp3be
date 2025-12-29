@@ -1626,7 +1626,7 @@ def get_inward_for_sr_query():
         pi.sr_remarks,
         pi.gross_amount,
         pi.net_amount,
-        cm.india_gst
+        1 AS india_gst
     FROM proc_inward AS pi
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id

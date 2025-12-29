@@ -196,9 +196,20 @@ async def get_sr_by_inward_id(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
-    """Get inward header and line items for SR page."""
+    """Get inward header and line items for SR page.
+    
+    Args:
+        inward_id: Required path parameter - the inward record ID
+        co_id: Optional query parameter - company ID for tenant filtering
+        branch_id: Optional query parameter - branch ID (not currently used in query but available for future filtering)
+    """
     try:
+        # Validate inward_id
+        if not inward_id or inward_id <= 0:
+            raise HTTPException(status_code=400, detail="Valid inward_id is required")
+        
         # Get header
         header_query = get_inward_for_sr_query()
         header_result = db.execute(header_query, {"inward_id": inward_id, "co_id": co_id}).fetchone()
