@@ -243,3 +243,87 @@ def update_issue_status():
         updated_date_time = :updated_date_time
     WHERE issue_id = :issue_id;"""
     return text(sql)
+
+
+def get_available_inward_inventory_query():
+    """
+    Get available inventory from inward details for issuing.
+    Returns items with available qty (approved_qty - already issued qty).
+    Used for selecting SR line items when creating an issue.
+    """
+    sql = """SELECT
+        pid.inward_dtl_id,
+        pid.inward_id,
+        pi.inward_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        pid.item_id,
+        im.item_name,
+        im.item_code,
+        igm.item_grp_id,
+        igm.item_grp_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.uom_id,
+        um.uom_name,
+        pid.approved_qty,
+        pid.accepted_rate AS rate,
+        (pid.approved_qty - COALESCE(
+            (SELECT SUM(il.issue_qty) 
+             FROM issue_li il 
+             INNER JOIN issue_hdr ih ON ih.issue_id = il.issue_id 
+             WHERE il.inward_dtl_id = pid.inward_dtl_id 
+               AND ih.status_id NOT IN (4, 6)  -- Not Rejected, Not Cancelled
+               AND (ih.active = 1 OR ih.active IS NULL)
+            ), 0
+        )) AS available_qty,
+        pid.warehouse_id,
+        wm.warehouse_name
+    FROM proc_inward_dtl AS pid
+    INNER JOIN proc_inward AS pi ON pi.inward_id = pid.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN warehouse_mst AS wm ON wm.warehouse_id = pid.warehouse_id
+    WHERE pid.active = 1
+        AND pid.status_id = 3  -- Approved inwards only
+        AND pi.branch_id = :branch_id
+        AND (:item_id IS NULL OR pid.item_id = :item_id)
+        AND (:item_grp_id IS NULL OR im.item_grp_id = :item_grp_id)
+    HAVING available_qty > 0
+    ORDER BY pi.inward_date ASC, pid.inward_dtl_id ASC;"""
+    return text(sql)
+
+
+def get_cost_factors_by_branch_query():
+    """Get cost factors for a branch."""
+    sql = """SELECT
+        cf.cost_factor_id,
+        cf.cost_factor_name,
+        cf.cost_factor_desc,
+        cf.branch_id,
+        cf.dept_id
+    FROM cost_factor_mst AS cf
+    WHERE cf.branch_id = :branch_id
+    ORDER BY cf.cost_factor_name;"""
+    return text(sql)
+
+
+def get_machines_by_dept_query():
+    """Get machines for a department."""
+    sql = """SELECT
+        m.machine_id,
+        m.machine_name,
+        m.dept_id,
+        m.machine_type_id,
+        mt.machine_type_name,
+        m.mech_code
+    FROM machine_mst AS m
+    LEFT JOIN machine_type_mst AS mt ON mt.machine_type_id = m.machine_type_id
+    WHERE m.dept_id = :dept_id
+        AND m.active = 1
+    ORDER BY m.machine_name;"""
+    return text(sql)
