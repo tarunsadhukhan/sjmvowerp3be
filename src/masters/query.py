@@ -571,13 +571,28 @@ def get_mechine_type_master_query():
 def get_mechine_master(co_id: int = None, branch_ids: list = None):
   print("Getting machine master for co_id:", co_id, "branch_ids:", branch_ids)
   sql = """
-  select mm.machine_id id,mm.mech_code mechine_code,mm.machine_name mechine_name,
-  mtm.machine_type_name mechine_type_name,dm.dept_id ,dm.dept_desc dept_name,
-  bm.branch_id ,bm.branch_name branch_display,mm.active from machine_mst mm 
-  left join machine_type_mst mtm on mm.machine_type_id =mtm.machine_type_id  
-  left join dept_mst dm on dm.dept_id =mm.dept_id 
-  left join branch_mst bm on bm.branch_id =dm.branch_id
-  WHERE (:search IS NULL OR dm.dept_code LIKE :search OR dm.dept_desc LIKE :search)
+  select mm.machine_id id,
+         mm.mech_code mechine_code,
+         mm.machine_name mechine_name,
+         mtm.machine_type_name mechine_type_name,
+         dm.dept_id,
+         dm.dept_desc dept_name,
+         bm.branch_id,
+         bm.branch_name branch_display,
+         mm.active
+  from machine_mst mm 
+  left join machine_type_mst mtm on mm.machine_type_id = mtm.machine_type_id  
+  left join dept_mst dm on dm.dept_id = mm.dept_id 
+  left join branch_mst bm on bm.branch_id = dm.branch_id
+  WHERE (
+    :search IS NULL OR
+    mm.mech_code LIKE :search OR
+    mm.machine_name LIKE :search OR
+    mtm.machine_type_name LIKE :search OR
+    dm.dept_code LIKE :search OR
+    dm.dept_desc LIKE :search OR
+    bm.branch_name LIKE :search
+  )
     {branch_filter}
   """
   branch_filter = ""
@@ -588,7 +603,6 @@ def get_mechine_master(co_id: int = None, branch_ids: list = None):
     branch_filter = "AND dm.branch_id IN :branch_ids"
 
   sql = sql.format(branch_filter=branch_filter)
-  #print("Generated SQL:", sql )
   query = text(sql)
 
   # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
@@ -780,10 +794,14 @@ WHERE pbm.party_id = :party_id;
     query = text(sql)
     return query
 
-def get_warehouse_list(branch_ids: list):
+def get_warehouse_list(branch_ids: list = None):
+    """Return warehouse hierarchy rows filtered by optional branch list and search."""
+    branch_filter_anchor = "AND wm.branch_id IN :branch_ids" if branch_ids else ""
+    branch_filter_recursive = "AND child.branch_id IN :branch_ids" if branch_ids else ""
+
     sql = """
 WITH RECURSIVE warehouse_hierarchy AS (
-  -- Anchor: Top-level warehouses across multiple branches
+  -- Anchor: Top-level warehouses across optional branch scope
   SELECT 
     wm.warehouse_id,
     wm.branch_id,
@@ -794,9 +812,9 @@ WITH RECURSIVE warehouse_hierarchy AS (
     1 AS level
   FROM warehouse_mst wm
   WHERE wm.parent_warehouse_id IS NULL
-    AND wm.branch_id IN :branch_ids  -- ✅ multiple branches here
+    {branch_filter_anchor}
   UNION ALL
-  -- Recursive: bring in child warehouses within the same set of branches
+  -- Recursive: bring in child warehouses within the same scope
   SELECT 
     child.warehouse_id,
     child.branch_id,
@@ -808,21 +826,37 @@ WITH RECURSIVE warehouse_hierarchy AS (
   FROM warehouse_mst child
   JOIN warehouse_hierarchy parent 
     ON child.parent_warehouse_id = parent.warehouse_id
-  AND child.branch_id IN :branch_ids  -- ✅ repeat here for recursion consistency
+    {branch_filter_recursive}
 )
 SELECT 
-  warehouse_id,
-  branch_id,
-  warehouse_name,
-  warehouse_type,
-  parent_warehouse_id,
-  warehouse_path,
-  level
-FROM warehouse_hierarchy
-ORDER BY branch_id, warehouse_path;
+  wh.warehouse_id,
+  wh.branch_id,
+  wh.warehouse_name,
+  wh.warehouse_type,
+  wh.parent_warehouse_id,
+  wh.warehouse_path,
+  wh.level,
+  bm.branch_name
+FROM warehouse_hierarchy wh
+LEFT JOIN branch_mst bm ON bm.branch_id = wh.branch_id
+WHERE (
+  :search IS NULL OR
+  wh.warehouse_path LIKE :search OR
+  wh.warehouse_name LIKE :search OR
+  wh.warehouse_type LIKE :search OR
+  bm.branch_name LIKE :search
+)
+ORDER BY wh.branch_id, wh.warehouse_path;
 """
-  # allow SQLAlchemy text() to expand a Python list into the IN (:branch_ids) clause
-    query = text(sql).bindparams(bindparam('branch_ids', expanding=True))
+
+    sql = sql.format(
+        branch_filter_anchor=branch_filter_anchor,
+        branch_filter_recursive=branch_filter_recursive,
+    )
+
+    query = text(sql)
+    if branch_ids:
+        query = query.bindparams(bindparam("branch_ids", expanding=True))
     return query
 
 

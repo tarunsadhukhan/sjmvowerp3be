@@ -35,13 +35,17 @@ async def get_warehouse(
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid branches parameter")
 
-        warehousequery = get_warehouse_list(branch_ids_list if branch_ids_list is not None else [])
-        result = db.execute(warehousequery, {"co_id": int(co_id), "search": search_param, "branch_ids": branch_ids_list}).fetchall()
+        warehousequery = get_warehouse_list(branch_ids_list)
+        params = {"search": search_param}
+        if branch_ids_list:
+            params["branch_ids"] = branch_ids_list
+
+        result = db.execute(warehousequery, params).fetchall()
         warehouse = [dict(row._mapping) for row in result]
         branchquery = get_branch_list()
         branch_result = db.execute(branchquery).fetchall()
         branches = [dict(row._mapping) for row in branch_result]
-        return {"data": warehouse, "branches": branches}
+        return {"data": warehouse, "total": len(warehouse), "branches": branches}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

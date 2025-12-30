@@ -122,6 +122,7 @@ async def create_branch_data(
         # Create the company using the tenant database
         new_branch = BranchMst(
         branch_name = payload.branch_name,
+        branch_prefix = payload.branch_prefix,
         co_id = payload.co_id,
         branch_address1 = payload.branch_address1,
         branch_address2 = payload.branch_address2,
@@ -180,6 +181,7 @@ async def edit_branch_data(
 
         # Update the company fields
         branch.branch_name = payload.branch_name
+        branch.branch_prefix = payload.branch_prefix
         branch.co_id = payload.co_id
         branch.branch_address1 = payload.branch_address1
         branch.branch_address2 = payload.branch_address2

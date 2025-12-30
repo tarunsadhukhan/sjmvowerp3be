@@ -173,16 +173,15 @@ async def mechine_master_table(
         print(f"Parsed branch params co_id={co_id}, branch_ids={branch_ids_param}, search={search_param}", flush=True)
 
         # Build query (pass parsed branch_ids list so query generator can include the IN clause)
-        query = get_mechine_master(int(co_id), branch_ids=branch_ids_param)
-        if branch_ids_param is not None:
-            params = {"search": search_param, "branch_ids": branch_ids_param}
-        else:
-            params = {"search": search_param}
+        query = get_mechine_master(int(co_id), branch_ids=branch_ids_param or None)
+        params = {"search": search_param}
+        if branch_ids_param:
+            params["branch_ids"] = branch_ids_param
 
         print("Executing query:", query, "params:", params, flush=True)
         result = db.execute(query, params).fetchall()
         data = [dict(row._mapping) for row in result]
-        return {"data": data}
+        return {"data": data, "total": len(data)}
     except HTTPException:
         raise
     except Exception as e:

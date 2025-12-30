@@ -1,0 +1,651 @@
+"""
+Stores Receipt (SR) API endpoints.
+Handles accountant review of inspected goods, adds rates/taxes, creates official receipt.
+"""
+import logging
+from datetime import datetime, date
+from fastapi import Depends, Request, HTTPException, APIRouter
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from pydantic import BaseModel
+from typing import Optional, List
+
+from src.config.db import get_tenant_db
+from src.authorization.utils import get_current_user_with_refresh
+from src.procurement.query import (
+    get_sr_pending_list_query,
+    get_sr_pending_count_query,
+    get_inward_for_sr_query,
+    get_inward_dtl_for_sr_query,
+    update_inward_dtl_sr,
+    update_inward_sr,
+    insert_drcr_note,
+    insert_drcr_note_dtl,
+)
+from src.procurement.inward import format_inward_no
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# Status IDs for approval workflow
+STATUS_DRAFT = 21
+STATUS_OPEN = 1
+STATUS_PENDING_APPROVAL = 20
+STATUS_APPROVED = 3
+STATUS_REJECTED = 4
+
+# DRCR Note types
+DRCR_TYPE_DEBIT = 1  # Supplier owes us (rate decrease, rejected qty)
+DRCR_TYPE_CREDIT = 2  # We owe supplier (rate increase)
+
+
+# =============================================================================
+# PYDANTIC MODELS
+# =============================================================================
+
+class SRLineItemUpdate(BaseModel):
+    """Model for updating a single line item during SR."""
+    inward_dtl_id: int
+    accepted_rate: float
+    amount: Optional[float] = None
+    discount_mode: Optional[int] = None
+    discount_value: Optional[float] = None
+    discount_amount: Optional[float] = None
+
+
+class SRSaveRequest(BaseModel):
+    """Request body for saving SR."""
+    inward_id: int
+    sr_date: str
+    sr_remarks: Optional[str] = None
+    bill_branch_id: Optional[int] = None
+    ship_branch_id: Optional[int] = None
+    invoice_date: Optional[str] = None
+    invoice_amount: Optional[float] = None
+    line_items: List[SRLineItemUpdate]
+
+
+class SRApproveRequest(BaseModel):
+    """Request body for approving SR."""
+    inward_id: int
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
+    """Generate next SR number for the branch and financial year."""
+    # Get max SR number for the branch
+    # SR format: SR-YYYY-NNNNN
+    try:
+        year = sr_date.year if hasattr(sr_date, 'year') else datetime.strptime(str(sr_date), '%Y-%m-%d').year
+        
+        query = text("""
+            SELECT MAX(CAST(SUBSTRING_INDEX(sr_no, '-', -1) AS UNSIGNED)) as max_no
+            FROM proc_inward
+            WHERE branch_id = :branch_id
+            AND sr_no LIKE :pattern
+        """)
+        
+        pattern = f"SR-{year}-%"
+        result = db.execute(query, {"branch_id": branch_id, "pattern": pattern}).fetchone()
+        
+        next_no = 1
+        if result and result.max_no:
+            next_no = int(result.max_no) + 1
+        
+        return f"SR-{year}-{next_no:05d}"
+    except Exception:
+        # Fallback to timestamp-based number
+        return f"SR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
+
+@router.get("/get_sr_pending_list")
+async def get_sr_pending_list(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    page: int = 1,
+    limit: int = 10,
+    search: str | None = None,
+    co_id: int | None = None,
+):
+    """Return paginated list of inwards ready for SR (inspection complete)."""
+    try:
+        page = max(page, 1)
+        limit = max(min(limit, 100), 1)
+        offset = (page - 1) * limit
+        search_like = f"%{search.strip()}%" if search else None
+
+        params = {
+            "co_id": co_id,
+            "search_like": search_like,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        list_query = get_sr_pending_list_query()
+        rows = db.execute(list_query, params).fetchall()
+        
+        data = []
+        for row in rows:
+            mapped = dict(row._mapping)
+            
+            # Format dates
+            inward_date_obj = mapped.get("inward_date")
+            inward_date = inward_date_obj.isoformat() if hasattr(inward_date_obj, "isoformat") else inward_date_obj
+            
+            inspection_date_obj = mapped.get("material_inspection_date")
+            inspection_date = inspection_date_obj.isoformat() if inspection_date_obj and hasattr(inspection_date_obj, "isoformat") else None
+            
+            sr_date_obj = mapped.get("sr_date")
+            sr_date = sr_date_obj.isoformat() if sr_date_obj and hasattr(sr_date_obj, "isoformat") else None
+            
+            # Format GRN/Inward number
+            raw_inward_no = mapped.get("inward_sequence_no")
+            formatted_inward_no = ""
+            if raw_inward_no is not None and raw_inward_no != 0:
+                try:
+                    formatted_inward_no = format_inward_no(
+                        inward_sequence_no=int(raw_inward_no),
+                        co_prefix=mapped.get("co_prefix"),
+                        branch_prefix=mapped.get("branch_prefix"),
+                        inward_date=inward_date_obj,
+                    )
+                except Exception:
+                    formatted_inward_no = str(raw_inward_no)
+            
+            data.append({
+                "inward_id": mapped.get("inward_id"),
+                "inward_no": formatted_inward_no,
+                "inward_date": inward_date,
+                "branch_id": mapped.get("branch_id"),
+                "branch_name": mapped.get("branch_name") or "",
+                "supplier_id": mapped.get("supplier_id"),
+                "supplier_name": mapped.get("supplier_name") or "",
+                "material_inspection_date": inspection_date,
+                "sr_no": mapped.get("sr_no") or "",
+                "sr_date": sr_date,
+                "sr_status": mapped.get("sr_status"),
+                "sr_status_name": mapped.get("sr_status_name") or "Pending",
+            })
+
+        count_query = get_sr_pending_count_query()
+        count_result = db.execute(count_query, params).scalar()
+        total = int(count_result) if count_result is not None else 0
+
+        return {"data": data, "total": total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching SR pending list")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/get_sr_by_inward_id/{inward_id}")
+async def get_sr_by_inward_id(
+    inward_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    co_id: int | None = None,
+    branch_id: int | None = None,
+):
+    """Get inward header and line items for SR page.
+    
+    Args:
+        inward_id: Required path parameter - the inward record ID
+        co_id: Optional query parameter - company ID for tenant filtering
+        branch_id: Optional query parameter - branch ID (not currently used in query but available for future filtering)
+    """
+    try:
+        # Validate inward_id
+        if not inward_id or inward_id <= 0:
+            raise HTTPException(status_code=400, detail="Valid inward_id is required")
+        
+        # Get header
+        header_query = get_inward_for_sr_query()
+        header_result = db.execute(header_query, {"inward_id": inward_id, "co_id": co_id}).fetchone()
+        
+        if not header_result:
+            raise HTTPException(status_code=404, detail="Inward not found")
+        
+        header = dict(header_result._mapping)
+        
+        # Check inspection is complete
+        if not header.get("inspection_check"):
+            raise HTTPException(status_code=400, detail="Material inspection not complete")
+        
+        # Format inward number
+        inward_date_obj = header.get("inward_date")
+        raw_inward_no = header.get("inward_sequence_no")
+        formatted_inward_no = ""
+        if raw_inward_no is not None and raw_inward_no != 0:
+            formatted_inward_no = format_inward_no(
+                inward_sequence_no=int(raw_inward_no),
+                co_prefix=header.get("co_prefix"),
+                branch_prefix=header.get("branch_prefix"),
+                inward_date=inward_date_obj,
+            )
+        
+        # Format dates
+        def format_date(date_obj):
+            if date_obj and hasattr(date_obj, "isoformat"):
+                return date_obj.isoformat()
+            return None
+        
+        # Get line items
+        dtl_query = get_inward_dtl_for_sr_query()
+        dtl_result = db.execute(dtl_query, {"inward_id": inward_id}).fetchall()
+        
+        line_items = []
+        for row in dtl_result:
+            item = dict(row._mapping)
+            # Default accepted_rate to PO rate if not set
+            if item.get("accepted_rate") is None:
+                item["accepted_rate"] = item.get("po_rate") or item.get("rate") or 0
+            line_items.append(item)
+        
+        return {
+            "header": {
+                "inward_id": header.get("inward_id"),
+                "inward_no": formatted_inward_no,
+                "inward_date": format_date(inward_date_obj),
+                "branch_id": header.get("branch_id"),
+                "branch_name": header.get("branch_name") or "",
+                "supplier_id": header.get("supplier_id"),
+                "supplier_name": header.get("supplier_name") or "",
+                "supplier_state_id": header.get("supplier_state_id"),
+                "supplier_state_name": header.get("supplier_state_name") or "",
+                "bill_branch_id": header.get("bill_branch_id"),
+                "billing_branch_name": header.get("billing_branch_name") or "",
+                "billing_state_id": header.get("billing_state_id"),
+                "billing_state_name": header.get("billing_state_name") or "",
+                "ship_branch_id": header.get("ship_branch_id"),
+                "shipping_branch_name": header.get("shipping_branch_name") or "",
+                "shipping_state_id": header.get("shipping_state_id"),
+                "shipping_state_name": header.get("shipping_state_name") or "",
+                "india_gst": bool(header.get("india_gst")),
+                "inspection_date": format_date(header.get("inspection_date")),
+                "sr_no": header.get("sr_no") or "",
+                "sr_date": format_date(header.get("sr_date")),
+                "sr_status": header.get("sr_status"),
+                "sr_status_name": header.get("sr_status_name") or "",
+                "invoice_date": format_date(header.get("invoice_date")),
+                "invoice_amount": header.get("invoice_amount"),
+                "invoice_recvd_date": format_date(header.get("invoice_recvd_date")),
+                "challan_no": header.get("challan_no") or "",
+                "challan_date": format_date(header.get("challan_date")),
+                "vehicle_number": header.get("vehicle_number") or "",
+                "driver_name": header.get("driver_name") or "",
+                "driver_contact_no": header.get("driver_contact_no") or "",
+                "consignment_no": header.get("consignment_no") or "",
+                "consignment_date": format_date(header.get("consignment_date")),
+                "ewaybillno": header.get("ewaybillno") or "",
+                "ewaybill_date": format_date(header.get("ewaybill_date")),
+                "despatch_remarks": header.get("despatch_remarks") or "",
+                "receipts_remarks": header.get("receipts_remarks") or "",
+                "sr_value": header.get("sr_value"),
+                "sr_remarks": header.get("sr_remarks") or "",
+                "gross_amount": header.get("gross_amount"),
+                "net_amount": header.get("net_amount"),
+            },
+            "line_items": line_items,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching inward for SR")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/save_sr")
+async def save_sr(
+    request_body: SRSaveRequest,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Save SR details (draft mode)."""
+    try:
+        user_id = token_data.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+        
+        now = datetime.now()
+        sr_date = datetime.strptime(request_body.sr_date, '%Y-%m-%d').date()
+        
+        # Calculate totals
+        gross_amount = 0.0
+        net_amount = 0.0
+        
+        # Update each line item
+        for line in request_body.line_items:
+            # Calculate amount
+            amount = line.amount
+            if amount is None:
+                # Need to get approved_qty from database
+                qty_query = text("SELECT approved_qty FROM proc_inward_dtl WHERE inward_dtl_id = :id")
+                qty_result = db.execute(qty_query, {"id": line.inward_dtl_id}).fetchone()
+                approved_qty = qty_result.approved_qty if qty_result else 0
+                amount = (approved_qty or 0) * (line.accepted_rate or 0)
+            
+            gross_amount += amount or 0
+            net_amount += (amount or 0) - (line.discount_amount or 0)
+            
+            update_query = update_inward_dtl_sr()
+            db.execute(update_query, {
+                "inward_dtl_id": line.inward_dtl_id,
+                "accepted_rate": line.accepted_rate,
+                "amount": amount,
+                "discount_mode": line.discount_mode,
+                "discount_value": line.discount_value,
+                "discount_amount": line.discount_amount,
+                "updated_by": user_id,
+                "updated_date_time": now,
+            })
+        
+        # Get branch_id for SR number generation
+        branch_query = text("SELECT branch_id FROM proc_inward WHERE inward_id = :id")
+        branch_result = db.execute(branch_query, {"id": request_body.inward_id}).fetchone()
+        branch_id = branch_result.branch_id if branch_result else None
+        
+        # Generate SR number if not exists
+        sr_no_query = text("SELECT sr_no FROM proc_inward WHERE inward_id = :id")
+        sr_no_result = db.execute(sr_no_query, {"id": request_body.inward_id}).fetchone()
+        sr_no = sr_no_result.sr_no if sr_no_result and sr_no_result.sr_no else None
+        
+        if not sr_no and branch_id:
+            sr_no = generate_sr_no(db, branch_id, sr_date)
+        
+        # Parse invoice_date if provided
+        invoice_date = None
+        if request_body.invoice_date:
+            try:
+                invoice_date = datetime.strptime(request_body.invoice_date, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        
+        # Update inward header
+        update_header_query = update_inward_sr()
+        db.execute(update_header_query, {
+            "inward_id": request_body.inward_id,
+            "sr_no": sr_no,
+            "sr_date": sr_date,
+            "sr_status": STATUS_DRAFT,
+            "sr_value": net_amount,
+            "sr_remarks": request_body.sr_remarks,
+            "sr_approved_by": None,
+            "bill_branch_id": request_body.bill_branch_id,
+            "ship_branch_id": request_body.ship_branch_id,
+            "invoice_date": invoice_date,
+            "invoice_amount": request_body.invoice_amount,
+            "gross_amount": gross_amount,
+            "net_amount": net_amount,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "SR saved successfully",
+            "inward_id": request_body.inward_id,
+            "sr_no": sr_no,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error saving SR")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/open_sr")
+async def open_sr(
+    request_body: SRApproveRequest,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Open SR for approval."""
+    try:
+        user_id = token_data.get("user_id")
+        now = datetime.now()
+        
+        # Update status to Open
+        query = text("""
+            UPDATE proc_inward
+            SET sr_status = :status_id, updated_by = :updated_by, updated_date_time = :updated_date_time
+            WHERE inward_id = :inward_id
+        """)
+        db.execute(query, {
+            "inward_id": request_body.inward_id,
+            "status_id": STATUS_OPEN,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+        
+        db.commit()
+        
+        return {"success": True, "message": "SR opened successfully"}
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error opening SR")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/approve_sr")
+async def approve_sr(
+    request_body: SRApproveRequest,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Approve SR. 
+    Auto-creates DRCR Note if there are rate differences or rejected quantities.
+    """
+    try:
+        user_id = token_data.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+        
+        now = datetime.now()
+        today = date.today()
+        
+        # Get line items to check for rate differences and rejections
+        dtl_query = get_inward_dtl_for_sr_query()
+        line_items = db.execute(dtl_query, {"inward_id": request_body.inward_id}).fetchall()
+        
+        # Check for rate differences and rejected quantities
+        drcr_lines_debit = []  # For rate decrease or rejected qty
+        drcr_lines_credit = []  # For rate increase
+        
+        for row in line_items:
+            item = dict(row._mapping)
+            po_rate = item.get("po_rate") or item.get("rate") or 0
+            accepted_rate = item.get("accepted_rate") or po_rate
+            rejected_qty = item.get("rejected_qty") or 0
+            approved_qty = item.get("approved_qty") or 0
+            
+            rate_diff = po_rate - accepted_rate
+            
+            # Rejected quantity - always creates debit note
+            if rejected_qty > 0:
+                drcr_lines_debit.append({
+                    "inward_dtl_id": item.get("inward_dtl_id"),
+                    "debitnote_type": 1,  # Quantity rejection
+                    "quantity": rejected_qty,
+                    "rate": po_rate,
+                })
+            
+            # Rate difference
+            if rate_diff > 0:
+                # Rate decreased - create debit note (supplier owes us)
+                drcr_lines_debit.append({
+                    "inward_dtl_id": item.get("inward_dtl_id"),
+                    "debitnote_type": 2,  # Rate difference
+                    "quantity": approved_qty,
+                    "rate": rate_diff,
+                })
+            elif rate_diff < 0:
+                # Rate increased - create credit note (we owe supplier)
+                drcr_lines_credit.append({
+                    "inward_dtl_id": item.get("inward_dtl_id"),
+                    "debitnote_type": 2,  # Rate difference
+                    "quantity": approved_qty,
+                    "rate": abs(rate_diff),
+                })
+        
+        # Create Debit Note if needed
+        if drcr_lines_debit:
+            gross_amount = sum(line["quantity"] * line["rate"] for line in drcr_lines_debit)
+            
+            # Insert debit note header
+            insert_note = insert_drcr_note()
+            db.execute(insert_note, {
+                "note_date": today,
+                "adjustment_type": DRCR_TYPE_DEBIT,
+                "inward_id": request_body.inward_id,
+                "remarks": "Auto-created on SR approval",
+                "status_id": STATUS_DRAFT,
+                "auto_create": 1,
+                "updated_by": user_id,
+                "updated_date_time": now,
+                "gross_amount": gross_amount,
+                "net_amount": gross_amount,
+            })
+            
+            # Get the inserted note ID
+            note_id_result = db.execute(text("SELECT LAST_INSERT_ID() as id")).fetchone()
+            note_id = note_id_result.id if note_id_result else None
+            
+            # Insert line items
+            if note_id:
+                insert_dtl = insert_drcr_note_dtl()
+                for line in drcr_lines_debit:
+                    db.execute(insert_dtl, {
+                        "inward_dtl_id": line["inward_dtl_id"],
+                        "debitnote_type": line["debitnote_type"],
+                        "quantity": line["quantity"],
+                        "rate": line["rate"],
+                        "discount_mode": None,
+                        "discount_value": None,
+                        "discount_amount": None,
+                        "updated_by": user_id,
+                        "updated_date_time": now,
+                    })
+        
+        # Create Credit Note if needed
+        if drcr_lines_credit:
+            gross_amount = sum(line["quantity"] * line["rate"] for line in drcr_lines_credit)
+            
+            # Insert credit note header
+            insert_note = insert_drcr_note()
+            db.execute(insert_note, {
+                "note_date": today,
+                "adjustment_type": DRCR_TYPE_CREDIT,
+                "inward_id": request_body.inward_id,
+                "remarks": "Auto-created on SR approval (rate increase)",
+                "status_id": STATUS_DRAFT,
+                "auto_create": 1,
+                "updated_by": user_id,
+                "updated_date_time": now,
+                "gross_amount": gross_amount,
+                "net_amount": gross_amount,
+            })
+            
+            # Get the inserted note ID
+            note_id_result = db.execute(text("SELECT LAST_INSERT_ID() as id")).fetchone()
+            note_id = note_id_result.id if note_id_result else None
+            
+            # Insert line items
+            if note_id:
+                insert_dtl = insert_drcr_note_dtl()
+                for line in drcr_lines_credit:
+                    db.execute(insert_dtl, {
+                        "inward_dtl_id": line["inward_dtl_id"],
+                        "debitnote_type": line["debitnote_type"],
+                        "quantity": line["quantity"],
+                        "rate": line["rate"],
+                        "discount_mode": None,
+                        "discount_value": None,
+                        "discount_amount": None,
+                        "updated_by": user_id,
+                        "updated_date_time": now,
+                    })
+        
+        # Update SR status to Approved
+        query = text("""
+            UPDATE proc_inward
+            SET sr_status = :status_id, sr_approved_by = :approved_by, updated_by = :updated_by, updated_date_time = :updated_date_time
+            WHERE inward_id = :inward_id
+        """)
+        db.execute(query, {
+            "inward_id": request_body.inward_id,
+            "status_id": STATUS_APPROVED,
+            "approved_by": user_id,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+        
+        db.commit()
+        
+        drcr_created = len(drcr_lines_debit) > 0 or len(drcr_lines_credit) > 0
+        message = "SR approved successfully"
+        if drcr_created:
+            message += ". DRCR Note(s) auto-created."
+        
+        return {
+            "success": True,
+            "message": message,
+            "drcr_created": drcr_created,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error approving SR")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/reject_sr")
+async def reject_sr(
+    request_body: SRApproveRequest,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Reject SR."""
+    try:
+        user_id = token_data.get("user_id")
+        now = datetime.now()
+        
+        query = text("""
+            UPDATE proc_inward
+            SET sr_status = :status_id, updated_by = :updated_by, updated_date_time = :updated_date_time
+            WHERE inward_id = :inward_id
+        """)
+        db.execute(query, {
+            "inward_id": request_body.inward_id,
+            "status_id": STATUS_REJECTED,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+        
+        db.commit()
+        
+        return {"success": True, "message": "SR rejected"}
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error rejecting SR")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

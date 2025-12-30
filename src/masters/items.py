@@ -451,7 +451,8 @@ async def item_update_full(
         delete_uom_sql = text("DELETE FROM uom_item_map_mst WHERE item_id = :item_id")
         db.execute(delete_uom_sql, {"item_id": item_id})
         for m in uom_mappings:
-            map_to = sanitize_int(m.get("mapToUom") or m.get("mapToUom") or m.get("map_to_uom"))
+            map_from = sanitize_int(m.get("map_from_id") or m.get("mapFromUom") or m.get("map_from_uom")) or existing.uom_id
+            map_to = sanitize_int(m.get("map_to_id") or m.get("mapToUom") or m.get("map_to_uom"))
             is_fixed = 1 if m.get("isFixed") or m.get("is_fixed") else 0
             relation_value = sanitize_float(m.get("relationValue") or m.get("relation_value"))
             rounding = sanitize_int(m.get("rounding"))
@@ -460,7 +461,7 @@ async def item_update_full(
             )
             db.execute(insert_uom_sql, {
                 "item_id": item_id,
-                "map_from": existing.uom_id,
+                "map_from": map_from,
                 "map_to": map_to,
                 "is_fixed": is_fixed,
                 "relation_value": relation_value,
