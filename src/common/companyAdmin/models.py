@@ -127,6 +127,7 @@ class BranchMst(Base):
 
     branch_id = Column(Integer, primary_key=True, autoincrement=True)
     branch_name = Column(String(255), nullable=False, unique=True)
+    branch_prefix = Column(String(100))
     co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
     branch_address1 = Column(String(255))
     branch_address2 = Column(String(255))

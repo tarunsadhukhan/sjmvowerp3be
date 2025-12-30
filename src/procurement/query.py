@@ -1,0 +1,2283 @@
+from sqlalchemy.sql import text
+from sqlalchemy.sql import bindparam
+from sqlalchemy.sql.elements import TextClause
+
+def get_expense_types():
+    sql = f"""select expense_type_id, etm.expense_type_name  
+    from expense_type_mst etm where etm.active =1 ;"""
+    query = text(sql)
+    return query
+
+def get_project(branch_id: int = None):
+    sql = f"""select pm.prj_name , pm.project_id 
+    from project_mst pm where pm.branch_id = :branch_id and pm.active =1 ;"""
+    query = text(sql)
+    return query
+
+def get_make(co_id: int = None):
+    sql = f"""select igm.item_grp_id, im.item_make_id , im.item_make_name   from item_grp_mst igm
+right join item_make im on im.item_grp_id = igm.item_grp_id 
+where igm.co_id = :co_id;"""
+    query = text(sql)
+    return query
+
+def get_item_by_group_id_purchaseable(item_group_id: int):
+    sql = f"""Select im.item_id,
+im.item_code , im.item_name , im.uom_id , um.uom_name
+from item_mst im 
+left join uom_mst um on um.uom_id= im.uom_id
+where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;"""
+    query = text(sql)
+    return query
+
+def get_item_make_by_group_id(item_group_id: int):
+    sql = f"""select im.item_make_id, im.item_make_name 
+    from item_make im 
+    where im.item_grp_id = :item_group_id;"""
+    query = text(sql)
+    return query
+
+def get_item_uom_by_group_id(item_group_id: int):
+    sql = f"""SELECT uimm.item_id, uimm.map_to_id, um.uom_name
+FROM uom_item_map_mst AS uimm
+JOIN item_mst AS im
+  ON im.item_id = uimm.item_id
+ AND im.item_grp_id = :item_group_id
+ AND im.purchaseable = 1
+ AND im.active = 1
+LEFT JOIN uom_mst AS um
+  ON um.uom_id = uimm.map_to_id;"""
+    query = text(sql)
+    return query
+
+
+def insert_proc_indent():
+    sql = """INSERT INTO proc_indent (
+    indent_date,
+    indent_no,
+    active,
+    indent_type_id,
+    remarks,
+    branch_id,
+    expense_type_id,
+    project_id,
+    updated_by,
+    updated_date_time,
+    status_id,
+    indent_title
+) VALUES (
+    :indent_date,
+    :indent_no,
+    :active,
+    :indent_type_id,
+    :remarks,
+    :branch_id,
+    :expense_type_id,
+    :project_id,
+    :updated_by,
+    :updated_date_time,
+    :status_id,
+    :indent_title
+);"""
+    return text(sql)
+
+
+def insert_proc_indent_detail():
+    sql = """INSERT INTO proc_indent_dtl (
+    indent_id,
+    required_by_days,
+    active,
+    item_id,
+    qty,
+    uom_id,
+    remarks,
+    updated_by,
+    updated_date_time,
+    item_make_id,
+    dept_id
+) VALUES (
+    :indent_id,
+    :required_by_days,
+    :active,
+    :item_id,
+    :qty,
+    :uom_id,
+    :remarks,
+    :updated_by,
+    :updated_date_time,
+    :item_make_id,
+    :dept_id
+);"""
+    return text(sql)
+
+
+def get_indent_table_query():
+        sql = """SELECT
+        pi.indent_id,
+        pi.indent_no,
+        pi.indent_date,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        etm.expense_type_name,
+        sm.status_name
+FROM proc_indent AS pi
+LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
+LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
+WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (
+                :search_like IS NULL
+                OR pi.indent_no LIKE :search_like
+                OR bm.branch_name LIKE :search_like
+                OR etm.expense_type_name LIKE :search_like
+            )
+ORDER BY pi.indent_date DESC, pi.indent_id DESC
+LIMIT :limit OFFSET :offset;"""
+        return text(sql)
+
+
+def get_all_approved_indents_query():
+    """Get all approved indents (status_id = 3) for dropdown selection."""
+    sql = """SELECT
+        pi.indent_id,
+        pi.indent_no,
+        pi.indent_date,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        etm.expense_type_name
+    FROM proc_indent AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
+    WHERE pi.status_id = 3
+        AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND bm.active = 1
+    ORDER BY pi.indent_date DESC, pi.indent_id DESC;"""
+    return text(sql)
+
+
+def get_indent_table_count_query():
+        sql = """SELECT COUNT(1) AS total
+FROM proc_indent AS pi
+LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
+WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (
+                :search_like IS NULL
+                OR pi.indent_no LIKE :search_like
+                OR bm.branch_name LIKE :search_like
+                OR etm.expense_type_name LIKE :search_like
+            );"""
+        return text(sql)
+
+
+def get_po_table_query():
+    sql = """SELECT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pm.supp_name,
+        pp.total_amount AS po_value,
+        pp.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        prjm.prj_name AS project_name,
+        sm.status_name
+    FROM proc_po AS pp
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pp.supplier_id
+    LEFT JOIN project_mst AS prjm ON prjm.project_id = pp.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pp.status_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY pp.po_date DESC, pp.po_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_po_table_count_query():
+    sql = """SELECT COUNT(1) AS total
+    FROM proc_po AS pp
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pp.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_inward_table_query():
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        pi.inspection_check,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pm.party_id AS supplier_id,
+        pm.supp_name AS supplier_name,
+        sm.status_name
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = (
+        SELECT DISTINCT ppd.po_id 
+        FROM proc_inward_dtl AS pid 
+        LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+        WHERE pid.inward_id = pi.inward_id
+        LIMIT 1
+    )
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY pi.inward_date DESC, pi.inward_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_inward_table_count_query():
+    sql = """SELECT COUNT(1) AS total
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = (
+        SELECT DISTINCT ppd.po_id 
+        FROM proc_inward_dtl AS pid 
+        LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+        WHERE pid.inward_id = pi.inward_id
+        LIMIT 1
+    )
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pp.po_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_inward_by_id_query():
+    """Fetch inward header by inward_id with related branch, supplier, and status."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.challan_no,
+        pi.challan_date,
+        pi.invoice_date,
+        pi.invoice_amount,
+        pi.invoice_recvd_date,
+        pi.vehicle_number,
+        pi.driver_name,
+        pi.driver_contact_number AS driver_contact_no,
+        pi.consignment_no,
+        pi.consignment_date,
+        pi.ewaybillno,
+        pi.ewaybill_date,
+        pi.despatch_remarks,
+        pi.receipts_remarks,
+        pi.project_id,
+        prj.prj_name AS project_name,
+        pi.sr_status AS status_id,
+        sm.status_name,
+        pi.updated_by,
+        pi.updated_date_time,
+        pi.gross_amount,
+        pi.net_amount
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN project_mst AS prj ON prj.project_id = pi.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE pi.inward_id = :inward_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_inward_detail_by_id_query():
+    """Fetch inward line items by inward_id with item and PO details."""
+    sql = """SELECT
+        pid.inward_dtl_id,
+        pid.inward_id,
+        pid.po_dtl_id,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.inward_qty AS quantity,
+        pid.uom_id,
+        um.uom_name,
+        pid.rate,
+        pid.amount,
+        pid.remarks,
+        pid.status_id,
+        bm.branch_prefix,
+        cm.co_prefix
+    FROM proc_inward_dtl AS pid
+    LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    WHERE pid.inward_id = :inward_id
+        AND pid.active = 1
+    ORDER BY pid.inward_dtl_id;"""
+    return text(sql)
+
+
+def get_indent_by_id_query():
+    sql = """SELECT
+        pi.indent_id,
+        pi.indent_no,
+        pi.indent_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.indent_type_id,
+        pi.expense_type_id,
+        etm.expense_type_name,
+        pi.project_id,
+        pm.prj_name AS project_name,
+        pi.indent_title,
+        pi.remarks,
+        pi.status_id,
+        sm.status_name,
+        pi.updated_by,
+        pi.updated_date_time,
+        CASE 
+            WHEN pi.status_id = 20 THEN pi.approval_level 
+            ELSE NULL 
+        END AS approval_level
+    FROM proc_indent AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
+    LEFT JOIN project_mst AS pm ON pm.project_id = pi.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
+    WHERE pi.indent_id = :indent_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_indent_detail_by_id_query():
+    sql = """SELECT
+        pid.indent_dtl_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
+        pid.qty,
+        pid.uom_id,
+        um.uom_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.dept_id,
+        dm.dept_desc AS dept_name,
+        pid.remarks
+    FROM proc_indent_dtl AS pid
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
+    WHERE pid.indent_id = :indent_id
+        AND pid.active = 1
+    ORDER BY pid.indent_dtl_id;"""
+    return text(sql)
+
+
+def update_proc_indent():
+    sql = """UPDATE proc_indent SET
+        indent_date = :indent_date,
+        branch_id = :branch_id,
+        indent_type_id = :indent_type_id,
+        expense_type_id = :expense_type_id,
+        project_id = :project_id,
+        indent_title = :indent_title,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        indent_no = COALESCE(:indent_no, indent_no),
+        active = COALESCE(:active, active),
+        status_id = COALESCE(:status_id, status_id)
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def delete_proc_indent_detail():
+    sql = """UPDATE proc_indent_dtl SET
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def get_approval_flow_by_menu_branch():
+    """Get approval flow details for a specific menu and branch.
+    Returns all approval levels configured for the menu/branch combination.
+    """
+    sql = """SELECT
+        am.approval_mst_id,
+        am.menu_id,
+        am.user_id,
+        am.branch_id,
+        am.approval_level,
+        am.max_amount_single,
+        am.day_max_amount,
+        am.month_max_amount,
+        um.user_name,
+        mm.menu_name
+    FROM approval_mst am
+    LEFT JOIN user_mst um ON um.user_id = am.user_id
+    LEFT JOIN menu_mst mm ON mm.menu_id = am.menu_id
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id
+    ORDER BY am.approval_level ASC;"""
+    return text(sql)
+
+
+def get_user_approval_level():
+    """Get the approval level of a specific user for a menu and branch."""
+    sql = """SELECT
+        am.approval_level,
+        am.max_amount_single,
+        am.day_max_amount,
+        am.month_max_amount
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id
+        AND am.user_id = :user_id
+    LIMIT 1;"""
+    return text(sql)
+
+
+def get_max_approval_level():
+    """Get the maximum approval level configured for a menu and branch."""
+    sql = """SELECT MAX(am.approval_level) as max_level
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id;"""
+    return text(sql)
+
+
+def get_user_consumed_amounts():
+    """Get amounts already consumed by user for the day and month.
+    This aggregates amounts from documents approved by the user today/this month.
+    Note: This needs to be customized based on which table stores the document amounts.
+    """
+    sql = """SELECT
+        COALESCE(SUM(CASE WHEN DATE(pi.updated_date_time) = CURDATE() THEN 1 ELSE 0 END), 0) as day_count,
+        COALESCE(SUM(CASE WHEN YEAR(pi.updated_date_time) = YEAR(CURDATE()) 
+                          AND MONTH(pi.updated_date_time) = MONTH(CURDATE()) THEN 1 ELSE 0 END), 0) as month_count
+    FROM proc_indent pi
+    WHERE pi.approval_level = :approval_level
+        AND pi.status_id = 3
+        AND EXISTS (
+            SELECT 1 FROM approval_mst am
+            WHERE am.menu_id = :menu_id
+                AND am.branch_id = :branch_id
+                AND am.user_id = :user_id
+                AND am.approval_level = :approval_level
+        );"""
+    return text(sql)
+
+
+def check_approval_mst_exists():
+    """Check if approval_mst has any entries for a menu and branch."""
+    sql = """SELECT COUNT(*) as count
+    FROM approval_mst am
+    WHERE am.menu_id = :menu_id
+        AND am.branch_id = :branch_id;"""
+    return text(sql)
+
+
+def get_user_edit_access():
+    """Check if user has edit access (access_type_id >= 4) for a menu and branch."""
+    sql = """SELECT 
+        MAX(CASE WHEN ccm.access_type = 1 THEN 1 ELSE rmm.access_type_id END) as max_access_type_id
+    FROM user_role_map urm
+    LEFT JOIN role_menu_map rmm ON rmm.role_id = urm.role_id
+    LEFT JOIN menu_mst mm ON mm.menu_id = rmm.menu_id AND mm.active = 1
+    LEFT JOIN control_co_module ccm ON urm.co_id = ccm.co_id AND ccm.module_id = mm.module_mst_id
+    WHERE urm.user_id = :user_id
+        AND urm.branch_id = :branch_id
+        AND rmm.menu_id = :menu_id
+        AND IFNULL(ccm.access_type, 0) NOT IN (2);"""
+    return text(sql)
+
+
+def update_indent_status():
+    """Update indent status and approval level. Optionally update indent_no."""
+    sql = """UPDATE proc_indent SET
+        status_id = :status_id,
+        approval_level = :approval_level,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        indent_no = CASE 
+            WHEN :indent_no IS NOT NULL THEN :indent_no 
+            ELSE indent_no 
+        END
+    WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def get_max_indent_no_for_branch_fy():
+    """Get the maximum indent_no for a branch within a financial year.
+    
+    Financial year: April 1 to March 31
+    - If month >= 4 (April-December): FY = year-04-01 to (year+1)-03-31
+    - If month < 4 (January-March): FY = (year-1)-04-01 to year-03-31
+    """
+    sql = """SELECT COALESCE(MAX(pi.indent_no), 0) as max_indent_no
+    FROM proc_indent pi
+    WHERE pi.branch_id = :branch_id
+        AND pi.indent_date >= :fy_start_date
+        AND pi.indent_date <= :fy_end_date
+        AND pi.indent_no IS NOT NULL;"""
+    return text(sql)
+
+
+def get_indent_with_approval_info():
+    """Get indent details including approval level and status."""
+    sql = """SELECT
+        pi.indent_id,
+        pi.status_id,
+        pi.approval_level,
+        pi.branch_id,
+        pi.indent_date,
+        pi.indent_no,
+        bm.co_id
+    FROM proc_indent pi
+    LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    WHERE pi.indent_id = :indent_id;"""
+    return text(sql)
+
+
+# ==================== PO QUERY FUNCTIONS ====================
+
+def get_suppliers_with_party_type_1(co_id: int = None):
+    """Get suppliers where party_type_id contains 1 with full details."""
+    sql = """SELECT 
+        pm.party_id,
+        pm.supp_name AS supplier_name,
+        pm.supp_code AS supplier_code,
+        pm.supp_contact_person,
+        pm.supp_contact_designation,
+        pm.supp_email_id,
+        pm.phone_no,
+        pm.party_pan_no,
+        pm.country_id,
+        cm.country,
+        pm.msme_certified,
+        pm.entity_type_id,
+        etm.entity_type_name
+    FROM party_mst pm
+    LEFT JOIN country_mst cm ON cm.country_id = pm.country_id
+    LEFT JOIN entity_type_mst etm ON etm.entity_type_id = pm.entity_type_id
+    WHERE FIND_IN_SET("1", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+        AND (:co_id IS NULL OR pm.co_id = :co_id)
+        AND pm.active = 1
+    ORDER BY pm.supp_name;"""
+    return text(sql)
+
+
+def get_supplier_branches(party_id: int):
+    """Get branch addresses for a supplier with full address details."""
+    sql = """SELECT 
+        pbm.party_mst_branch_id,
+        pbm.party_id,
+        pbm.address AS branch_address1,
+        pbm.address_additional AS branch_address2,
+        pbm.city_id,
+        cim.city_name,
+        cim.state_id,
+        sm.state AS state,
+        pbm.zip_code,
+        pbm.contact_person,
+        pbm.contact_no,
+        pbm.gst_no
+    FROM party_branch_mst pbm
+    LEFT JOIN city_mst cim ON cim.city_id = pbm.city_id
+    LEFT JOIN state_mst sm ON sm.state_id = cim.state_id
+    WHERE pbm.party_id = :party_id
+        AND pbm.active = 1
+    ORDER BY pbm.party_mst_branch_id;"""
+    return text(sql)
+
+
+def get_company_branch_addresses(co_id: int = None, branch_id: int = None):
+    """Get branch addresses for company branches with state information. If branch_id is provided, filter by that branch."""
+    sql = """SELECT 
+        bm.branch_id,
+        bm.branch_name,
+        bm.branch_address1,
+        bm.branch_address2,
+        bm.state_id,
+        sm.state AS state_name,
+        bm.branch_zipcode,
+        bm.co_id
+    FROM branch_mst bm
+    LEFT JOIN state_mst sm ON sm.state_id = bm.state_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR bm.branch_id = :branch_id)
+        AND bm.active = 1
+    ORDER BY bm.branch_name;"""
+    return text(sql)
+
+
+def get_indent_line_items_for_po(indent_id: int):
+    """Get line items for an indent to be used in PO creation popup."""
+    sql = """SELECT
+        pid.indent_dtl_id,
+        pi.indent_id,
+        pi.indent_no,
+        pi.expense_type_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
+        pid.qty,
+        pid.uom_id,
+        um.uom_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.dept_id,
+        dm.dept_desc AS dept_name,
+        im.tax_percentage,
+        pid.remarks
+    FROM proc_indent_dtl AS pid
+    LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
+    WHERE pid.indent_id = :indent_id
+        AND pid.active = 1
+    ORDER BY pid.indent_dtl_id;"""
+    return text(sql)
+
+
+def insert_proc_po():
+    """Insert PO header."""
+    sql = """INSERT INTO proc_po (
+        credit_days,
+        delivery_instructions,
+        expected_delivery_days,
+        footer_notes,
+        po_date,
+        po_approve_date,
+        po_no,
+        remarks,
+        delivery_mode,
+        terms_conditions,
+        branch_id,
+        price_enquiry_id,
+        project_id,
+        supplier_id,
+        status_id,
+        supplier_branch_id,
+        billing_branch_id,
+        shipping_branch_id,
+        total_amount,
+        net_amount,
+        advance_type,
+        advance_value,
+        advance_amount,
+        contact_no,
+        contact_person,
+        updated_by,
+        updated_date_time,
+        approval_level,
+        expense_type_id
+    ) VALUES (
+        :credit_days,
+        :delivery_instructions,
+        :expected_delivery_days,
+        :footer_notes,
+        :po_date,
+        :po_approve_date,
+        :po_no,
+        :remarks,
+        :delivery_mode,
+        :terms_conditions,
+        :branch_id,
+        :price_enquiry_id,
+        :project_id,
+        :supplier_id,
+        :status_id,
+        :supplier_branch_id,
+        :billing_branch_id,
+        :shipping_branch_id,
+        :total_amount,
+        :net_amount,
+        :advance_type,
+        :advance_value,
+        :advance_amount,
+        :contact_no,
+        :contact_person,
+        :updated_by,
+        :updated_date_time,
+        :approval_level,
+        :expense_type_id
+    );"""
+    return text(sql)
+
+
+def insert_proc_po_dtl():
+    """Insert PO line item."""
+    sql = """INSERT INTO proc_po_dtl (
+        po_id,
+        item_id,
+        hsn_code,
+        item_make_id,
+        qty,
+        rate,
+        uom_id,
+        remarks,
+        discount_mode,
+        discount_value,
+        discount_amount,
+        active,
+        indent_dtl_id,
+        updated_by,
+        updated_date_time,
+        state
+    ) VALUES (
+        :po_id,
+        :item_id,
+        :hsn_code,
+        :item_make_id,
+        :qty,
+        :rate,
+        :uom_id,
+        :remarks,
+        :discount_mode,
+        :discount_value,
+        :discount_amount,
+        :active,
+        :indent_dtl_id,
+        :updated_by,
+        :updated_date_time,
+        :state
+    );"""
+    return text(sql)
+
+
+def insert_proc_po_additional():
+    """Insert PO additional charges."""
+    sql = """INSERT INTO proc_po_additional (
+        po_id,
+        additional_charges_id,
+        qty,
+        rate,
+        net_amount,
+        remarks
+    ) VALUES (
+        :po_id,
+        :additional_charges_id,
+        :qty,
+        :rate,
+        :net_amount,
+        :remarks
+    );"""
+    return text(sql)
+
+
+def insert_po_gst():
+    """Insert PO GST record."""
+    sql = """INSERT INTO po_gst (
+        po_dtl_id,
+        po_additional_id,
+        tax_pct,
+        stax_percentage,
+        s_tax_amount,
+        i_tax_amount,
+        i_tax_percentage,
+        c_tax_amount,
+        c_tax_percentage,
+        tax_amount
+    ) VALUES (
+        :po_dtl_id,
+        :po_additional_id,
+        :tax_pct,
+        :stax_percentage,
+        :s_tax_amount,
+        :i_tax_amount,
+        :i_tax_percentage,
+        :c_tax_amount,
+        :c_tax_percentage,
+        :tax_amount
+    );"""
+    return text(sql)
+
+
+def update_proc_po():
+    """Update PO header."""
+    sql = """UPDATE proc_po SET
+        credit_days = :credit_days,
+        delivery_instructions = :delivery_instructions,
+        expected_delivery_days = :expected_delivery_days,
+        footer_notes = :footer_notes,
+        po_date = :po_date,
+        remarks = :remarks,
+        delivery_mode = :delivery_mode,
+        terms_conditions = :terms_conditions,
+        branch_id = :branch_id,
+        project_id = :project_id,
+        supplier_id = :supplier_id,
+        supplier_branch_id = :supplier_branch_id,
+        billing_branch_id = :billing_branch_id,
+        shipping_branch_id = :shipping_branch_id,
+        total_amount = :total_amount,
+        net_amount = :net_amount,
+        advance_type = :advance_type,
+        advance_value = :advance_value,
+        advance_amount = :advance_amount,
+        contact_no = :contact_no,
+        contact_person = :contact_person,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        po_no = COALESCE(:po_no, po_no),
+        status_id = COALESCE(:status_id, status_id),
+        approval_level = :approval_level,
+        expense_type_id = :expense_type_id
+    WHERE po_id = :po_id;"""
+    return text(sql)
+
+
+def delete_proc_po_dtl():
+    """Soft delete PO line items."""
+    sql = """UPDATE proc_po_dtl SET
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE po_id = :po_id;"""
+    return text(sql)
+
+
+def delete_proc_po_additional():
+    """Delete PO additional charges."""
+    sql = """DELETE FROM proc_po_additional
+    WHERE po_id = :po_id;"""
+    return text(sql)
+
+
+def delete_po_gst():
+    """Delete PO GST records."""
+    sql = """DELETE FROM po_gst
+    WHERE po_dtl_id IN (
+        SELECT po_dtl_id FROM proc_po_dtl WHERE po_id = :po_id
+    ) OR po_additional_id IN (
+        SELECT po_additional_id FROM proc_po_additional WHERE po_id = :po_id
+    );"""
+    return text(sql)
+
+
+def get_po_by_id_query():
+    """Get PO header by ID."""
+    sql = """SELECT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pp.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pp.supplier_id,
+        pm.supp_name AS supplier_name,
+        pp.supplier_branch_id,
+        pbm.address AS supplier_branch_address,
+        pp.billing_branch_id,
+        bm_billing.branch_name AS billing_branch_name,
+        bm_billing.state_id AS billing_state_id,
+        sm_billing.state AS billing_state_name,
+        pp.shipping_branch_id,
+        bm_shipping.branch_name AS shipping_branch_name,
+        bm_shipping.state_id AS shipping_state_id,
+        sm_shipping.state AS shipping_state_name,
+        pp.project_id,
+        prjm.prj_name AS project_name,
+        pp.credit_days,
+        pp.expected_delivery_days,
+        pp.contact_person,
+        pp.contact_no,
+        pp.footer_notes,
+        pp.remarks,
+        pp.terms_conditions,
+        pp.total_amount,
+        pp.net_amount,
+        pp.advance_type,
+        pp.advance_value,
+        pp.advance_amount,
+        pp.status_id,
+        sm.status_name,
+        pp.updated_by,
+        pp.updated_date_time AS update_date_time,
+        CASE 
+            WHEN pp.status_id = 20 THEN pp.approval_level 
+            ELSE NULL 
+        END AS approval_level,
+        pp.expense_type_id
+    FROM proc_po AS pp
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pp.supplier_id
+    LEFT JOIN party_branch_mst AS pbm ON pbm.party_mst_branch_id = pp.supplier_branch_id
+    LEFT JOIN branch_mst AS bm_billing ON bm_billing.branch_id = pp.billing_branch_id
+    LEFT JOIN state_mst AS sm_billing ON sm_billing.state_id = bm_billing.state_id
+    LEFT JOIN branch_mst AS bm_shipping ON bm_shipping.branch_id = pp.shipping_branch_id
+    LEFT JOIN state_mst AS sm_shipping ON sm_shipping.state_id = bm_shipping.state_id
+    LEFT JOIN project_mst AS prjm ON prjm.project_id = pp.project_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pp.status_id
+    WHERE pp.po_id = :po_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_po_dtl_by_id_query():
+    """Get PO line items by PO ID."""
+    sql = """SELECT
+        pod.po_dtl_id,
+        pod.po_id,
+        pod.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
+        pod.hsn_code,
+        pod.item_make_id,
+        imk.item_make_name,
+        pod.qty,
+        pod.rate,
+        pod.uom_id,
+        um.uom_name,
+        pod.remarks,
+        pod.discount_mode,
+        pod.discount_value,
+        pod.discount_amount,
+        pod.indent_dtl_id,
+        pid.indent_id,
+        pi.indent_no,
+        dm.dept_id,
+        dm.dept_desc AS dept_name
+    FROM proc_po_dtl AS pod
+    LEFT JOIN item_mst AS im ON im.item_id = pod.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pod.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pod.uom_id
+    LEFT JOIN proc_indent_dtl AS pid ON pid.indent_dtl_id = pod.indent_dtl_id
+    LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
+    LEFT JOIN dept_mst AS dm ON dm.dept_id = (
+        SELECT dept_id FROM proc_indent_dtl WHERE indent_dtl_id = pod.indent_dtl_id
+    )
+    WHERE pod.po_id = :po_id
+        AND pod.active = 1
+    ORDER BY pod.po_dtl_id;"""
+    return text(sql)
+
+
+def get_po_additional_by_id_query():
+    """Get PO additional charges by PO ID."""
+    sql = """SELECT
+        ppa.po_additional_id,
+        ppa.po_id,
+        ppa.additional_charges_id,
+        acm.additional_charges_name,
+        ppa.qty,
+        ppa.rate,
+        ppa.net_amount,
+        ppa.remarks
+    FROM proc_po_additional AS ppa
+    LEFT JOIN additional_charges_master AS acm ON acm.additional_charges_id = ppa.additional_charges_id
+    WHERE ppa.po_id = :po_id
+    ORDER BY ppa.po_additional_id;"""
+    return text(sql)
+
+
+def get_po_gst_by_id_query():
+    """Get PO GST records by PO ID."""
+    sql = """SELECT
+        pg.po_gst_id,
+        pg.po_dtl_id,
+        pg.po_additional_id,
+        pg.tax_pct,
+        pg.stax_percentage,
+        pg.s_tax_amount,
+        pg.i_tax_amount,
+        pg.i_tax_percentage,
+        pg.c_tax_amount,
+        pg.c_tax_percentage,
+        pg.tax_amount
+    FROM po_gst AS pg
+    WHERE pg.po_dtl_id IN (
+        SELECT po_dtl_id FROM proc_po_dtl WHERE po_id = :po_id
+    ) OR pg.po_additional_id IN (
+        SELECT po_additional_id FROM proc_po_additional WHERE po_id = :po_id
+    )
+    ORDER BY pg.po_gst_id;"""
+    return text(sql)
+
+
+def get_max_po_no_for_branch_fy():
+    """Get the maximum po_no for a branch within a financial year.
+    
+    Financial year: April 1 to March 31
+    - If month >= 4 (April-December): FY = year-04-01 to (year+1)-03-31
+    - If month < 4 (January-March): FY = (year-1)-04-01 to year-03-31
+    """
+    sql = """SELECT COALESCE(MAX(CAST(pp.po_no AS UNSIGNED)), 0) as max_po_no
+    FROM proc_po pp
+    WHERE pp.branch_id = :branch_id
+        AND pp.po_date >= :fy_start_date
+        AND pp.po_date <= :fy_end_date
+        AND pp.po_no IS NOT NULL
+        AND pp.po_no REGEXP '^[0-9]+$';"""
+    return text(sql)
+
+
+def get_po_with_approval_info():
+    """Get PO details including approval level and status."""
+    sql = """SELECT
+        pp.po_id,
+        pp.status_id,
+        pp.approval_level,
+        pp.branch_id,
+        pp.po_date,
+        pp.po_no,
+        pp.total_amount,
+        bm.co_id
+    FROM proc_po pp
+    LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    WHERE pp.po_id = :po_id;"""
+    return text(sql)
+
+
+def get_po_header_query():
+    """Get PO header by ID for cloning (simplified, no co_id filter)."""
+    sql = """SELECT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pp.branch_id,
+        pp.supplier_id,
+        pp.supplier_branch_id,
+        pp.billing_branch_id,
+        pp.shipping_branch_id,
+        pp.project_id,
+        pp.credit_days,
+        pp.expected_delivery_days,
+        pp.contact_person,
+        pp.contact_no,
+        pp.footer_notes,
+        pp.remarks,
+        pp.terms_conditions,
+        pp.delivery_mode,
+        pp.delivery_instructions,
+        pp.total_amount,
+        pp.net_amount,
+        pp.advance_type,
+        pp.advance_value,
+        pp.advance_amount,
+        pp.status_id,
+        pp.expense_type_id
+    FROM proc_po AS pp
+    WHERE pp.po_id = :po_id;"""
+    return text(sql)
+
+
+def get_po_dtl_query():
+    """Get PO line items by PO ID for cloning."""
+    sql = """SELECT
+        pod.po_dtl_id,
+        pod.po_id,
+        pod.item_id,
+        pod.item_group_id,
+        pod.item_make_id,
+        pod.item_code,
+        pod.item_name,
+        pod.quantity,
+        pod.uom_id,
+        pod.rate,
+        pod.amount,
+        pod.discount_type,
+        pod.discount_value,
+        pod.discount_amount,
+        pod.net_amount,
+        pod.remarks,
+        pod.department_id,
+        pod.indent_dtl_id
+    FROM proc_po_dtl AS pod
+    WHERE pod.po_id = :po_id;"""
+    return text(sql)
+
+
+def update_po_status():
+    """Update PO status and approval level. Optionally update po_no."""
+    sql = """UPDATE proc_po SET
+        status_id = :status_id,
+        approval_level = :approval_level,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time,
+        po_no = CASE 
+            WHEN :po_no IS NOT NULL THEN :po_no 
+            ELSE po_no 
+        END
+    WHERE po_id = :po_id;"""
+    return text(sql)
+
+
+def get_approved_pos_by_supplier_query():
+    """
+    Get approved POs for a specific supplier that have pending items to receive.
+    
+    Search parameters:
+    - supplier_id (required): Filter by supplier
+    - branch_id (optional): Filter by branch
+    - status_id = 3 (hardcoded): Only approved POs
+    
+    Returns fields needed for PO number formatting (extract_formatted_po_no):
+    - po_no, po_date, co_prefix, branch_prefix
+    
+    Also returns display fields for dropdown selection.
+    """
+    sql = """SELECT DISTINCT
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        pp.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        cm.co_prefix,
+        pp.supplier_id,
+        pm.supp_name AS supplier_name
+    FROM proc_po pp
+    INNER JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    INNER JOIN party_mst pm ON pm.party_id = pp.supplier_id
+    INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+    WHERE pp.supplier_id = :supplier_id
+        AND pp.status_id = 3
+        AND (:branch_id IS NULL OR pp.branch_id = :branch_id)
+        AND EXISTS (
+            SELECT 1 FROM proc_po_dtl pod
+            WHERE pod.po_id = pp.po_id
+                AND pod.active = 1
+                AND (pod.qty - COALESCE((
+                    SELECT SUM(pid.inward_qty)
+                    FROM proc_inward_dtl pid
+                    WHERE pid.po_dtl_id = pod.po_dtl_id AND pid.active = 1
+                ), 0)) > 0
+        )
+    ORDER BY pp.po_date DESC, pp.po_id DESC;"""
+    return text(sql)
+
+
+def get_po_line_items_for_inward_query():
+    """
+    Get PO line items for inward/GRN entry with pending quantities.
+    Calculates pending qty as (ordered_qty - received_qty).
+    Only returns items with pending_qty > 0.
+    """
+    sql = """SELECT
+        pod.po_dtl_id,
+        pod.po_id,
+        pp.po_no,
+        pp.po_date,
+        pod.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id AS item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pod.item_make_id,
+        imk.item_make_name,
+        pod.qty AS ordered_qty,
+        pod.uom_id,
+        um.uom_name,
+        pod.rate,
+        pod.remarks,
+        im.tax_percentage,
+        COALESCE(recv.received_qty, 0) AS received_qty,
+        (pod.qty - COALESCE(recv.received_qty, 0)) AS pending_qty,
+        (pod.qty * pod.rate) AS amount,
+        bm.branch_prefix,
+        cm.co_prefix
+    FROM proc_po_dtl pod
+    INNER JOIN proc_po pp ON pp.po_id = pod.po_id
+    INNER JOIN item_mst im ON im.item_id = pod.item_id
+    LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make imk ON imk.item_make_id = pod.item_make_id
+    LEFT JOIN uom_mst um ON um.uom_id = pod.uom_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    LEFT JOIN (
+        SELECT po_dtl_id, COALESCE(SUM(inward_qty), 0) as received_qty
+        FROM proc_inward_dtl
+        WHERE active = 1
+        GROUP BY po_dtl_id
+    ) recv ON recv.po_dtl_id = pod.po_dtl_id
+    WHERE pod.po_id = :po_id
+        AND pod.active = 1
+        AND (pod.qty - COALESCE(recv.received_qty, 0)) > 0
+    ORDER BY pod.po_dtl_id;"""
+    return text(sql)
+
+
+def insert_proc_inward():
+    """Insert a new proc_inward header record."""
+    sql = """INSERT INTO proc_inward (
+    inward_sequence_no,
+    supplier_id,
+    vehicle_number,
+    driver_name,
+    driver_contact_number,
+    inward_date,
+    despatch_remarks,
+    receipts_remarks,
+    updated_date_time,
+    updated_by,
+    challan_no,
+    challan_date,
+    invoice_amount,
+    invoice_date,
+    invoice_recvd_date,
+    consignment_no,
+    consignment_date,
+    ewaybillno,
+    ewaybill_date,
+    branch_id,
+    project_id,
+    gross_amount,
+    net_amount
+) VALUES (
+    :inward_sequence_no,
+    :supplier_id,
+    :vehicle_number,
+    :driver_name,
+    :driver_contact_number,
+    :inward_date,
+    :despatch_remarks,
+    :receipts_remarks,
+    :updated_date_time,
+    :updated_by,
+    :challan_no,
+    :challan_date,
+    :invoice_amount,
+    :invoice_date,
+    :invoice_recvd_date,
+    :consignment_no,
+    :consignment_date,
+    :ewaybillno,
+    :ewaybill_date,
+    :branch_id,
+    :project_id,
+    :gross_amount,
+    :net_amount
+);"""
+    return text(sql)
+
+
+def insert_proc_inward_dtl():
+    """Insert a new proc_inward_dtl line item record."""
+    sql = """INSERT INTO proc_inward_dtl (
+    inward_id,
+    po_dtl_id,
+    item_id,
+    item_make_id,
+    description,
+    remarks,
+    challan_qty,
+    inward_qty,
+    uom_id,
+    rate,
+    amount,
+    warehouse_id,
+    active,
+    status_id,
+    updated_date_time,
+    updated_by
+) VALUES (
+    :inward_id,
+    :po_dtl_id,
+    :item_id,
+    :item_make_id,
+    :description,
+    :remarks,
+    :challan_qty,
+    :inward_qty,
+    :uom_id,
+    :rate,
+    :amount,
+    :warehouse_id,
+    :active,
+    :status_id,
+    :updated_date_time,
+    :updated_by
+);"""
+    return text(sql)
+
+
+def update_proc_inward():
+    """Update an existing proc_inward header record."""
+    sql = """UPDATE proc_inward SET
+    supplier_id = :supplier_id,
+    vehicle_number = :vehicle_number,
+    driver_name = :driver_name,
+    driver_contact_number = :driver_contact_number,
+    inward_date = :inward_date,
+    despatch_remarks = :despatch_remarks,
+    receipts_remarks = :receipts_remarks,
+    challan_no = :challan_no,
+    challan_date = :challan_date,
+    invoice_date = :invoice_date,
+    invoice_recvd_date = :invoice_recvd_date,
+    consignment_no = :consignment_no,
+    consignment_date = :consignment_date,
+    ewaybillno = :ewaybillno,
+    ewaybill_date = :ewaybill_date,
+    branch_id = :branch_id,
+    updated_date_time = :updated_date_time,
+    updated_by = :updated_by
+WHERE inward_id = :inward_id;"""
+    return text(sql)
+
+
+def update_proc_inward_dtl():
+    """Update an existing proc_inward_dtl line item record."""
+    sql = """UPDATE proc_inward_dtl SET
+    item_id = :item_id,
+    remarks = :remarks,
+    inward_qty = :inward_qty,
+    uom_id = :uom_id,
+    updated_date_time = :updated_date_time,
+    updated_by = :updated_by
+WHERE inward_dtl_id = :inward_dtl_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# PO NUMBER LOOKUP UTILITY
+# =============================================================================
+
+def get_po_number_by_dtl_id_query():
+    """Get formatted PO number from po_dtl_id. Joins proc_po_dtl → proc_po."""
+    sql = """SELECT 
+        pp.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm.branch_prefix,
+        cm.co_prefix
+    FROM proc_po_dtl AS ppd
+    JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    WHERE ppd.po_dtl_id = :po_dtl_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# MATERIAL INSPECTION QUERIES
+# =============================================================================
+
+def get_pending_inspection_list_query():
+    """Get list of inwards pending material inspection (inspection_check = false)."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.inspection_check,
+        pi.inspection_date AS material_inspection_date,
+        sm.status_name AS sr_status_name
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (pi.inspection_check IS NULL OR pi.inspection_check = FALSE)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY pi.inward_date DESC, pi.inward_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_pending_inspection_count_query():
+    """Count inwards pending material inspection."""
+    sql = """SELECT COUNT(1) AS total
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (pi.inspection_check IS NULL OR pi.inspection_check = FALSE)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_inward_for_inspection_query():
+    """Get inward header details for material inspection edit page."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.inspection_check,
+        pi.inspection_date AS material_inspection_date,
+        pi.inspection_approved_by,
+        pi.challan_no,
+        pi.challan_date
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE pi.inward_id = :inward_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_inward_dtl_for_inspection_query():
+    """Get inward line items for material inspection with approved/rejected qty fields."""
+    sql = """SELECT
+        pid.inward_dtl_id,
+        pid.inward_id,
+        pid.po_dtl_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pid.item_make_id,
+        imk.item_make_name AS item_make_name,
+        pid.accepted_item_make_id,
+        aimk.item_make_name AS accepted_item_make_name,
+        pid.uom_id,
+        um.uom_name,
+        pid.inward_qty,
+        pid.approved_qty,
+        pid.rejected_qty,
+        pid.reasons,
+        pid.remarks,
+        pid.rate
+    FROM proc_inward_dtl AS pid
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    WHERE pid.inward_id = :inward_id
+        AND pid.active = 1
+    ORDER BY pid.inward_dtl_id;"""
+    return text(sql)
+
+
+def update_inward_dtl_inspection():
+    """Update inward detail with inspection results."""
+    sql = """UPDATE proc_inward_dtl
+    SET 
+        approved_qty = :approved_qty,
+        rejected_qty = :rejected_qty,
+        accepted_item_make_id = :accepted_item_make_id,
+        reasons = :reasons,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_dtl_id = :inward_dtl_id;"""
+    return text(sql)
+
+
+def update_inward_inspection_complete():
+    """Mark inward as inspection complete."""
+    sql = """UPDATE proc_inward
+    SET 
+        inspection_check = TRUE,
+        inspection_date = :inspection_date,
+        inspection_approved_by = :inspection_approved_by,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_id = :inward_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# STORES RECEIPT (SR) QUERIES
+# =============================================================================
+
+def get_sr_pending_list_query():
+    """Get list of inwards ready for SR (inspection_check = true, sr_status is null or draft)."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.inspection_check,
+        pi.inspection_date AS material_inspection_date,
+        pi.sr_no,
+        pi.sr_date,
+        pi.sr_status,
+        sm.status_name AS sr_status_name
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND pi.inspection_check = TRUE
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pi.sr_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY pi.inward_date DESC, pi.inward_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_sr_pending_count_query():
+    """Count inwards ready for SR."""
+    sql = """SELECT COUNT(1) AS total
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND pi.inspection_check = TRUE
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pi.sr_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_inward_for_sr_query():
+    """Get inward header details for SR page with state info for GST calculation."""
+    sql = """SELECT
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        sup_city.state_id AS supplier_state_id,
+        sup_state.state AS supplier_state_name,
+        pi.bill_branch_id,
+        bb.branch_name AS billing_branch_name,
+        bb.state_id AS billing_state_id,
+        bill_state.state AS billing_state_name,
+        pi.ship_branch_id,
+        sb.branch_name AS shipping_branch_name,
+        sb.state_id AS shipping_state_id,
+        ship_state.state AS shipping_state_name,
+        pi.inspection_check,
+        pi.inspection_date,
+        pi.sr_no,
+        pi.sr_date,
+        pi.sr_status,
+        sm.status_name AS sr_status_name,
+        pi.invoice_date,
+        pi.invoice_amount,
+        pi.invoice_recvd_date,
+        pi.challan_no,
+        pi.challan_date,
+        pi.vehicle_number,
+        pi.driver_name,
+        pi.driver_contact_number AS driver_contact_no,
+        pi.consignment_no,
+        pi.consignment_date,
+        pi.ewaybillno,
+        pi.ewaybill_date,
+        pi.despatch_remarks,
+        pi.receipts_remarks,
+        pi.sr_value,
+        pi.sr_remarks,
+        pi.gross_amount,
+        pi.net_amount,
+        1 AS india_gst
+    FROM proc_inward AS pi
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN party_branch_mst AS pbm ON pbm.party_id = pm.party_id
+    LEFT JOIN city_mst AS sup_city ON sup_city.city_id = pbm.city_id
+    LEFT JOIN state_mst AS sup_state ON sup_state.state_id = sup_city.state_id
+    LEFT JOIN branch_mst AS bb ON bb.branch_id = pi.bill_branch_id
+    LEFT JOIN state_mst AS bill_state ON bill_state.state_id = bb.state_id
+    LEFT JOIN branch_mst AS sb ON sb.branch_id = pi.ship_branch_id
+    LEFT JOIN state_mst AS ship_state ON ship_state.state_id = sb.state_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE pi.inward_id = :inward_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_inward_dtl_for_sr_query():
+    """Get inward line items for SR with rate and tax fields."""
+    sql = """SELECT
+        pid.inward_dtl_id,
+        pid.inward_id,
+        pid.po_dtl_id,
+        ppd.po_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        ig.item_grp_code,
+        ig.item_grp_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.accepted_item_make_id,
+        aimk.item_make_name AS accepted_item_make_name,
+        pid.uom_id,
+        um.uom_name,
+        pid.approved_qty,
+        pid.rejected_qty,
+        pid.rate,
+        pid.accepted_rate,
+        pid.amount,
+        pid.discount_mode,
+        pid.discount_value,
+        pid.discount_amount,
+        pid.remarks,
+        ppd.rate AS po_rate,
+        COALESCE(im.tax_percentage, 0) AS tax_percentage
+    FROM proc_inward_dtl AS pid
+    LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    WHERE pid.inward_id = :inward_id
+        AND pid.active = 1
+    ORDER BY pid.inward_dtl_id;"""
+    return text(sql)
+
+
+def update_inward_dtl_sr():
+    """Update inward detail with SR rate and discount values."""
+    sql = """UPDATE proc_inward_dtl
+    SET 
+        accepted_rate = :accepted_rate,
+        amount = :amount,
+        discount_mode = :discount_mode,
+        discount_value = :discount_value,
+        discount_amount = :discount_amount,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_dtl_id = :inward_dtl_id;"""
+    return text(sql)
+
+
+def update_inward_sr():
+    """Update inward header with SR details."""
+    sql = """UPDATE proc_inward
+    SET 
+        sr_no = :sr_no,
+        sr_date = :sr_date,
+        sr_status = :sr_status,
+        sr_value = :sr_value,
+        sr_remarks = :sr_remarks,
+        sr_approved_by = :sr_approved_by,
+        bill_branch_id = :bill_branch_id,
+        ship_branch_id = :ship_branch_id,
+        invoice_date = :invoice_date,
+        invoice_amount = :invoice_amount,
+        gross_amount = :gross_amount,
+        net_amount = :net_amount,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_id = :inward_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# DRCR NOTE QUERIES
+# =============================================================================
+
+def get_drcr_note_list_query():
+    """Get list of DRCR notes with pagination."""
+    sql = """SELECT
+        dn.debit_credit_note_id,
+        dn.note_date,
+        dn.adjustment_type,
+        dn.inward_id,
+        pi.inward_sequence_no,
+        bm.branch_prefix,
+        cm.co_prefix,
+        pi.inward_date,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        dn.gross_amount,
+        dn.net_amount,
+        dn.status_id,
+        sm.status_name,
+        dn.auto_create,
+        dn.remarks
+    FROM drcr_note AS dn
+    LEFT JOIN proc_inward AS pi ON pi.inward_id = dn.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = dn.status_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+        )
+    ORDER BY dn.note_date DESC, dn.debit_credit_note_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_drcr_note_count_query():
+    """Count DRCR notes."""
+    sql = """SELECT COUNT(1) AS total
+    FROM drcr_note AS dn
+    LEFT JOIN proc_inward AS pi ON pi.inward_id = dn.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.inward_sequence_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_drcr_note_by_id_query():
+    """Get DRCR note header by ID."""
+    sql = """SELECT
+        dn.debit_credit_note_id,
+        dn.note_date,
+        dn.adjustment_type,
+        dn.inward_id,
+        pi.inward_sequence_no,
+        bm.branch_prefix,
+        cm.co_prefix,
+        pi.inward_date,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        dn.gross_amount,
+        dn.net_amount,
+        dn.round_off_value,
+        dn.status_id,
+        sm.status_name,
+        dn.auto_create,
+        dn.remarks,
+        dn.approved_by,
+        dn.approved_date,
+        dn.updated_by,
+        dn.updated_date_time
+    FROM drcr_note AS dn
+    LEFT JOIN proc_inward AS pi ON pi.inward_id = dn.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = dn.status_id
+    WHERE dn.debit_credit_note_id = :drcr_note_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_drcr_note_dtl_query():
+    """Get DRCR note line items by note ID."""
+    sql = """SELECT
+        dnd.drcr_note_dtl_id,
+        dnd.inward_dtl_id,
+        dnd.debitnote_type,
+        dnd.quantity,
+        dnd.rate,
+        dnd.discount_mode,
+        dnd.discount_value,
+        dnd.discount_amount,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        pid.uom_id,
+        um.uom_name,
+        pid.rate AS original_rate,
+        pid.accepted_rate,
+        pid.rejected_qty,
+        pid.approved_qty,
+        dndg.cgst_amount,
+        dndg.igst_amount,
+        dndg.sgst_amount
+    FROM drcr_note_dtl AS dnd
+    LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = dnd.inward_dtl_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN drcr_note_dtl_gst AS dndg ON dndg.drcr_note_dtl_id = dnd.drcr_note_dtl_id
+    WHERE dnd.inward_dtl_id IN (
+        SELECT inward_dtl_id FROM proc_inward_dtl WHERE inward_id = (
+            SELECT inward_id FROM drcr_note WHERE debit_credit_note_id = :drcr_note_id
+        )
+    )
+    ORDER BY dnd.drcr_note_dtl_id;"""
+    return text(sql)
+
+
+def insert_drcr_note():
+    """Insert a new DRCR note header."""
+    sql = """INSERT INTO drcr_note (
+        date,
+        adjustment_type,
+        inward_id,
+        remarks,
+        status_id,
+        auto_create,
+        updated_by,
+        updated_date_time,
+        gross_amount,
+        net_amount
+    ) VALUES (
+        :note_date,
+        :adjustment_type,
+        :inward_id,
+        :remarks,
+        :status_id,
+        :auto_create,
+        :updated_by,
+        :updated_date_time,
+        :gross_amount,
+        :net_amount
+    );"""
+    return text(sql)
+
+
+def insert_drcr_note_dtl():
+    """Insert a new DRCR note line item."""
+    sql = """INSERT INTO drcr_note_dtl (
+        inward_dtl_id,
+        debitnote_type,
+        quantity,
+        rate,
+        discount_mode,
+        discount_value,
+        discount_amount,
+        updated_by,
+        updated_date_time
+    ) VALUES (
+        :inward_dtl_id,
+        :debitnote_type,
+        :quantity,
+        :rate,
+        :discount_mode,
+        :discount_value,
+        :discount_amount,
+        :updated_by,
+        :updated_date_time
+    );"""
+    return text(sql)
+
+
+def update_drcr_note_status():
+    """Update DRCR note status (for approval workflow)."""
+    sql = """UPDATE drcr_note
+    SET 
+        status_id = :status_id,
+        approved_by = :approved_by,
+        approved_date = :approved_date,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE debit_credit_note_id = :drcr_note_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# BILL PASS QUERIES
+# =============================================================================
+
+def get_bill_pass_list_query():
+    """
+    Get paginated list of Bill Pass entries (computed view).
+    Bill Pass is SR with DRCR note adjustments for final payment.
+    Shows only approved SRs.
+    """
+    sql = """
+    SELECT
+        pi.inward_id,
+        pi.inward_no,
+        pi.inward_date,
+        pi.sr_no AS bill_pass_no,
+        pi.sr_date AS bill_pass_date,
+        pi.invoice_no,
+        pi.invoice_date,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.sr_status,
+        sm.status_name AS sr_status_name,
+        -- SR Total (sum from proc_inward_dtl - amount after discount + tax)
+        COALESCE(sr_totals.sr_total, 0) AS sr_total,
+        COALESCE(sr_totals.sr_taxable, 0) AS sr_taxable,
+        COALESCE(sr_totals.sr_tax, 0) AS sr_tax,
+        -- Debit Note Total (approved only)
+        COALESCE(dr_totals.dr_total, 0) AS dr_total,
+        COALESCE(dr_totals.dr_count, 0) AS dr_count,
+        -- Credit Note Total (approved only)
+        COALESCE(cr_totals.cr_total, 0) AS cr_total,
+        COALESCE(cr_totals.cr_count, 0) AS cr_count,
+        -- Net Payable = SR - DR + CR
+        (COALESCE(sr_totals.sr_total, 0) - COALESCE(dr_totals.dr_total, 0) + COALESCE(cr_totals.cr_total, 0)) AS net_payable
+    FROM proc_inward pi
+    LEFT JOIN party_mst pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
+    -- SR totals from inward detail lines
+    LEFT JOIN (
+        SELECT 
+            inward_id,
+            SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
+            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(
+                (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+            ) AS sr_total
+        FROM proc_inward_dtl pid
+        GROUP BY inward_id
+    ) sr_totals ON sr_totals.inward_id = pi.inward_id
+    -- Debit Note totals (adjustment_type = 1, status_id = 3 approved)
+    LEFT JOIN (
+        SELECT 
+            inward_id, 
+            SUM(COALESCE(net_amount, gross_amount, 0)) AS dr_total,
+            COUNT(*) AS dr_count
+        FROM drcr_note
+        WHERE adjustment_type = 1 AND status_id = 3
+        GROUP BY inward_id
+    ) dr_totals ON dr_totals.inward_id = pi.inward_id
+    -- Credit Note totals (adjustment_type = 2, status_id = 3 approved)
+    LEFT JOIN (
+        SELECT 
+            inward_id, 
+            SUM(COALESCE(net_amount, gross_amount, 0)) AS cr_total,
+            COUNT(*) AS cr_count
+        FROM drcr_note
+        WHERE adjustment_type = 2 AND status_id = 3
+        GROUP BY inward_id
+    ) cr_totals ON cr_totals.inward_id = pi.inward_id
+    WHERE pi.sr_status = 3  -- Only approved SRs
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.sr_no LIKE :search_like
+            OR pi.inward_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR pi.invoice_no LIKE :search_like
+        )
+    ORDER BY pi.sr_date DESC, pi.inward_id DESC
+    LIMIT :limit OFFSET :offset;
+    """
+    return text(sql)
+
+
+def get_bill_pass_count_query():
+    """Get total count of Bill Pass entries for pagination."""
+    sql = """
+    SELECT COUNT(1) AS total
+    FROM proc_inward pi
+    LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN party_mst pm ON pm.party_id = pi.supplier_id
+    WHERE pi.sr_status = 3
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR pi.sr_no LIKE :search_like
+            OR pi.inward_no LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR pi.invoice_no LIKE :search_like
+        );
+    """
+    return text(sql)
+
+
+def get_bill_pass_by_id_query():
+    """
+    Get Bill Pass detail by inward_id.
+    Returns header info with SR totals.
+    """
+    sql = """
+    SELECT
+        pi.inward_id,
+        pi.inward_no,
+        pi.inward_date,
+        pi.sr_no AS bill_pass_no,
+        pi.sr_date AS bill_pass_date,
+        pi.invoice_no,
+        pi.invoice_date,
+        pi.invoice_amt,
+        pi.supplier_id,
+        pm.supp_name AS supplier_name,
+        pi.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        pi.sr_status,
+        sm.status_name AS sr_status_name,
+        pi.sr_remarks,
+        pi.challan_no,
+        pi.challan_date,
+        pi.freight,
+        -- SR totals
+        COALESCE(sr_totals.sr_taxable, 0) AS sr_taxable,
+        COALESCE(sr_totals.sr_tax, 0) AS sr_tax,
+        COALESCE(sr_totals.sr_cgst, 0) AS sr_cgst,
+        COALESCE(sr_totals.sr_sgst, 0) AS sr_sgst,
+        COALESCE(sr_totals.sr_igst, 0) AS sr_igst,
+        COALESCE(sr_totals.sr_total, 0) AS sr_total,
+        COALESCE(sr_totals.line_count, 0) AS sr_line_count,
+        -- DR/CR totals
+        COALESCE(dr_totals.dr_total, 0) AS dr_total,
+        COALESCE(dr_totals.dr_count, 0) AS dr_count,
+        COALESCE(cr_totals.cr_total, 0) AS cr_total,
+        COALESCE(cr_totals.cr_count, 0) AS cr_count,
+        -- Net payable
+        (COALESCE(sr_totals.sr_total, 0) - COALESCE(dr_totals.dr_total, 0) + COALESCE(cr_totals.cr_total, 0)) AS net_payable
+    FROM proc_inward pi
+    LEFT JOIN party_mst pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+    LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
+    LEFT JOIN (
+        SELECT 
+            inward_id,
+            COUNT(*) AS line_count,
+            SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
+            SUM(COALESCE(pid.cgst_amount, 0)) AS sr_cgst,
+            SUM(COALESCE(pid.sgst_amount, 0)) AS sr_sgst,
+            SUM(COALESCE(pid.igst_amount, 0)) AS sr_igst,
+            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(
+                (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+            ) AS sr_total
+        FROM proc_inward_dtl pid
+        GROUP BY inward_id
+    ) sr_totals ON sr_totals.inward_id = pi.inward_id
+    LEFT JOIN (
+        SELECT 
+            inward_id, 
+            SUM(COALESCE(net_amount, gross_amount, 0)) AS dr_total,
+            COUNT(*) AS dr_count
+        FROM drcr_note
+        WHERE adjustment_type = 1 AND status_id = 3
+        GROUP BY inward_id
+    ) dr_totals ON dr_totals.inward_id = pi.inward_id
+    LEFT JOIN (
+        SELECT 
+            inward_id, 
+            SUM(COALESCE(net_amount, gross_amount, 0)) AS cr_total,
+            COUNT(*) AS cr_count
+        FROM drcr_note
+        WHERE adjustment_type = 2 AND status_id = 3
+        GROUP BY inward_id
+    ) cr_totals ON cr_totals.inward_id = pi.inward_id
+    WHERE pi.inward_id = :inward_id;
+    """
+    return text(sql)
+
+
+def get_bill_pass_sr_lines_query():
+    """Get SR line items for Bill Pass detail view."""
+    sql = """
+    SELECT
+        pid.inward_dtl_id,
+        pid.item_id,
+        im.item_name,
+        im.item_code,
+        igm.item_grp_name,
+        pid.accepted_item_make_id,
+        imk.item_make_name AS accepted_make_name,
+        pid.uom_id,
+        um.uom_name,
+        pid.approved_qty,
+        pid.rate AS po_rate,
+        pid.accepted_rate,
+        (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) AS line_amount,
+        pid.discount_mode,
+        pid.discount_value,
+        pid.discount_amount,
+        pid.cgst_percent,
+        pid.cgst_amount,
+        pid.sgst_percent,
+        pid.sgst_amount,
+        pid.igst_percent,
+        pid.igst_amount,
+        (COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS tax_amount,
+        (
+            (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+            COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+        ) AS line_total
+    FROM proc_inward_dtl pid
+    LEFT JOIN item_mst im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make imk ON imk.item_make_id = pid.accepted_item_make_id
+    LEFT JOIN uom_mst um ON um.uom_id = pid.uom_id
+    WHERE pid.inward_id = :inward_id
+        AND pid.approved_qty > 0
+    ORDER BY pid.inward_dtl_id;
+    """
+    return text(sql)
+
+
+def get_bill_pass_drcr_notes_query():
+    """Get DRCR notes linked to an inward for Bill Pass detail view."""
+    sql = """
+    SELECT
+        dn.debit_credit_note_id,
+        dn.date AS note_date,
+        dn.adjustment_type,
+        CASE WHEN dn.adjustment_type = 1 THEN 'Debit Note' ELSE 'Credit Note' END AS note_type_name,
+        dn.remarks,
+        dn.gross_amount,
+        dn.net_amount,
+        dn.status_id,
+        sm.status_name,
+        -- Get line item details for each note
+        (SELECT COUNT(*) FROM drcr_note_dtl dnd WHERE dnd.debit_credit_note_id = dn.debit_credit_note_id) AS line_count
+    FROM drcr_note dn
+    LEFT JOIN status_mst sm ON sm.status_id = dn.status_id
+    WHERE dn.inward_id = :inward_id
+        AND dn.status_id = 3  -- Only approved notes
+    ORDER BY dn.adjustment_type, dn.date DESC;
+    """
+    return text(sql)
+
+
+def get_bill_pass_drcr_note_lines_query():
+    """Get DRCR note line items for Bill Pass detail view."""
+    sql = """
+    SELECT
+        dnd.debit_credit_note_dtl_id,
+        dnd.debit_credit_note_id,
+        dnd.inward_dtl_id,
+        dnd.debitnote_type,
+        CASE 
+            WHEN dnd.debitnote_type = 1 THEN 'Quantity Rejection'
+            WHEN dnd.debitnote_type = 2 THEN 'Rate Difference'
+            ELSE 'Other'
+        END AS adjustment_reason,
+        dnd.quantity,
+        dnd.rate,
+        dnd.discount_mode,
+        dnd.discount_value,
+        dnd.discount_amount,
+        (dnd.quantity * dnd.rate - COALESCE(dnd.discount_amount, 0)) AS line_amount,
+        -- Get item details from inward_dtl
+        im.item_name,
+        im.item_code
+    FROM drcr_note_dtl dnd
+    LEFT JOIN proc_inward_dtl pid ON pid.inward_dtl_id = dnd.inward_dtl_id
+    LEFT JOIN item_mst im ON im.item_id = pid.item_id
+    WHERE dnd.debit_credit_note_id IN (
+        SELECT debit_credit_note_id 
+        FROM drcr_note 
+        WHERE inward_id = :inward_id AND status_id = 3
+    )
+    ORDER BY dnd.debit_credit_note_id, dnd.debit_credit_note_dtl_id;
+    """
+    return text(sql)

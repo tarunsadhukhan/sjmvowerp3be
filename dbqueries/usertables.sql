@@ -63,6 +63,7 @@ CREATE TABLE co_mst (
     s3folder_name VARCHAR(255),
     tally_sync VARCHAR(255),
     alert_email_id VARCHAR(255),
+    branch_prefix VARCHAR(100),
     FOREIGN KEY (country_id) REFERENCES country_mst(country_id),
     FOREIGN KEY (state_id) REFERENCES state_mst(state_id),
     FOREIGN KEY (city_id) REFERENCES city_mst(city_id)

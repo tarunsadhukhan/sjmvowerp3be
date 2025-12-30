@@ -124,6 +124,7 @@ def get_branch_all_count_query(search: str = None):
 def get_branch_by_id_query(branch_id: int):
     sql = f"""select bm.branch_id, 
 bm.branch_name, 
+bm.branch_prefix,
 bm.branch_address1 , 
 bm.branch_address2 , 
 bm.branch_zipcode, 

@@ -37,6 +37,29 @@ def get_submenu_portal():
     query = text(sql)
     return query
 
+def get_submenu_by_branch():
+    """
+    Get submenus (menus with parent) for each branch based on actual relationships:
+    branch → user_role_map → role_menu_map → menu_mst
+    Returns distinct menu_id, menu_name, and branch_id for submenus that are accessible via roles in each branch.
+    """
+    sql = """
+        SELECT DISTINCT 
+            bm.branch_id,
+            mm.menu_id,
+            mm.menu_name
+        FROM branch_mst bm
+        INNER JOIN user_role_map urm ON urm.branch_id = bm.branch_id
+        INNER JOIN role_menu_map rmm ON rmm.role_id = urm.role_id
+        INNER JOIN menu_mst mm ON mm.menu_id = rmm.menu_id
+        WHERE mm.menu_parent_id IS NOT NULL
+          AND mm.active = 1
+          AND bm.active = 1
+        ORDER BY bm.branch_id, mm.menu_id;
+    """
+    query = text(sql)
+    return query
+
 def get_users_approval_portal(menu_id: int = None, branch_id: int = None):
     sql = f"select distinct(urm.user_id), um.email_id from user_role_map urm left join user_mst um on urm.user_id = um.user_id where urm.branch_id =:branch_id and urm.role_id in (select rmm.role_id from role_menu_map rmm where rmm.menu_id =:menu_id )  ;"
     query = text(sql)

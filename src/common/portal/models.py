@@ -143,6 +143,7 @@ class ApprovalMst(Base):
     max_amount_single = Column(Float)
     day_max_amount    = Column(Float)
     month_max_amount  = Column(Float)
+    updated_by        = Column(Integer, nullable=False)
 
     # relationships
     menu   = relationship("MenuMst",   foreign_keys=[menu_id])

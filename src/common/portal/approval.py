@@ -10,7 +10,7 @@ from src.common.query import (get_roles_tenant)
 from src.common.portal.models import Base, ConUser, conRoleMaster, ConRoleMenuMap, ApprovalMst
 from src.authorization.utils import get_password_hash
 from src.common.utils import get_org_id_from_subdomain
-from src.common.portal.query import get_co_brnach_all, get_submenu_portal, get_users_approval_portal, get_max_approval, get_approval_data
+from src.common.portal.query import get_co_brnach_all, get_submenu_portal, get_submenu_by_branch, get_users_approval_portal, get_max_approval, get_approval_data
 
 
 router = APIRouter()
@@ -26,9 +26,9 @@ async def co_branch_submenu(
         company_branch_query = get_co_brnach_all()
         company_branch_result = tenant_session.execute(company_branch_query).fetchall()
         
-        # Get submenus
-        submenu_query = get_submenu_portal()
-        submenu_result = tenant_session.execute(submenu_query).fetchall()
+        # Get submenus per branch based on actual relationships (branch → role → menu)
+        submenu_by_branch_query = get_submenu_by_branch()
+        submenu_by_branch_result = tenant_session.execute(submenu_by_branch_query).fetchall()
         
         # Process company and branch data
         companies = {}
@@ -49,29 +49,32 @@ async def co_branch_submenu(
             
             branches[co_id].append({"id": branch_id, "name": row.branch_name})
         
-        # Create menu mapping to branches (for simplicity, distributing menus across branches)
+        # Map menus to branches based on actual relationships
         menu_by_branch = {}
-        branch_list = []
         
-        # Collect all branches into a flat list
+        # Process submenu results and group by branch_id
+        for row in submenu_by_branch_result:
+            branch_id = str(row.branch_id)
+            menu_id = str(row.menu_id)
+            menu_name = row.menu_name
+            
+            if branch_id not in menu_by_branch:
+                menu_by_branch[branch_id] = []
+            
+            # Add menu if not already added (to handle duplicates)
+            menu_exists = any(menu["id"] == menu_id for menu in menu_by_branch[branch_id])
+            if not menu_exists:
+                menu_by_branch[branch_id].append({
+                    "id": menu_id,
+                    "name": menu_name
+                })
+        
+        # Ensure all branches have an entry (even if empty)
         for company_id, branch_items in branches.items():
             for branch in branch_items:
-                branch_list.append(branch["id"])
-        
-        # Distribute menus across branches
-        submenus = [{"id": str(row.menu_id), "name": row.menu_name} for row in submenu_result]
-        
-        # Map menus to branches (simple distribution for now)
-        branch_count = len(branch_list)
-        if branch_count > 0:
-            menus_per_branch = {}
-            for i, menu in enumerate(submenus):
-                branch_id = branch_list[i % branch_count]
-                if branch_id not in menus_per_branch:
-                    menus_per_branch[branch_id] = []
-                menus_per_branch[branch_id].append(menu)
-            
-            menu_by_branch = menus_per_branch
+                branch_id = branch["id"]
+                if branch_id not in menu_by_branch:
+                    menu_by_branch[branch_id] = []
         
         # Construct the final response structure
         response = [
@@ -203,6 +206,11 @@ async def approval_level_data_setup_submit(
     tenant_session: Session = Depends(get_tenant_db),
 ):
     try:
+        # Get the authenticated user ID from token
+        updated_by_user_id = token_data.get("user_id")
+        if not updated_by_user_id:
+            raise HTTPException(status_code=403, detail="User ID not found in token")
+        
         menu_id = int(payload.menuId)
         branch_id = int(payload.branchId)
         
@@ -236,7 +244,8 @@ async def approval_level_data_setup_submit(
                     approval_level=level,
                     max_amount_single=max_single,
                     day_max_amount=max_day,
-                    month_max_amount=max_month
+                    month_max_amount=max_month,
+                    updated_by=updated_by_user_id
                 )
                 
                 tenant_session.add(new_approval)
