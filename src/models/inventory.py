@@ -1,0 +1,94 @@
+"""
+SQLAlchemy ORM models for inventory tables (issue_hdr, issue_li).
+Based on actual database schema from 'sls' database.
+"""
+
+from datetime import date, datetime
+from typing import Optional, List
+
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Double,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
+from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    """Base class for all inventory models."""
+    pass
+
+
+class IssueHdr(Base):
+    """
+    Issue header table - stores material issue transactions.
+    Table: issue_hdr in sls database.
+    """
+    __tablename__ = "issue_hdr"
+
+    issue_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    dept_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    issue_pass_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    issue_pass_print_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    active: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
+    issue_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    approved_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    approved_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    issued_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    req_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    customer_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    internal_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    details: Mapped[List["IssueLi"]] = relationship(
+        "IssueLi", back_populates="issue_hdr"
+    )
+
+
+class IssueLi(Base):
+    """
+    Issue line item table - stores individual items in an issue.
+    Table: issue_li in sls database.
+    """
+    __tablename__ = "issue_li"
+
+    issue_li_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    issue_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("issue_hdr.issue_id"), nullable=False, index=True
+    )
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    req_quantity: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    issue_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    expense_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    cost_factor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    machine_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    inward_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    issue_hdr: Mapped["IssueHdr"] = relationship(
+        "IssueHdr", back_populates="details"
+    )
+
+
+__all__ = [
+    "Base",
+    "IssueHdr",
+    "IssueLi",
+]

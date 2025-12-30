@@ -29,6 +29,7 @@ from src.procurement.sr import router as sr_router
 from src.procurement.drcr_note import router as drcr_note_router
 from src.procurement.billpass import router as billpass_router
 from src.masters.party import router as party_router
+from src.inventory.issue import router as issue_router
 
 from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
@@ -93,6 +94,8 @@ app.include_router(sr_router, prefix="/api/storesReceipt", tags=["procurement-st
 app.include_router(drcr_note_router, prefix="/api/drcrNote", tags=["procurement-drcr-note"])
 app.include_router(billpass_router, prefix="/api/billPass", tags=["procurement-bill-pass"])
 
+# Inventory routers
+app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
 
 
 
