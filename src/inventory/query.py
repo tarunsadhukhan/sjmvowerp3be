@@ -254,7 +254,7 @@ def get_available_inward_inventory_query():
     sql = """SELECT
         pid.inward_dtl_id,
         pid.inward_id,
-        pi.inward_no,
+        pi.sr_no,
         pi.inward_date,
         pi.branch_id,
         bm.branch_name,
