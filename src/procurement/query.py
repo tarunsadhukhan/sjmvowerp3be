@@ -1734,6 +1734,8 @@ def get_inward_dtl_for_sr_query():
         pid.discount_value,
         pid.discount_amount,
         pid.remarks,
+        pid.warehouse_id,
+        wh.warehouse_name,
         ppd.rate AS po_rate,
         COALESCE(im.tax_percentage, 0) AS tax_percentage
     FROM proc_inward_dtl AS pid
@@ -1743,6 +1745,7 @@ def get_inward_dtl_for_sr_query():
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN warehouse_mst AS wh ON wh.warehouse_id = pid.warehouse_id
     WHERE pid.inward_id = :inward_id
         AND pid.active = 1
     ORDER BY pid.inward_dtl_id;"""
@@ -1750,7 +1753,7 @@ def get_inward_dtl_for_sr_query():
 
 
 def update_inward_dtl_sr():
-    """Update inward detail with SR rate and discount values."""
+    """Update inward detail with SR rate, discount, and warehouse values."""
     sql = """UPDATE proc_inward_dtl
     SET 
         accepted_rate = :accepted_rate,
@@ -1758,6 +1761,7 @@ def update_inward_dtl_sr():
         discount_mode = :discount_mode,
         discount_value = :discount_value,
         discount_amount = :discount_amount,
+        warehouse_id = :warehouse_id,
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
     WHERE inward_dtl_id = :inward_dtl_id;"""

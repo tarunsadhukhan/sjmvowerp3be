@@ -53,6 +53,7 @@ class SRLineItemUpdate(BaseModel):
     discount_mode: Optional[int] = None
     discount_value: Optional[float] = None
     discount_amount: Optional[float] = None
+    warehouse_id: Optional[int] = None
 
 
 class SRSaveRequest(BaseModel):
@@ -253,6 +254,19 @@ async def get_sr_by_inward_id(
                 item["accepted_rate"] = item.get("po_rate") or item.get("rate") or 0
             line_items.append(item)
         
+        # Get warehouses for the branch
+        branch_id = header.get("branch_id")
+        logger.info(f"Fetching warehouses for branch_id: {branch_id}")
+        warehouse_query = text("""
+            SELECT warehouse_id, warehouse_name, branch_id
+            FROM warehouse_mst
+            WHERE (branch_id IS NULL OR branch_id = :branch_id)
+            ORDER BY warehouse_name
+        """)
+        warehouse_result = db.execute(warehouse_query, {"branch_id": branch_id}).fetchall()
+        warehouses = [dict(row._mapping) for row in warehouse_result]
+        logger.info(f"Found {len(warehouses)} warehouses: {warehouses}")
+        
         return {
             "header": {
                 "inward_id": header.get("inward_id"),
@@ -298,6 +312,7 @@ async def get_sr_by_inward_id(
                 "net_amount": header.get("net_amount"),
             },
             "line_items": line_items,
+            "warehouses": warehouses,
         }
     except HTTPException:
         raise
@@ -340,6 +355,9 @@ async def save_sr(
             gross_amount += amount or 0
             net_amount += (amount or 0) - (line.discount_amount or 0)
             
+            # Log the warehouse_id being saved
+            logger.info(f"Saving line item {line.inward_dtl_id}: warehouse_id={line.warehouse_id}, accepted_rate={line.accepted_rate}")
+            
             update_query = update_inward_dtl_sr()
             db.execute(update_query, {
                 "inward_dtl_id": line.inward_dtl_id,
@@ -348,6 +366,7 @@ async def save_sr(
                 "discount_mode": line.discount_mode,
                 "discount_value": line.discount_value,
                 "discount_amount": line.discount_amount,
+                "warehouse_id": line.warehouse_id,
                 "updated_by": user_id,
                 "updated_date_time": now,
             })
