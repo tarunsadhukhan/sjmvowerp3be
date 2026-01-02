@@ -1049,7 +1049,7 @@ def get_po_additional_by_id_query():
         ppa.net_amount,
         ppa.remarks
     FROM proc_po_additional AS ppa
-    LEFT JOIN additional_charges_master AS acm ON acm.additional_charges_id = ppa.additional_charges_id
+    LEFT JOIN additional_charges_mst AS acm ON acm.additional_charges_id = ppa.additional_charges_id
     WHERE ppa.po_id = :po_id
     ORDER BY ppa.po_additional_id;"""
     return text(sql)
@@ -2283,5 +2283,146 @@ def get_bill_pass_drcr_note_lines_query():
         WHERE inward_id = :inward_id AND status_id = 3
     )
     ORDER BY dnd.debit_credit_note_id, dnd.debit_credit_note_dtl_id;
+    """
+    return text(sql)
+
+
+# =============================================================================
+# ADDITIONAL CHARGES QUERIES
+# =============================================================================
+
+def get_additional_charges_mst_list():
+    """Get list of all active additional charges from master table."""
+    sql = """
+    SELECT 
+        additional_charges_id,
+        additional_charges_name,
+        default_value
+    FROM additional_charges_mst
+    WHERE active = 1
+    ORDER BY additional_charges_name;
+    """
+    return text(sql)
+
+
+def get_inward_additional_charges_query():
+    """Get additional charges for an inward/SR by inward_id."""
+    sql = """
+    SELECT 
+        pia.inward_additional_id,
+        pia.inward_id,
+        pia.additional_charges_id,
+        acm.additional_charges_name,
+        acm.default_value AS default_tax_pct,
+        pia.qty,
+        pia.rate,
+        pia.net_amount,
+        pia.remarks,
+        -- GST details if any
+        pg.tax_pct,
+        pg.i_tax_amount AS igst_amount,
+        pg.s_tax_amount AS sgst_amount,
+        pg.c_tax_amount AS cgst_amount,
+        pg.tax_amount
+    FROM proc_inward_additional pia
+    LEFT JOIN additional_charges_mst acm 
+        ON acm.additional_charges_id = pia.additional_charges_id
+    LEFT JOIN proc_gst pg 
+        ON pg.inward_additional_id = pia.inward_additional_id
+        AND pg.active = 1
+    WHERE pia.inward_id = :inward_id
+        AND pia.active = 1
+    ORDER BY pia.inward_additional_id;
+    """
+    return text(sql)
+
+
+def insert_inward_additional():
+    """Insert a new additional charge for inward/SR."""
+    sql = """
+    INSERT INTO proc_inward_additional (
+        inward_id,
+        additional_charges_id,
+        qty,
+        rate,
+        net_amount,
+        remarks,
+        active,
+        updated_by,
+        updated_date_time
+    ) VALUES (
+        :inward_id,
+        :additional_charges_id,
+        :qty,
+        :rate,
+        :net_amount,
+        :remarks,
+        :active,
+        :updated_by,
+        :updated_date_time
+    );
+    """
+    return text(sql)
+
+
+def update_inward_additional():
+    """Update an existing additional charge for inward/SR."""
+    sql = """
+    UPDATE proc_inward_additional
+    SET 
+        qty = :qty,
+        rate = :rate,
+        net_amount = :net_amount,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_additional_id = :inward_additional_id;
+    """
+    return text(sql)
+
+
+def delete_inward_additional():
+    """Soft delete an additional charge for inward/SR."""
+    sql = """
+    UPDATE proc_inward_additional
+    SET 
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE inward_additional_id = :inward_additional_id;
+    """
+    return text(sql)
+
+
+def insert_inward_additional_gst():
+    """Insert GST record for inward additional charge."""
+    sql = """
+    INSERT INTO proc_gst (
+        inward_additional_id,
+        tax_pct,
+        stax_percentage,
+        s_tax_amount,
+        i_tax_amount,
+        i_tax_percentage,
+        c_tax_amount,
+        c_tax_percentage,
+        tax_amount,
+        active,
+        updated_by,
+        updated_date_time
+    ) VALUES (
+        :inward_additional_id,
+        :tax_pct,
+        :stax_percentage,
+        :s_tax_amount,
+        :i_tax_amount,
+        :i_tax_percentage,
+        :c_tax_amount,
+        :c_tax_percentage,
+        :tax_amount,
+        :active,
+        :updated_by,
+        :updated_date_time
+    );
     """
     return text(sql)

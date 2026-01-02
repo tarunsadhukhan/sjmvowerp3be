@@ -694,8 +694,8 @@ async def create_po(
 			# GST for additional charges (if applicable)
 			gst_amounts = None
 			if india_gst and supplier_state_id and shipping_state_id:
-				# Get tax percentage from additional_charges_master or use default
-				addl_query = text("SELECT default_value FROM additional_charges_master WHERE additional_charges_id = :id")
+				# Get tax percentage from additional_charges_mst or use default
+				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
 				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
@@ -1275,7 +1275,7 @@ async def update_po(
 			# GST for additional charges (if applicable)
 			gst_amounts = None
 			if india_gst and supplier_state_id and shipping_state_id:
-				addl_query = text("SELECT default_value FROM additional_charges_master WHERE additional_charges_id = :id")
+				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
 				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:

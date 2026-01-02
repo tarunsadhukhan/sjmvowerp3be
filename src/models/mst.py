@@ -572,3 +572,18 @@ class WarehouseMst(Base):
     warehouse_type = Column(String(20), nullable=True)
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=True, index=True)
     parent_warehouse_id = Column(Integer, nullable=True)  # Self-referencing for hierarchy
+
+
+# =============================================================================
+# ADDITIONAL CHARGES MASTER
+# =============================================================================
+class AdditionalChargesMst(Base):
+    """Additional charges master - defines extra charges like freight, insurance, etc."""
+    __tablename__ = "additional_charges_mst"
+
+    additional_charges_id = Column(Integer, primary_key=True, autoincrement=True)
+    additional_charges_name = Column(String(100), nullable=True)
+    default_value = Column(Double, nullable=True)  # Default tax percentage
+    active = Column(Boolean, nullable=True, default=True)
+    updated_date_time = Column(DateTime, nullable=True)
+    updated_by = Column(Integer, nullable=True)
