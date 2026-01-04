@@ -35,6 +35,7 @@ from src.procurement.query import (
 	get_project,
 	get_po_header_query,
 	get_po_dtl_query,
+	get_additional_charges_mst_list,
 )
 from src.masters.query import (
 	get_branch_list,
@@ -149,6 +150,11 @@ async def get_po_setup_1(
 					logger.exception(f"Error fetching branches for supplier {supplier_id}")
 					supplier["branches"] = []
 
+		# Additional charges master list
+		additional_charges_query = get_additional_charges_mst_list()
+		additional_charges_result = db.execute(additional_charges_query).fetchall()
+		additional_charges_options = [dict(r._mapping) for r in additional_charges_result]
+
 		return {
 			"branches": branches,
 			"suppliers": suppliers,  # Now includes full supplier details and their branch addresses
@@ -157,6 +163,7 @@ async def get_po_setup_1(
 			"co_config": co_config,
 			"branch_addresses": branch_addresses,  # Company branch addresses for billing and shipping
 			"item_groups": item_groups,
+			"additional_charges_options": additional_charges_options,
 		}
 	except HTTPException:
 		raise
