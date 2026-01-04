@@ -35,6 +35,7 @@ from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
 from src.masters.castFactor import router as costFactor_router
 from src.masters.juteQuality import router as jute_quality_router
+from src.juteProcurement.jutePO import router as jute_po_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -95,6 +96,9 @@ app.include_router(material_inspection_router, prefix="/api/materialInspection",
 app.include_router(sr_router, prefix="/api/storesReceipt", tags=["procurement-stores-receipt"])
 app.include_router(drcr_note_router, prefix="/api/drcrNote", tags=["procurement-drcr-note"])
 app.include_router(billpass_router, prefix="/api/billPass", tags=["procurement-bill-pass"])
+
+# Jute Procurement routers
+app.include_router(jute_po_router, prefix="/api/jutePO", tags=["jute-procurement-po"])
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
