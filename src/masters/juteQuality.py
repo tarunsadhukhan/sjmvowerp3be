@@ -173,17 +173,19 @@ async def jute_quality_create_setup(
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
         # Query items - get all items that can be associated with jute quality
-        # This could be filtered by item type/group if needed
+        # Join through item_grp_mst to filter by co_id and item_type_id = 2 (jute items)
         items_query = text("""
             SELECT 
-                item_id,
-                item_code,
-                item_name,
-                item_grp_id
-            FROM item_mst
-            WHERE co_id = :co_id
-              AND is_active = 1
-            ORDER BY item_name
+                im.item_id,
+                im.item_code,
+                im.item_name,
+                im.item_grp_id
+            FROM item_mst im
+            INNER JOIN item_grp_mst ig ON im.item_grp_id = ig.item_grp_id
+            WHERE ig.co_id = :co_id
+              AND ig.item_type_id = 2
+              AND im.active = 1
+            ORDER BY im.item_name
         """)
         items_result = db.execute(items_query, {"co_id": int(co_id)}).fetchall()
         items = [dict(row._mapping) for row in items_result]
@@ -233,17 +235,19 @@ async def jute_quality_edit_setup(
         if not details_result:
             raise HTTPException(status_code=404, detail="Jute quality record not found")
 
-        # Query items
+        # Query items - join through item_grp_mst to filter by co_id and item_type_id = 2 (jute items)
         items_query = text("""
             SELECT 
-                item_id,
-                item_code,
-                item_name,
-                item_grp_id
-            FROM item_mst
-            WHERE co_id = :co_id
-              AND is_active = 1
-            ORDER BY item_name
+                im.item_id,
+                im.item_code,
+                im.item_name,
+                im.item_grp_id
+            FROM item_mst im
+            INNER JOIN item_grp_mst ig ON im.item_grp_id = ig.item_grp_id
+            WHERE ig.co_id = :co_id
+              AND ig.item_type_id = 2
+              AND im.active = 1
+            ORDER BY im.item_name
         """)
         items_result = db.execute(items_query, {"co_id": int(co_id)}).fetchall()
         items = [dict(row._mapping) for row in items_result]
