@@ -156,6 +156,108 @@ async def get_jute_quality_by_id(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/jute_quality_create_setup")
+async def jute_quality_create_setup(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get setup data for creating a new jute quality record.
+    Returns list of items (filtered by jute category if applicable).
+    """
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
+
+        # Query items - get all items that can be associated with jute quality
+        # This could be filtered by item type/group if needed
+        items_query = text("""
+            SELECT 
+                item_id,
+                item_code,
+                item_name,
+                item_grp_id
+            FROM item_mst
+            WHERE co_id = :co_id
+              AND is_active = 1
+            ORDER BY item_name
+        """)
+        items_result = db.execute(items_query, {"co_id": int(co_id)}).fetchall()
+        items = [dict(row._mapping) for row in items_result]
+
+        return {"items": items}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/jute_quality_edit_setup/{jute_qlty_id}")
+async def jute_quality_edit_setup(
+    jute_qlty_id: int,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get setup data for editing an existing jute quality record.
+    Returns list of items and the current jute quality details.
+    """
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
+
+        # Get existing jute quality details
+        details_query = text("""
+            SELECT 
+                jq.jute_qlty_id,
+                jq.co_id,
+                jq.item_id,
+                jq.jute_quality,
+                jq.updated_by,
+                jq.updated_date_time,
+                im.item_name,
+                im.item_code
+            FROM jute_quality_mst jq
+            LEFT JOIN item_mst im ON jq.item_id = im.item_id
+            WHERE jq.jute_qlty_id = :jute_qlty_id
+              AND jq.co_id = :co_id
+        """)
+        details_result = db.execute(details_query, {"jute_qlty_id": jute_qlty_id, "co_id": int(co_id)}).fetchone()
+        
+        if not details_result:
+            raise HTTPException(status_code=404, detail="Jute quality record not found")
+
+        # Query items
+        items_query = text("""
+            SELECT 
+                item_id,
+                item_code,
+                item_name,
+                item_grp_id
+            FROM item_mst
+            WHERE co_id = :co_id
+              AND is_active = 1
+            ORDER BY item_name
+        """)
+        items_result = db.execute(items_query, {"co_id": int(co_id)}).fetchall()
+        items = [dict(row._mapping) for row in items_result]
+
+        return {
+            "items": items,
+            "jute_quality_details": dict(details_result._mapping)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/jute_quality_create")
 async def jute_quality_create(
     request: Request,
