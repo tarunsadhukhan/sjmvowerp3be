@@ -22,6 +22,9 @@ from src.inventory.query import (
     get_available_inward_inventory_query,
     get_cost_factors_by_branch_query,
     get_machines_by_dept_query,
+    get_machines_by_branch_query,
+    get_searchable_inventory_list_query,
+    get_searchable_inventory_count_query,
 )
 from datetime import datetime, date
 from typing import Optional, List
@@ -249,10 +252,12 @@ async def get_issue_setup_1(
 ):
     """
     Get setup data for creating/editing an issue.
-    Returns branches, departments, expense types, projects, and item groups.
+    Returns branches, departments, expense types, projects, cost factors, and machines.
+    Items are now sourced from inventory search table, so item_groups are no longer needed here.
+    Machines are returned for the branch; frontend filters by selected department.
     """
     try:
-        from src.masters.query import get_branch_list, get_dept_list_by_branch_id, get_item_group_drodown
+        from src.masters.query import get_branch_list, get_dept_list_by_branch_id
         from src.procurement.query import get_project, get_expense_types
 
         # Parse query params
@@ -297,17 +302,27 @@ async def get_issue_setup_1(
         exp_result = db.execute(expense_query).fetchall()
         expense_types = [dict(r._mapping) for r in exp_result]
 
-        # Get item groups
-        itemgrp_query = get_item_group_drodown(co_id=co_id)
-        itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
-        item_groups = [dict(r._mapping) for r in itemgrp_result]
+        # Get cost factors for branch
+        cost_factors = []
+        if branch_id is not None:
+            cost_factor_query = get_cost_factors_by_branch_query()
+            cf_result = db.execute(cost_factor_query, {"branch_id": branch_id}).fetchall()
+            cost_factors = [dict(r._mapping) for r in cf_result]
+
+        # Get machines for branch (includes dept_id for frontend filtering)
+        machines = []
+        if branch_id is not None:
+            machine_query = get_machines_by_branch_query()
+            machine_result = db.execute(machine_query, {"branch_id": branch_id}).fetchall()
+            machines = [dict(r._mapping) for r in machine_result]
 
         return {
             "branches": branches,
             "departments": departments,
             "projects": projects,
             "expense_types": expense_types,
-            "item_groups": item_groups,
+            "cost_factors": cost_factors,
+            "machines": machines,
         }
 
     except HTTPException:
@@ -377,6 +392,102 @@ async def get_available_inventory(
         raise
     except Exception as e:
         logger.error(f"Error fetching available inventory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_inventory_list")
+async def get_inventory_list(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    branch_id: int | None = None,
+    page: int = 1,
+    limit: int = 10,
+    search: str | None = None,
+):
+    """
+    Get paginated searchable inventory list from approved inwards.
+    Supports search by item group code/name, item code/name, and inward number.
+    Used for the inventory search table in create issue page.
+    
+    Args:
+        branch_id: Branch ID to filter inventory
+        page: Page number (1-indexed)
+        limit: Number of records per page (max 50)
+        search: Search term to filter by item code, item name, group code, group name, or inward no
+    """
+    try:
+        q_branch_id = request.query_params.get("branch_id")
+        q_page = request.query_params.get("page")
+        q_limit = request.query_params.get("limit")
+        q_search = request.query_params.get("search")
+
+        if q_branch_id is not None:
+            try:
+                branch_id = int(q_branch_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+        if q_page is not None:
+            try:
+                page = int(q_page)
+            except Exception:
+                page = 1
+
+        if q_limit is not None:
+            try:
+                limit = int(q_limit)
+            except Exception:
+                limit = 10
+
+        if q_search is not None:
+            search = q_search.strip() if q_search else None
+
+        if branch_id is None:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+
+        # Clamp limit to reasonable bounds
+        limit = max(1, min(limit, 50))
+        page = max(1, page)
+        offset = (page - 1) * limit
+
+        search_like = f"%{search}%" if search else None
+
+        # Get count
+        count_query = get_searchable_inventory_count_query()
+        count_result = db.execute(count_query, {
+            "branch_id": branch_id,
+            "search_like": search_like,
+        }).fetchone()
+        total = count_result.total if count_result else 0
+
+        # Get data
+        query = get_searchable_inventory_list_query()
+        rows = db.execute(query, {
+            "branch_id": branch_id,
+            "search_like": search_like,
+            "limit": limit,
+            "offset": offset,
+        }).fetchall()
+
+        data = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            if row_dict.get("inward_date"):
+                row_dict["inward_date"] = str(row_dict["inward_date"])
+            data.append(row_dict)
+
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "limit": limit,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching inventory list: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -34,6 +34,7 @@ from src.inventory.issue import router as issue_router
 from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
 from src.masters.castFactor import router as costFactor_router
+from src.masters.juteQuality import router as jute_quality_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -85,6 +86,7 @@ app.include_router(project_router, prefix="/api/projectMaster", tags=["masters-p
 app.include_router(party_router, prefix="/api/partyMaster", tags=["masters-party"])
 app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["masters-warehouse"])
 app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
+app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
