@@ -2292,14 +2292,13 @@ def get_bill_pass_drcr_note_lines_query():
 # =============================================================================
 
 def get_additional_charges_mst_list():
-    """Get list of all active additional charges from master table."""
+    """Get list of all additional charges from master table."""
     sql = """
     SELECT 
         additional_charges_id,
         additional_charges_name,
         default_value
     FROM additional_charges_mst
-    WHERE active = 1
     ORDER BY additional_charges_name;
     """
     return text(sql)
@@ -2309,30 +2308,19 @@ def get_inward_additional_charges_query():
     """Get additional charges for an inward/SR by inward_id."""
     sql = """
     SELECT 
-        pia.inward_additional_id,
+        pia.proc_inward_additional_id,
         pia.inward_id,
         pia.additional_charges_id,
         acm.additional_charges_name,
         acm.default_value AS default_tax_pct,
         pia.qty,
         pia.rate,
-        pia.net_amount,
-        pia.remarks,
-        -- GST details if any
-        pg.tax_pct,
-        pg.i_tax_amount AS igst_amount,
-        pg.s_tax_amount AS sgst_amount,
-        pg.c_tax_amount AS cgst_amount,
-        pg.tax_amount
+        pia.net_amount
     FROM proc_inward_additional pia
     LEFT JOIN additional_charges_mst acm 
         ON acm.additional_charges_id = pia.additional_charges_id
-    LEFT JOIN proc_gst pg 
-        ON pg.inward_additional_id = pia.inward_additional_id
-        AND pg.active = 1
     WHERE pia.inward_id = :inward_id
-        AND pia.active = 1
-    ORDER BY pia.inward_additional_id;
+    ORDER BY pia.proc_inward_additional_id;
     """
     return text(sql)
 
@@ -2345,21 +2333,13 @@ def insert_inward_additional():
         additional_charges_id,
         qty,
         rate,
-        net_amount,
-        remarks,
-        active,
-        updated_by,
-        updated_date_time
+        net_amount
     ) VALUES (
         :inward_id,
         :additional_charges_id,
         :qty,
         :rate,
-        :net_amount,
-        :remarks,
-        :active,
-        :updated_by,
-        :updated_date_time
+        :net_amount
     );
     """
     return text(sql)
@@ -2372,57 +2352,20 @@ def update_inward_additional():
     SET 
         qty = :qty,
         rate = :rate,
-        net_amount = :net_amount,
-        remarks = :remarks,
-        updated_by = :updated_by,
-        updated_date_time = :updated_date_time
-    WHERE inward_additional_id = :inward_additional_id;
+        net_amount = :net_amount
+    WHERE proc_inward_additional_id = :proc_inward_additional_id;
     """
     return text(sql)
 
 
 def delete_inward_additional():
-    """Soft delete an additional charge for inward/SR."""
+    """Delete an additional charge for inward/SR."""
     sql = """
-    UPDATE proc_inward_additional
-    SET 
-        active = 0,
-        updated_by = :updated_by,
-        updated_date_time = :updated_date_time
-    WHERE inward_additional_id = :inward_additional_id;
+    DELETE FROM proc_inward_additional
+    WHERE proc_inward_additional_id = :proc_inward_additional_id;
     """
     return text(sql)
 
 
-def insert_inward_additional_gst():
-    """Insert GST record for inward additional charge."""
-    sql = """
-    INSERT INTO proc_gst (
-        inward_additional_id,
-        tax_pct,
-        stax_percentage,
-        s_tax_amount,
-        i_tax_amount,
-        i_tax_percentage,
-        c_tax_amount,
-        c_tax_percentage,
-        tax_amount,
-        active,
-        updated_by,
-        updated_date_time
-    ) VALUES (
-        :inward_additional_id,
-        :tax_pct,
-        :stax_percentage,
-        :s_tax_amount,
-        :i_tax_amount,
-        :i_tax_percentage,
-        :c_tax_amount,
-        :c_tax_percentage,
-        :tax_amount,
-        :active,
-        :updated_by,
-        :updated_date_time
-    );
-    """
-    return text(sql)
+# Note: GST for additional charges is not supported in current schema
+# proc_gst table does not have a link to proc_inward_additional

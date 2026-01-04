@@ -89,14 +89,11 @@ class ProcEnquiryDtl(Base):
 # =============================================================================
 
 class ProcGst(Base):
-    """GST details for procurement inward items and additional charges."""
+    """GST details for procurement inward items."""
     __tablename__ = "proc_gst"
 
     gst_invoice_type: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     proc_inward_dtl: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    inward_additional_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("proc_inward_additional.inward_additional_id"), nullable=True, index=True
-    )
     tax_pct: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     stax_percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     s_tax_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
@@ -109,11 +106,6 @@ class ProcGst(Base):
     updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_date_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
-    )
-
-    # Relationships
-    inward_additional: Mapped[Optional["ProcInwardAdditional"]] = relationship(
-        "ProcInwardAdditional", back_populates="gst_details"
     )
 
 
@@ -275,28 +267,12 @@ class ProcInwardAdditional(Base):
     """Additional charges for inward/SR documents (freight, insurance, etc.)."""
     __tablename__ = "proc_inward_additional"
 
-    inward_additional_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    inward_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("proc_inward.inward_id"), nullable=False, index=True
-    )
-    additional_charges_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    proc_inward_additional_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    inward_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    additional_charges_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     net_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
-    updated_date_time: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.current_timestamp()
-    )
-
-    # Relationships
-    inward: Mapped["ProcInward"] = relationship(
-        "ProcInward", back_populates="additional_charges"
-    )
-    gst_details: Mapped[List["ProcGst"]] = relationship(
-        "ProcGst", back_populates="inward_additional"
-    )
 
 
 class ProcInwardDtl(Base):

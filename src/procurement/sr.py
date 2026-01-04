@@ -26,7 +26,6 @@ from src.procurement.query import (
     insert_inward_additional,
     update_inward_additional,
     delete_inward_additional,
-    insert_inward_additional_gst,
 )
 from src.procurement.inward import format_inward_no
 
@@ -412,11 +411,11 @@ async def save_sr(
         if request_body.additional_charges:
             # Get existing additional charge IDs to track which to keep
             existing_query = text("""
-                SELECT inward_additional_id FROM proc_inward_additional 
-                WHERE inward_id = :inward_id AND active = 1
+                SELECT proc_inward_additional_id FROM proc_inward_additional 
+                WHERE inward_id = :inward_id
             """)
             existing_result = db.execute(existing_query, {"inward_id": request_body.inward_id}).fetchall()
-            existing_ids = {row.inward_additional_id for row in existing_result}
+            existing_ids = {row.proc_inward_additional_id for row in existing_result}
             updated_ids = set()
             
             for charge in request_body.additional_charges:
@@ -427,13 +426,10 @@ async def save_sr(
                     # Update existing charge
                     update_addl_query = update_inward_additional()
                     db.execute(update_addl_query, {
-                        "inward_additional_id": charge.inward_additional_id,
+                        "proc_inward_additional_id": charge.inward_additional_id,
                         "qty": charge.qty,
                         "rate": charge.rate,
                         "net_amount": charge_net_amount,
-                        "remarks": charge.remarks,
-                        "updated_by": user_id,
-                        "updated_date_time": now,
                     })
                     updated_ids.add(charge.inward_additional_id)
                 else:
@@ -445,42 +441,15 @@ async def save_sr(
                         "qty": charge.qty,
                         "rate": charge.rate,
                         "net_amount": charge_net_amount,
-                        "remarks": charge.remarks,
-                        "active": True,
-                        "updated_by": user_id,
-                        "updated_date_time": now,
                     })
-                    
-                    # Get the inserted ID for GST if needed
-                    if charge.apply_tax and charge.tax_amount:
-                        last_id_result = db.execute(text("SELECT LAST_INSERT_ID() as id")).fetchone()
-                        new_addl_id = last_id_result.id if last_id_result else None
-                        
-                        if new_addl_id:
-                            insert_gst_query = insert_inward_additional_gst()
-                            db.execute(insert_gst_query, {
-                                "inward_additional_id": new_addl_id,
-                                "tax_pct": charge.tax_pct or 0,
-                                "stax_percentage": (charge.tax_pct or 0) / 2,
-                                "s_tax_amount": charge.sgst_amount or 0,
-                                "i_tax_amount": charge.igst_amount or 0,
-                                "i_tax_percentage": charge.tax_pct or 0,
-                                "c_tax_amount": charge.cgst_amount or 0,
-                                "c_tax_percentage": (charge.tax_pct or 0) / 2,
-                                "tax_amount": charge.tax_amount or 0,
-                                "active": 1,
-                                "updated_by": user_id,
-                                "updated_date_time": now,
-                            })
+                    # Note: GST for additional charges not supported in current schema
             
-            # Soft delete charges that were removed
+            # Delete charges that were removed
             ids_to_delete = existing_ids - updated_ids
             for del_id in ids_to_delete:
                 delete_addl_query = delete_inward_additional()
                 db.execute(delete_addl_query, {
-                    "inward_additional_id": del_id,
-                    "updated_by": user_id,
-                    "updated_date_time": now,
+                    "proc_inward_additional_id": del_id,
                 })
         
         # Update totals to include additional charges
