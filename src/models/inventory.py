@@ -87,8 +87,23 @@ class IssueLi(Base):
     )
 
 
+class VwItemBalanceQtyByBranch(Base):
+    """
+    Read-only model for vw_item_balance_qty_by_branch view.
+    Aggregates balance quantities by branch and item.
+    """
+    __tablename__ = "vw_item_balance_qty_by_branch"
+    __table_args__ = {"extend_existing": True}
+
+    # Composite primary key for the view
+    branch_id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(primary_key=True)
+    total_balance_qty: Mapped[float] = mapped_column()
+
+
 __all__ = [
     "Base",
     "IssueHdr",
     "IssueLi",
+    "VwItemBalanceQtyByBranch",
 ]
