@@ -251,3 +251,193 @@ class JuteIssuePrimary(Base):
     auto_date_time_insert: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
     )
+
+
+# =============================================================================
+# JUTE SUPPLIER MODELS
+# =============================================================================
+
+class JuteSupplierMst(Base):
+    """Jute supplier master table - stores jute supplier information."""
+    __tablename__ = "jute_supplier_mst"
+
+    supplier_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    party_mappings: Mapped[List["JuteSuppPartyMap"]] = relationship(
+        "JuteSuppPartyMap", back_populates="jute_supplier"
+    )
+
+
+class JuteSuppPartyMap(Base):
+    """Jute supplier to party mapping table - maps jute suppliers to party master."""
+    __tablename__ = "jute_supp_party_map"
+
+    map_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_supplier_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("jute_supplier_mst.supplier_id"), nullable=True, index=True
+    )
+    supp_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_mapped: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    jute_supplier: Mapped[Optional["JuteSupplierMst"]] = relationship(
+        "JuteSupplierMst", back_populates="party_mappings"
+    )
+
+
+# =============================================================================
+# JUTE MUKAM MASTER MODEL
+# =============================================================================
+
+class JuteMukamMst(Base):
+    """Jute mukam master table - stores mukam (location) information for jute."""
+    __tablename__ = "jute_mukam_mst"
+
+    mukam_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mukam_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+
+
+# =============================================================================
+# JUTE LORRY MASTER MODEL
+# =============================================================================
+
+class JuteLorryMst(Base):
+    """Jute lorry master table - stores lorry type and weight information for jute logistics."""
+    __tablename__ = "jute_lorry_mst"
+
+    jute_lorry_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lorry_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+
+
+# =============================================================================
+# JUTE PO MODELS
+# =============================================================================
+
+class JutePo(Base):
+    """Jute purchase order header table - stores jute PO transactions."""
+    __tablename__ = "jute_po"
+
+    jute_po_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_indent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # PO identification
+    po_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    po_num: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    po_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    po_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # Contract details
+    contract_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    contract_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    channel_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    
+    # Terms and charges
+    credit_term: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    delivery_days: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    frieght_charge: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    brokrage_rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    brokrage_percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    penalty: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    
+    # Vehicle details
+    vehicle_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    vehicle_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    # Value and weight
+    jute_po_value: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    jute_uom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Notes and remarks
+    remarks: Mapped[Optional[str]] = mapped_column(String(4000), nullable=True)
+    internal_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    footer_note: Mapped[Optional[str]] = mapped_column(String(4000), nullable=True)
+    
+    # Audit fields
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    line_items: Mapped[List["JutePoLi"]] = relationship(
+        "JutePoLi", back_populates="jute_po"
+    )
+
+
+class JutePoLi(Base):
+    """Jute purchase order line item table - stores individual items in a jute PO."""
+    __tablename__ = "jute_po_li"
+
+    jute_po_li_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_po_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("jute_po.jute_po_id"), nullable=True, index=True
+    )
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    department_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # PO reference
+    po_num: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    indent_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Jute details
+    quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    marka: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    crop_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Quantity details
+    quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cancel_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bale: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    loose: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    allowable_moisture_percentage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    # Pricing
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    discount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    value_wo_tax: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    value_wt_tax: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    
+    # Status
+    status: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="1")
+    
+    # Audit
+    auto_datetime_insert: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    jute_po: Mapped[Optional["JutePo"]] = relationship(
+        "JutePo", back_populates="line_items"
+    )

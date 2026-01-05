@@ -1,4 +1,7 @@
 from fastapi import Depends, Request, HTTPException, APIRouter
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import date, datetime
 import logging
 from sqlalchemy.orm import Session
 from src.config.db import get_tenant_db
@@ -7,6 +10,15 @@ from src.juteProcurement.query import (
     get_jute_po_table_query,
     get_jute_po_table_count_query,
     get_jute_po_by_id_query,
+    get_jute_po_line_items_query,
+    get_mukam_list_query,
+    get_vehicle_types_query,
+    get_jute_items_query,
+    get_jute_qualities_by_item_query,
+    get_suppliers_by_mukam_query,
+    get_parties_by_supplier_query,
+    get_branches_query,
+    get_all_suppliers_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,4 +161,713 @@ async def get_jute_po_by_id(
         raise
     except Exception as e:
         logger.exception("Error fetching Jute PO by ID")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_jute_po_line_items/{jute_po_id}")
+async def get_jute_po_line_items(
+    jute_po_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get line items for a Jute PO."""
+    try:
+        query = get_jute_po_line_items_query()
+        result = db.execute(query, {"jute_po_id": jute_po_id}).fetchall()
+        rows = [dict(r._mapping) for r in result]
+        return {"line_items": rows}
+    except Exception as e:
+        logger.exception("Error fetching Jute PO line items")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/jute_po_create_setup")
+async def jute_po_create_setup(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get setup data for creating a Jute PO.
+    Returns branches, mukams, vehicle types, and jute items.
+    """
+    try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        
+        try:
+            co_id = int(q_co_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        # Get branches
+        branches_result = db.execute(get_branches_query(), {"co_id": co_id}).fetchall()
+        branches = [dict(r._mapping) for r in branches_result]
+
+        # Get mukams
+        mukams_result = db.execute(get_mukam_list_query(), {"co_id": co_id}).fetchall()
+        mukams = [dict(r._mapping) for r in mukams_result]
+
+        # Get vehicle types
+        vehicle_types_result = db.execute(get_vehicle_types_query(), {"co_id": co_id}).fetchall()
+        vehicle_types = [dict(r._mapping) for r in vehicle_types_result]
+
+        # Get jute items (where item_type_id = 2)
+        jute_items_result = db.execute(get_jute_items_query(), {"co_id": co_id}).fetchall()
+        jute_items = [dict(r._mapping) for r in jute_items_result]
+
+        # Get all jute suppliers for the company (mandatory field on PO)
+        suppliers_result = db.execute(get_all_suppliers_query(), {"co_id": co_id}).fetchall()
+        suppliers = [dict(r._mapping) for r in suppliers_result]
+
+        # Static options
+        channel_options = [
+            {"value": "DOMESTIC", "label": "Domestic"},
+            {"value": "IMPORT", "label": "Import"},
+            {"value": "JCI", "label": "JCI"},
+            {"value": "PTF", "label": "PTF"},
+        ]
+
+        unit_options = [
+            {"value": "LOOSE", "label": "Loose"},
+            {"value": "BALE", "label": "Bale"},
+        ]
+
+        # Generate crop year options (current year -1 to +2)
+        current_year = datetime.now().year % 100  # Get last 2 digits
+        crop_year_options = []
+        for i in range(-1, 3):
+            start_year = current_year + i - 1
+            end_year = current_year + i
+            crop_year_options.append({
+                "value": f"{start_year:02d}-{end_year:02d}",
+                "label": f"{start_year:02d}-{end_year:02d}",
+            })
+
+        return {
+            "branches": branches,
+            "mukams": mukams,
+            "vehicle_types": vehicle_types,
+            "jute_items": jute_items,
+            "suppliers": suppliers,
+            "channel_options": channel_options,
+            "unit_options": unit_options,
+            "crop_year_options": crop_year_options,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching Jute PO create setup")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_suppliers_by_mukam/{mukam_id}")
+async def get_suppliers_by_mukam(
+    mukam_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get jute suppliers filtered by mukam."""
+    try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        
+        co_id = int(q_co_id)
+        
+        query = get_suppliers_by_mukam_query()
+        result = db.execute(query, {"mukam_id": mukam_id, "co_id": co_id}).fetchall()
+        suppliers = [dict(r._mapping) for r in result]
+        
+        return {"suppliers": suppliers}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching suppliers by mukam")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_parties_by_supplier/{supplier_id}")
+async def get_parties_by_supplier(
+    supplier_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get parties mapped to a jute supplier."""
+    try:
+        query = get_parties_by_supplier_query()
+        result = db.execute(query, {"supplier_id": supplier_id}).fetchall()
+        parties = [dict(r._mapping) for r in result]
+        
+        return {"parties": parties}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching parties by supplier")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_qualities_by_item/{item_id}")
+async def get_qualities_by_item(
+    item_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get jute qualities for a specific item."""
+    try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        
+        co_id = int(q_co_id)
+        
+        query = get_jute_qualities_by_item_query()
+        result = db.execute(query, {"item_id": item_id, "co_id": co_id}).fetchall()
+        qualities = [dict(r._mapping) for r in result]
+        
+        return {"qualities": qualities}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching qualities by item")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# JUTE PO CREATE / UPDATE MODELS
+# =============================================================================
+
+class JutePOLineItemCreate(BaseModel):
+    """Schema for a Jute PO line item."""
+    item_id: int
+    quality: Optional[int] = None
+    crop_year: Optional[str] = None
+    marka: Optional[str] = None
+    quantity: float
+    uom: Optional[str] = None
+    rate: float
+    allowable_moisture_percentage: Optional[float] = None
+
+
+class JutePOCreate(BaseModel):
+    """Schema for creating a Jute PO."""
+    co_id: int
+    branch_id: int
+    po_date: date
+    mukam_id: int
+    jute_unit: str  # LOOSE or BALE
+    supplier_id: int
+    party_id: Optional[int] = None
+    vehicle_type_id: int
+    vehicle_quantity: int
+    channel_code: str
+    credit_term: Optional[int] = None
+    delivery_timeline: Optional[int] = None
+    freight_charge: Optional[float] = None
+    remarks: Optional[str] = None
+    line_items: List[JutePOLineItemCreate]
+
+
+class JutePOUpdate(BaseModel):
+    """Schema for updating a Jute PO."""
+    branch_id: Optional[int] = None
+    po_date: Optional[date] = None
+    mukam_id: Optional[int] = None
+    jute_unit: Optional[str] = None
+    supplier_id: Optional[int] = None
+    party_id: Optional[int] = None
+    vehicle_type_id: Optional[int] = None
+    vehicle_quantity: Optional[int] = None
+    channel_code: Optional[str] = None
+    credit_term: Optional[int] = None
+    delivery_timeline: Optional[int] = None
+    freight_charge: Optional[float] = None
+    remarks: Optional[str] = None
+    line_items: Optional[List[JutePOLineItemCreate]] = None
+
+
+# =============================================================================
+# JUTE PO CREATE / UPDATE ENDPOINTS
+# =============================================================================
+
+@router.post("/jute_po_create")
+async def jute_po_create(
+    payload: JutePOCreate,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Create a new Jute PO."""
+    try:
+        from src.models.jute import JutePo, JutePoLi
+        
+        user_id = token_data.get("user_id")
+        
+        # Generate PO number (get max po_no and increment)
+        max_po_result = db.execute(
+            "SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po FROM jute_po WHERE co_id = :co_id",
+            {"co_id": payload.co_id}
+        ).fetchone()
+        next_po_no = max_po_result.next_po if max_po_result else 1
+        
+        # Generate po_num string (e.g., JPO-2026-00001)
+        year = payload.po_date.year
+        po_num = f"JPO-{year}-{next_po_no:05d}"
+        
+        # Calculate total weight and value from line items
+        total_weight = 0.0
+        total_value = 0.0
+        
+        # Get vehicle weight for calculations
+        vehicle_result = db.execute(
+            "SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id",
+            {"vehicle_type_id": payload.vehicle_type_id}
+        ).fetchone()
+        vehicle_weight = vehicle_result.weight if vehicle_result else 0
+        total_vehicle_weight = vehicle_weight * payload.vehicle_quantity
+        
+        # Create header
+        jute_po = JutePo(
+            co_id=payload.co_id,
+            branch_id=payload.branch_id,
+            po_no=next_po_no,
+            po_num=po_num,
+            po_date=payload.po_date,
+            mukam=payload.mukam_id,
+            jute_uom=payload.jute_unit,
+            supp_code=str(payload.supplier_id),
+            party_id=payload.party_id,
+            vehicle_type_id=payload.vehicle_type_id,
+            vehicle_quantity=payload.vehicle_quantity,
+            channel_code=payload.channel_code,
+            credit_term=str(payload.credit_term) if payload.credit_term else None,
+            delivery_timeline=str(payload.delivery_timeline) if payload.delivery_timeline else None,
+            frieght_charge=payload.freight_charge,
+            remarks=payload.remarks,
+            po_status=21,  # Draft status
+            with_or_without=0,  # Without indent for now
+            created_by=user_id,
+            updated_by=user_id,
+        )
+        
+        db.add(jute_po)
+        db.flush()  # Get the jute_po_id
+        
+        # Create line items
+        for li in payload.line_items:
+            # Calculate weight based on unit type
+            if payload.jute_unit == "LOOSE":
+                # For loose: (total_vehicle_weight * quantity%) / 100
+                weight = (total_vehicle_weight * li.quantity) / 100
+            else:
+                # For bale: 150 * quantity (150 kg per bale)
+                weight = 150 * li.quantity
+            
+            amount = weight * li.rate
+            total_weight += weight
+            total_value += amount
+            
+            line_item = JutePoLi(
+                jute_po_id=jute_po.jute_po_id,
+                co_id=payload.co_id,
+                po_num=po_num,
+                item_id=li.item_id,
+                quality=li.quality,
+                crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
+                marka=li.marka,
+                quantity=li.quantity,
+                uom=li.uom,
+                rate=li.rate,
+                allowable_moisture_percentage=li.allowable_moisture_percentage,
+                actual_quantity=weight,
+                value_wo_tax=amount,
+                is_active="1",
+            )
+            db.add(line_item)
+        
+        # Update totals on header
+        jute_po.weight = total_weight
+        jute_po.jute_po_value = total_value
+        jute_po.po_val_wo_tax = total_value
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "jute_po_id": jute_po.jute_po_id,
+            "po_num": po_num,
+            "message": "Jute PO created successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error creating Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/jute_po_update/{jute_po_id}")
+async def jute_po_update(
+    jute_po_id: int,
+    payload: JutePOUpdate,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Update an existing Jute PO."""
+    try:
+        from src.models.jute import JutePo, JutePoLi
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        user_id = token_data.get("user_id")
+        
+        # Get existing PO
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        # Check if PO is editable (Draft or Open status)
+        if jute_po.po_status not in [21, 1]:
+            raise HTTPException(status_code=400, detail="Jute PO cannot be edited in current status")
+        
+        # Update header fields
+        if payload.branch_id is not None:
+            jute_po.branch_id = payload.branch_id
+        if payload.po_date is not None:
+            jute_po.po_date = payload.po_date
+        if payload.mukam_id is not None:
+            jute_po.mukam = payload.mukam_id
+        if payload.jute_unit is not None:
+            jute_po.jute_uom = payload.jute_unit
+        if payload.supplier_id is not None:
+            jute_po.supp_code = str(payload.supplier_id)
+        if payload.party_id is not None:
+            jute_po.party_id = payload.party_id
+        if payload.vehicle_type_id is not None:
+            jute_po.vehicle_type_id = payload.vehicle_type_id
+        if payload.vehicle_quantity is not None:
+            jute_po.vehicle_quantity = payload.vehicle_quantity
+        if payload.channel_code is not None:
+            jute_po.channel_code = payload.channel_code
+        if payload.credit_term is not None:
+            jute_po.credit_term = str(payload.credit_term)
+        if payload.delivery_timeline is not None:
+            jute_po.delivery_timeline = str(payload.delivery_timeline)
+        if payload.freight_charge is not None:
+            jute_po.frieght_charge = payload.freight_charge
+        if payload.remarks is not None:
+            jute_po.remarks = payload.remarks
+        
+        jute_po.updated_by = user_id
+        jute_po.mod_by = user_id
+        jute_po.mod_on = datetime.now()
+        
+        # Update line items if provided
+        if payload.line_items is not None:
+            # Soft delete existing line items
+            db.query(JutePoLi).filter(JutePoLi.jute_po_id == jute_po_id).update({"is_active": "0"})
+            
+            # Get vehicle weight for calculations
+            vehicle_result = db.execute(
+                "SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id",
+                {"vehicle_type_id": jute_po.vehicle_type_id}
+            ).fetchone()
+            vehicle_weight = vehicle_result.weight if vehicle_result else 0
+            total_vehicle_weight = vehicle_weight * (jute_po.vehicle_quantity or 0)
+            
+            total_weight = 0.0
+            total_value = 0.0
+            jute_unit = payload.jute_unit or jute_po.jute_uom
+            
+            # Create new line items
+            for li in payload.line_items:
+                if jute_unit == "LOOSE":
+                    weight = (total_vehicle_weight * li.quantity) / 100
+                else:
+                    weight = 150 * li.quantity
+                
+                amount = weight * li.rate
+                total_weight += weight
+                total_value += amount
+                
+                line_item = JutePoLi(
+                    jute_po_id=jute_po_id,
+                    co_id=co_id,
+                    po_num=jute_po.po_num,
+                    item_id=li.item_id,
+                    quality=li.quality,
+                    crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
+                    marka=li.marka,
+                    quantity=li.quantity,
+                    uom=li.uom,
+                    rate=li.rate,
+                    allowable_moisture_percentage=li.allowable_moisture_percentage,
+                    actual_quantity=weight,
+                    value_wo_tax=amount,
+                    is_active="1",
+                )
+                db.add(line_item)
+            
+            # Update totals
+            jute_po.weight = total_weight
+            jute_po.jute_po_value = total_value
+            jute_po.po_val_wo_tax = total_value
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "jute_po_id": jute_po_id,
+            "message": "Jute PO updated successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error updating Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# JUTE PO APPROVAL ENDPOINTS
+# =============================================================================
+
+@router.post("/open_jute_po/{jute_po_id}")
+async def open_jute_po(
+    jute_po_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Open a Jute PO (change status from Draft to Open)."""
+    try:
+        from src.models.jute import JutePo
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        if jute_po.po_status != 21:  # Must be Draft
+            raise HTTPException(status_code=400, detail="Only Draft POs can be opened")
+        
+        jute_po.po_status = 1  # Open status
+        jute_po.updated_by = token_data.get("user_id")
+        jute_po.mod_on = datetime.now()
+        
+        db.commit()
+        
+        return {"success": True, "message": "Jute PO opened successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error opening Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/approve_jute_po/{jute_po_id}")
+async def approve_jute_po(
+    jute_po_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Approve a Jute PO."""
+    try:
+        from src.models.jute import JutePo
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        if jute_po.po_status not in [1, 20]:  # Must be Open or Pending Approval
+            raise HTTPException(status_code=400, detail="Jute PO cannot be approved in current status")
+        
+        jute_po.po_status = 3  # Approved status
+        jute_po.updated_by = token_data.get("user_id")
+        jute_po.mod_on = datetime.now()
+        
+        db.commit()
+        
+        return {"success": True, "message": "Jute PO approved successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error approving Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RejectPayload(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/reject_jute_po/{jute_po_id}")
+async def reject_jute_po(
+    jute_po_id: int,
+    payload: RejectPayload,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Reject a Jute PO."""
+    try:
+        from src.models.jute import JutePo
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        if jute_po.po_status not in [1, 20]:  # Must be Open or Pending Approval
+            raise HTTPException(status_code=400, detail="Jute PO cannot be rejected in current status")
+        
+        jute_po.po_status = 4  # Rejected status
+        if payload.reason:
+            jute_po.internal_note = f"Rejected: {payload.reason}"
+        jute_po.updated_by = token_data.get("user_id")
+        jute_po.mod_on = datetime.now()
+        
+        db.commit()
+        
+        return {"success": True, "message": "Jute PO rejected successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error rejecting Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cancel_draft_jute_po/{jute_po_id}")
+async def cancel_draft_jute_po(
+    jute_po_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Cancel a Draft Jute PO."""
+    try:
+        from src.models.jute import JutePo
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        if jute_po.po_status != 21:  # Must be Draft
+            raise HTTPException(status_code=400, detail="Only Draft POs can be cancelled")
+        
+        jute_po.po_status = 6  # Cancelled status
+        jute_po.updated_by = token_data.get("user_id")
+        jute_po.mod_on = datetime.now()
+        
+        db.commit()
+        
+        return {"success": True, "message": "Jute PO cancelled successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error cancelling Jute PO")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reopen_jute_po/{jute_po_id}")
+async def reopen_jute_po(
+    jute_po_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Reopen a rejected or cancelled Jute PO."""
+    try:
+        from src.models.jute import JutePo
+        
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        co_id = int(q_co_id)
+        
+        jute_po = db.query(JutePo).filter(
+            JutePo.jute_po_id == jute_po_id,
+            JutePo.co_id == co_id
+        ).first()
+        
+        if not jute_po:
+            raise HTTPException(status_code=404, detail="Jute PO not found")
+        
+        if jute_po.po_status not in [4, 6]:  # Must be Rejected or Cancelled
+            raise HTTPException(status_code=400, detail="Only Rejected or Cancelled POs can be reopened")
+        
+        jute_po.po_status = 21  # Back to Draft
+        jute_po.updated_by = token_data.get("user_id")
+        jute_po.mod_on = datetime.now()
+        
+        db.commit()
+        
+        return {"success": True, "message": "Jute PO reopened successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error reopening Jute PO")
         raise HTTPException(status_code=500, detail=str(e))
