@@ -99,7 +99,7 @@ def get_jute_po_by_id_query():
             pm.supp_code,
             pm.supp_name AS supplier_name,
             jp.supplier_id,
-            COALESCE(jbm.broker_name, '') AS broker_name,
+            COALESCE(jbm.supplier_name, '') AS broker_name,
             jp.jute_mukam_id AS mukam_id,
             jmm.mukam_name AS mukam,
             jp.vehicle_type_id,
@@ -125,8 +125,7 @@ def get_jute_po_by_id_query():
             jp.brokrage_percentage,
             jp.penalty,
             jp.internal_note,
-            jp.updated_date_time,
-            jp.updated_by AS created_by
+            jp.updated_date_time
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
         LEFT JOIN jute_supplier_mst jbm ON jbm.supplier_id = jp.supplier_id
@@ -141,12 +140,14 @@ def get_jute_po_by_id_query():
 def get_jute_po_line_items_query():
     """
     Query to get line items for a jute PO.
+    Note: jute_po_li.quality maps to jute_quality_mst.jute_qlty_id,
+    and jute_quality_mst.item_id maps to item_mst.item_id.
     """
     sql = """
         SELECT 
             jpli.jute_po_li_id,
             jpli.jute_po_id,
-            jpli.item_id,
+            jqm.item_id AS item_id,
             im.item_name AS item_name,
             jpli.quality,
             jqm.jute_quality AS quality_name,
@@ -160,8 +161,8 @@ def get_jute_po_line_items_query():
             jpli.value_wo_tax AS amount,
             jpli.status
         FROM jute_po_li jpli
-        LEFT JOIN item_mst im ON im.item_id = jpli.item_id
         LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.quality
+        LEFT JOIN item_mst im ON im.item_id = jqm.item_id
         WHERE jpli.jute_po_id = :jute_po_id
         ORDER BY jpli.jute_po_li_id
     """
@@ -258,16 +259,16 @@ def get_suppliers_by_mukam_query():
 def get_parties_by_supplier_query():
     """
     Query to get parties mapped to a jute supplier.
+    Uses jute_supp_party_map to find parties linked to the selected supplier.
     """
     sql = """
-        SELECT 
-            jspm.jute_supp_party_id AS party_map_id,
-            jspm.supplier_id AS supplier_id,
-            jspm.party_id,
+        SELECT
+            pm.party_id,
             pm.supp_name AS party_name
-        FROM jute_supp_party_map jspm
-        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
-        WHERE jspm.supplier_id = :supplier_id
+        FROM party_mst pm
+        JOIN jute_supp_party_map jspm
+            ON jspm.party_id = pm.party_id
+        WHERE jspm.jute_supplier_id = :supplier_id
         ORDER BY pm.supp_name
     """
     return text(sql)

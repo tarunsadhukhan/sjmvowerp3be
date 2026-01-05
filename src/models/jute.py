@@ -100,12 +100,9 @@ class JuteGateEntryHdr(Base):
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # Audit fields
-    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     update_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     update_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    auto_datetime_insert: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.current_timestamp()
-    )
+
 
     # Relationships
     details: Mapped[List["JuteGateEntryDtl"]] = relationship(
@@ -344,6 +341,7 @@ class JutePo(Base):
     jute_po_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    party_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     jute_mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     jute_indent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     

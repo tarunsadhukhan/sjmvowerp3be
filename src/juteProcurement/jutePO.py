@@ -4,6 +4,7 @@ from typing import List, Optional
 from datetime import date, datetime
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.juteProcurement.query import (
@@ -348,7 +349,6 @@ async def get_qualities_by_item(
 
 class JutePOLineItemCreate(BaseModel):
     """Schema for a Jute PO line item."""
-    item_id: int
     quality: Optional[int] = None
     crop_year: Optional[str] = None
     marka: Optional[str] = None
@@ -414,8 +414,8 @@ async def jute_po_create(
         
         # Generate PO number (get max po_no and increment)
         max_po_result = db.execute(
-            "SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po FROM jute_po WHERE co_id = :co_id",
-            {"co_id": payload.co_id}
+            text("SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po FROM jute_po WHERE branch_id = :branch_id"),
+            {"branch_id": payload.branch_id}
         ).fetchone()
         next_po_no = max_po_result.next_po if max_po_result else 1
         
@@ -429,7 +429,7 @@ async def jute_po_create(
         
         # Get vehicle weight for calculations
         vehicle_result = db.execute(
-            "SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id",
+            text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
             {"vehicle_type_id": payload.vehicle_type_id}
         ).fetchone()
         vehicle_weight = vehicle_result.weight if vehicle_result else 0
@@ -437,25 +437,22 @@ async def jute_po_create(
         
         # Create header
         jute_po = JutePo(
-            co_id=payload.co_id,
             branch_id=payload.branch_id,
             po_no=next_po_no,
             po_num=po_num,
             po_date=payload.po_date,
-            mukam=payload.mukam_id,
+            jute_mukam_id=payload.mukam_id,
             jute_uom=payload.jute_unit,
-            supp_code=str(payload.supplier_id),
+            supplier_id=str(payload.supplier_id),
             party_id=payload.party_id,
             vehicle_type_id=payload.vehicle_type_id,
             vehicle_quantity=payload.vehicle_quantity,
             channel_code=payload.channel_code,
             credit_term=str(payload.credit_term) if payload.credit_term else None,
-            delivery_timeline=str(payload.delivery_timeline) if payload.delivery_timeline else None,
+            delivery_days=str(payload.delivery_timeline) if payload.delivery_timeline else None,
             frieght_charge=payload.freight_charge,
             remarks=payload.remarks,
-            po_status=21,  # Draft status
-            with_or_without=0,  # Without indent for now
-            created_by=user_id,
+            status_id=21,  # Draft status
             updated_by=user_id,
         )
         
@@ -480,7 +477,6 @@ async def jute_po_create(
                 jute_po_id=jute_po.jute_po_id,
                 co_id=payload.co_id,
                 po_num=po_num,
-                item_id=li.item_id,
                 quality=li.quality,
                 crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                 marka=li.marka,
@@ -545,7 +541,7 @@ async def jute_po_update(
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
         # Check if PO is editable (Draft or Open status)
-        if jute_po.po_status not in [21, 1]:
+        if jute_po.status_id not in [21, 1]:
             raise HTTPException(status_code=400, detail="Jute PO cannot be edited in current status")
         
         # Update header fields
@@ -558,7 +554,7 @@ async def jute_po_update(
         if payload.jute_unit is not None:
             jute_po.jute_uom = payload.jute_unit
         if payload.supplier_id is not None:
-            jute_po.supp_code = str(payload.supplier_id)
+            jute_po.supplier_id = str(payload.supplier_id)
         if payload.party_id is not None:
             jute_po.party_id = payload.party_id
         if payload.vehicle_type_id is not None:
@@ -570,7 +566,7 @@ async def jute_po_update(
         if payload.credit_term is not None:
             jute_po.credit_term = str(payload.credit_term)
         if payload.delivery_timeline is not None:
-            jute_po.delivery_timeline = str(payload.delivery_timeline)
+            jute_po.delivery_days = str(payload.delivery_timeline)
         if payload.freight_charge is not None:
             jute_po.frieght_charge = payload.freight_charge
         if payload.remarks is not None:
@@ -587,7 +583,7 @@ async def jute_po_update(
             
             # Get vehicle weight for calculations
             vehicle_result = db.execute(
-                "SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id",
+                text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
                 {"vehicle_type_id": jute_po.vehicle_type_id}
             ).fetchone()
             vehicle_weight = vehicle_result.weight if vehicle_result else 0
@@ -610,9 +606,7 @@ async def jute_po_update(
                 
                 line_item = JutePoLi(
                     jute_po_id=jute_po_id,
-                    co_id=co_id,
                     po_num=jute_po.po_num,
-                    item_id=li.item_id,
                     quality=li.quality,
                     crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                     marka=li.marka,
@@ -621,8 +615,7 @@ async def jute_po_update(
                     rate=li.rate,
                     allowable_moisture_percentage=li.allowable_moisture_percentage,
                     actual_quantity=weight,
-                    value_wo_tax=amount,
-                    is_active="1",
+                    value_wo_tax=amount
                 )
                 db.add(line_item)
             
@@ -675,10 +668,10 @@ async def open_jute_po(
         if not jute_po:
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
-        if jute_po.po_status != 21:  # Must be Draft
+        if jute_po.status_id != 21:  # Must be Draft
             raise HTTPException(status_code=400, detail="Only Draft POs can be opened")
         
-        jute_po.po_status = 1  # Open status
+        jute_po.status_id = 1  # Open status
         jute_po.updated_by = token_data.get("user_id")
         jute_po.mod_on = datetime.now()
         
@@ -718,10 +711,10 @@ async def approve_jute_po(
         if not jute_po:
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
-        if jute_po.po_status not in [1, 20]:  # Must be Open or Pending Approval
+        if jute_po.status_id not in [1, 20]:  # Must be Open or Pending Approval
             raise HTTPException(status_code=400, detail="Jute PO cannot be approved in current status")
         
-        jute_po.po_status = 3  # Approved status
+        jute_po.status_id = 3  # Approved status
         jute_po.updated_by = token_data.get("user_id")
         jute_po.mod_on = datetime.now()
         
@@ -766,10 +759,10 @@ async def reject_jute_po(
         if not jute_po:
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
-        if jute_po.po_status not in [1, 20]:  # Must be Open or Pending Approval
+        if jute_po.status_id not in [1, 20]:  # Must be Open or Pending Approval
             raise HTTPException(status_code=400, detail="Jute PO cannot be rejected in current status")
         
-        jute_po.po_status = 4  # Rejected status
+        jute_po.status_id = 4  # Rejected status
         if payload.reason:
             jute_po.internal_note = f"Rejected: {payload.reason}"
         jute_po.updated_by = token_data.get("user_id")
@@ -811,10 +804,10 @@ async def cancel_draft_jute_po(
         if not jute_po:
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
-        if jute_po.po_status != 21:  # Must be Draft
+        if jute_po.status_id != 21:  # Must be Draft
             raise HTTPException(status_code=400, detail="Only Draft POs can be cancelled")
         
-        jute_po.po_status = 6  # Cancelled status
+        jute_po.status_id = 6  # Cancelled status
         jute_po.updated_by = token_data.get("user_id")
         jute_po.mod_on = datetime.now()
         
@@ -854,10 +847,10 @@ async def reopen_jute_po(
         if not jute_po:
             raise HTTPException(status_code=404, detail="Jute PO not found")
         
-        if jute_po.po_status not in [4, 6]:  # Must be Rejected or Cancelled
+        if jute_po.status_id not in [4, 6]:  # Must be Rejected or Cancelled
             raise HTTPException(status_code=400, detail="Only Rejected or Cancelled POs can be reopened")
         
-        jute_po.po_status = 21  # Back to Draft
+        jute_po.status_id = 21  # Back to Draft
         jute_po.updated_by = token_data.get("user_id")
         jute_po.mod_on = datetime.now()
         
