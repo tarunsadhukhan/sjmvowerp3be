@@ -379,8 +379,8 @@ def get_dept_master(co_id: int = None, branch_ids: list = None):
     1 AS active,
     bm.branch_name AS branch_display,
     dm.branch_id
-  FROM sls.dept_mst dm
-  JOIN sls.branch_mst bm ON dm.branch_id = bm.branch_id
+  FROM dept_mst dm
+  JOIN branch_mst bm ON dm.branch_id = bm.branch_id
   WHERE (:search IS NULL OR dm.dept_code LIKE :search OR dm.dept_desc LIKE :search)
     {branch_filter}
   """
@@ -411,7 +411,7 @@ def dept_master_validate_table(co_id: int = None, branch_ids: int = None):
     dm.dept_code,
     dm.dept_desc AS dept_name,
     1 AS active,
-  FROM sls.dept_mst dm
+  FROM dept_mst dm
   WHERE 1=1
     {branch_filter}
   """
@@ -496,7 +496,7 @@ def get_subdept_master(co_id: int = None, branch_ids: list = None):
 def get_branch_list(branch_ids: list = None):
     sql = """
     SELECT bm.branch_id, bm.branch_name
-    FROM sls.branch_mst bm
+    FROM branch_mst bm
     WHERE 1=1
       {branch_filter}
     """
@@ -512,7 +512,7 @@ def get_branch_list(branch_ids: list = None):
 def get_dept_list( branch_ids: list = None):
     sql = """
     SELECT dm.dept_id AS dept_id, dm.dept_desc AS dept_name, dm.branch_id
-    FROM sls.dept_mst dm
+    FROM dept_mst dm
     WHERE 1=1
       {branch_filter}
     """

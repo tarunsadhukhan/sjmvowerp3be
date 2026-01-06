@@ -661,6 +661,35 @@ def get_supplier_branches(party_id: int):
     return text(sql)
 
 
+def get_all_supplier_branches_bulk(co_id: int = None):
+    """Get branch addresses for ALL active suppliers in a single query.
+    This avoids the N+1 query problem when fetching branches for many suppliers.
+    Results should be grouped by party_id in Python."""
+    sql = """SELECT 
+        pbm.party_mst_branch_id,
+        pbm.party_id,
+        pbm.address AS branch_address1,
+        pbm.address_additional AS branch_address2,
+        pbm.city_id,
+        cim.city_name,
+        cim.state_id,
+        sm.state AS state,
+        pbm.zip_code,
+        pbm.contact_person,
+        pbm.contact_no,
+        pbm.gst_no
+    FROM party_branch_mst pbm
+    INNER JOIN party_mst pm ON pm.party_id = pbm.party_id
+    LEFT JOIN city_mst cim ON cim.city_id = pbm.city_id
+    LEFT JOIN state_mst sm ON sm.state_id = cim.state_id
+    WHERE pbm.active = 1
+        AND pm.active = 1
+        AND FIND_IN_SET("1", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+        AND (:co_id IS NULL OR pm.co_id = :co_id)
+    ORDER BY pbm.party_id, pbm.party_mst_branch_id;"""
+    return text(sql)
+
+
 def get_company_branch_addresses(co_id: int = None, branch_id: int = None):
     """Get branch addresses for company branches with state information. If branch_id is provided, filter by that branch."""
     sql = """SELECT 

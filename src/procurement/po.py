@@ -11,6 +11,7 @@ from src.procurement.query import (
 	get_po_table_count_query,
 	get_suppliers_with_party_type_1,
 	get_supplier_branches,
+	get_all_supplier_branches_bulk,
 	get_company_branch_addresses,
 	get_indent_line_items_for_po,
 	insert_proc_po,
@@ -135,20 +136,25 @@ async def get_po_setup_1(
 		branch_addresses_result = db.execute(branch_addresses_query, {"co_id": co_id, "branch_id": None}).fetchall()
 		branch_addresses = [dict(r._mapping) for r in branch_addresses_result]
 		
-		# Get supplier branch addresses for all suppliers (for shipping addresses)
-		supplier_branch_addresses = []
+		# Get ALL supplier branch addresses in a single bulk query (avoids N+1 query problem)
+		# This is much faster than fetching branches for each supplier individually
+		all_branches_query = get_all_supplier_branches_bulk(co_id=co_id)
+		all_branches_result = db.execute(all_branches_query, {"co_id": co_id}).fetchall()
+		
+		# Group branches by party_id
+		branches_by_party: dict[int, list[dict]] = {}
+		for row in all_branches_result:
+			branch_dict = dict(row._mapping)
+			party_id = branch_dict.get("party_id")
+			if party_id is not None:
+				if party_id not in branches_by_party:
+					branches_by_party[party_id] = []
+				branches_by_party[party_id].append(branch_dict)
+		
+		# Attach branches to each supplier
 		for supplier in suppliers:
 			supplier_id = supplier.get("party_id")
-			if supplier_id:
-				try:
-					supplier_branch_query = get_supplier_branches(party_id=supplier_id)
-					supplier_branch_result = db.execute(supplier_branch_query, {"party_id": supplier_id}).fetchall()
-					supplier_branches = [dict(r._mapping) for r in supplier_branch_result]
-					# Add supplier branches to supplier object
-					supplier["branches"] = supplier_branches
-				except Exception as e:
-					logger.exception(f"Error fetching branches for supplier {supplier_id}")
-					supplier["branches"] = []
+			supplier["branches"] = branches_by_party.get(supplier_id, [])
 
 		# Additional charges master list
 		additional_charges_query = get_additional_charges_mst_list()

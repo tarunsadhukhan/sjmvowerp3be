@@ -158,8 +158,8 @@ def get_branch_query_nosearch():
 
 
 def get_department_by_id_query(dept_id: int):
-    sql = f"""select dm.*,bm.co_id from sls.dept_mst dm 
-left join sls.branch_mst bm on dm.branch_id =bm.branch_id
+    sql = f"""select dm.*,bm.co_id from dept_mst dm 
+left join branch_mst bm on dm.branch_id =bm.branch_id
     WHERE dm.dept_id = :dept_id;"""
     query = text(sql)
     return query
