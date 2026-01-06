@@ -53,7 +53,7 @@ class JuteGateEntry(Base):
     __tablename__ = "jute_gate_entry"
 
     jute_gate_entry_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    entry_company_seq: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    entry_branch_seq: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Supplier/Party information
@@ -85,7 +85,7 @@ class JuteGateEntry(Base):
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # Date/Time tracking
-    in_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    jute_gate_entry_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     in_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     out_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     out_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
