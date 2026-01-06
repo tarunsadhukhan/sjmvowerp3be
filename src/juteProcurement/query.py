@@ -129,7 +129,8 @@ def get_jute_po_by_id_query():
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
         LEFT JOIN jute_supplier_mst jbm ON jbm.supplier_id = jp.supplier_id
-        LEFT JOIN party_mst pm ON pm.party_id = jbm.party_id
+        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jp.status_id
         WHERE jp.jute_po_id = :jute_po_id AND bm.co_id = :co_id

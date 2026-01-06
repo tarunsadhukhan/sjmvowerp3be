@@ -156,6 +156,11 @@ async def get_jute_po_by_id(
         if row.get("contract_date"):
             row["contract_date"] = str(row["contract_date"])
 
+        # Fetch line items and include in response
+        line_items_query = get_jute_po_line_items_query()
+        line_items_result = db.execute(line_items_query, {"jute_po_id": jute_po_id}).fetchall()
+        row["line_items"] = [dict(r._mapping) for r in line_items_result]
+
         return row
 
     except HTTPException:
@@ -654,15 +659,19 @@ async def open_jute_po(
     """Open a Jute PO (change status from Draft to Open)."""
     try:
         from src.models.jute import JutePo
+        from src.models.mst import BranchMst
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
         
-        jute_po = db.query(JutePo).filter(
+        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
+        jute_po = db.query(JutePo).join(
+            BranchMst, JutePo.branch_id == BranchMst.branch_id
+        ).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            BranchMst.co_id == co_id
         ).first()
         
         if not jute_po:
@@ -673,7 +682,7 @@ async def open_jute_po(
         
         jute_po.status_id = 1  # Open status
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         db.commit()
         
@@ -697,15 +706,19 @@ async def approve_jute_po(
     """Approve a Jute PO."""
     try:
         from src.models.jute import JutePo
+        from src.models.mst import BranchMst
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
         
-        jute_po = db.query(JutePo).filter(
+        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
+        jute_po = db.query(JutePo).join(
+            BranchMst, JutePo.branch_id == BranchMst.branch_id
+        ).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            BranchMst.co_id == co_id
         ).first()
         
         if not jute_po:
@@ -716,7 +729,7 @@ async def approve_jute_po(
         
         jute_po.status_id = 3  # Approved status
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         db.commit()
         
@@ -745,15 +758,19 @@ async def reject_jute_po(
     """Reject a Jute PO."""
     try:
         from src.models.jute import JutePo
+        from src.models.mst import BranchMst
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
         
-        jute_po = db.query(JutePo).filter(
+        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
+        jute_po = db.query(JutePo).join(
+            BranchMst, JutePo.branch_id == BranchMst.branch_id
+        ).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            BranchMst.co_id == co_id
         ).first()
         
         if not jute_po:
@@ -766,7 +783,7 @@ async def reject_jute_po(
         if payload.reason:
             jute_po.internal_note = f"Rejected: {payload.reason}"
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         db.commit()
         
@@ -790,15 +807,19 @@ async def cancel_draft_jute_po(
     """Cancel a Draft Jute PO."""
     try:
         from src.models.jute import JutePo
+        from src.models.mst import BranchMst
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
         
-        jute_po = db.query(JutePo).filter(
+        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
+        jute_po = db.query(JutePo).join(
+            BranchMst, JutePo.branch_id == BranchMst.branch_id
+        ).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            BranchMst.co_id == co_id
         ).first()
         
         if not jute_po:
@@ -809,7 +830,7 @@ async def cancel_draft_jute_po(
         
         jute_po.status_id = 6  # Cancelled status
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         db.commit()
         
@@ -833,15 +854,19 @@ async def reopen_jute_po(
     """Reopen a rejected or cancelled Jute PO."""
     try:
         from src.models.jute import JutePo
+        from src.models.mst import BranchMst
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
         
-        jute_po = db.query(JutePo).filter(
+        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
+        jute_po = db.query(JutePo).join(
+            BranchMst, JutePo.branch_id == BranchMst.branch_id
+        ).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            BranchMst.co_id == co_id
         ).first()
         
         if not jute_po:
@@ -852,7 +877,7 @@ async def reopen_jute_po(
         
         jute_po.status_id = 21  # Back to Draft
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         db.commit()
         
