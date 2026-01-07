@@ -26,6 +26,7 @@ from src.juteProcurement.query import (
     get_open_jute_pos_query,
     get_jute_po_for_gate_entry_query,
     get_jute_po_line_items_for_gate_entry_query,
+    get_vehicle_types_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,10 @@ async def jute_gate_entry_create_setup(
             {"value": "BALE", "label": "Bale"},
         ]
 
+        # Get vehicle types
+        vehicle_types_result = db.execute(get_vehicle_types_query(), {"co_id": co_id}).fetchall()
+        vehicle_types = [dict(r._mapping) for r in vehicle_types_result]
+
         return {
             "branches": branches,
             "mukams": mukams,
@@ -231,6 +236,7 @@ async def jute_gate_entry_create_setup(
             "jute_items": jute_items,
             "open_pos": open_pos,
             "uom_options": uom_options,
+            "vehicle_types": vehicle_types,
         }
 
     except HTTPException:
@@ -339,7 +345,7 @@ async def get_po_details(
 
 class JuteGateEntryLineItemCreate(BaseModel):
     """Schema for a Jute Gate Entry line item."""
-    challan_item_name_id: Optional[int] = None
+    challan_item_id: Optional[int] = None
     challan_jute_quality_id: Optional[int] = None
     challan_quantity: Optional[float] = None
     challan_weight: Optional[float] = None
@@ -365,12 +371,15 @@ class JuteGateEntryCreate(BaseModel):
     transporter: str
     po_id: Optional[int] = None
     jute_uom: str  # LOOSE or BALE
-    mukam: str
+    mukam_id: int
     jute_supplier_id: int
     party_id: Optional[int] = None
     gross_weight: float
     tare_weight: float
     net_weight: Optional[float] = None
+    variable_shortage: Optional[float] = None
+    vehicle_type_id: Optional[int] = None
+    marketing_slip: Optional[int] = None  # 1 if checked, 0 if not
     remarks: Optional[str] = None
     line_items: List[JuteGateEntryLineItemCreate]
 
@@ -390,12 +399,15 @@ class JuteGateEntryUpdate(BaseModel):
     transporter: Optional[str] = None
     po_id: Optional[int] = None
     jute_uom: Optional[str] = None
-    mukam: Optional[str] = None
+    mukam_id: Optional[int] = None
     jute_supplier_id: Optional[int] = None
     party_id: Optional[int] = None
     gross_weight: Optional[float] = None
     tare_weight: Optional[float] = None
     net_weight: Optional[float] = None
+    variable_shortage: Optional[float] = None
+    vehicle_type_id: Optional[int] = None
+    marketing_slip: Optional[int] = None  # 1 if checked, 0 if not
     remarks: Optional[str] = None
     line_items: Optional[List[JuteGateEntryLineItemCreate]] = None
     action: Optional[str] = None  # "OUT" to mark vehicle exit
@@ -424,15 +436,19 @@ async def jute_gate_entry_create(
         user_id = token_data.get("user_id")
         username = token_data.get("username", "system")
         
-        # Generate entry sequence (get max entry_branch_seq and increment)
+        # Generate entry sequence (get max branch_gate_entry_no and increment)
         max_seq_result = db.execute(
-            text("SELECT COALESCE(MAX(entry_branch_seq), 0) + 1 AS next_seq FROM jute_gate_entry WHERE branch_id = :branch_id"),
+            text("SELECT COALESCE(MAX(branch_gate_entry_no), 0) + 1 AS next_seq FROM jute_gate_entry WHERE branch_id = :branch_id"),
             {"branch_id": payload.branch_id}
         ).fetchone()
         next_seq = max_seq_result.next_seq if max_seq_result else 1
         
-        # Calculate net weight
-        net_weight = payload.net_weight if payload.net_weight is not None else (payload.gross_weight - payload.tare_weight)
+        # Calculate weights:
+        # net_weight = gross_weight - tare_weight
+        # actual_weight = net_weight - variable_shortage
+        net_weight = payload.gross_weight - payload.tare_weight
+        variable_shortage = payload.variable_shortage if payload.variable_shortage is not None else 0
+        actual_weight = net_weight - variable_shortage
         
         # Parse in_time
         in_time_dt = None
@@ -450,7 +466,7 @@ async def jute_gate_entry_create(
         
         # Create header
         gate_entry = JuteGateEntry(
-            entry_branch_seq=next_seq,
+            branch_gate_entry_no=next_seq,
             branch_id=payload.branch_id,
             jute_gate_entry_date=datetime.combine(payload.jute_gate_entry_date, time(0, 0)),
             in_time=in_time_dt,
@@ -462,13 +478,16 @@ async def jute_gate_entry_create(
             transporter=payload.transporter,
             po_id=payload.po_id,
             unit_conversion=payload.jute_uom,
-            mukam=payload.mukam,
+            mukam_id=payload.mukam_id,
             jute_supplier_id=payload.jute_supplier_id,
             party_id=payload.party_id,
             gross_weight=payload.gross_weight,
             tare_weight=payload.tare_weight,
             net_weight=net_weight,
-            actual_weight=0,  # Will be calculated from line items
+            variable_shortage=variable_shortage,
+            actual_weight=actual_weight,
+            vehicle_type_id=payload.vehicle_type_id,
+            marketing_slip=payload.marketing_slip or 0,
             remarks=payload.remarks,
             status_id=GATE_ENTRY_STATUS_IN,  # IN status
             qc_check="N",
@@ -480,11 +499,10 @@ async def jute_gate_entry_create(
         db.flush()  # Get the generated ID
         
         # Create line items
-        total_actual_weight = 0.0
         for li in payload.line_items:
             line_item = JuteGateEntryLi(
                 jute_gate_entry_id=gate_entry.jute_gate_entry_id,
-                challan_item_name_id=li.challan_item_name_id,
+                challan_item_id=li.challan_item_id,
                 challan_jute_quality_id=li.challan_jute_quality_id,
                 challan_quantity=li.challan_quantity,
                 challan_weight=li.challan_weight,
@@ -495,15 +513,10 @@ async def jute_gate_entry_create(
                 jute_uom=li.jute_uom or payload.jute_uom,
                 remarks=li.remarks,
                 active=1,
-                updated_by_name=username,
+                updated_by=user_id,
                 updated_date_time=datetime.now(),
             )
             db.add(line_item)
-            if li.actual_weight:
-                total_actual_weight += li.actual_weight
-        
-        # Update actual_weight in header
-        gate_entry.actual_weight = total_actual_weight
         
         db.commit()
         
@@ -511,7 +524,9 @@ async def jute_gate_entry_create(
             "success": True,
             "message": "Jute Gate Entry created successfully",
             "jute_gate_entry_id": gate_entry.jute_gate_entry_id,
-            "entry_branch_seq": next_seq,
+            "branch_gate_entry_no": next_seq,
+            "net_weight": net_weight,
+            "actual_weight": actual_weight,
             "status": "IN",
         }
 
@@ -654,9 +669,9 @@ async def jute_gate_entry_update(
             update_fields.append("unit_conversion = :jute_uom")
             update_params["jute_uom"] = payload.jute_uom
         
-        if payload.mukam is not None:
-            update_fields.append("mukam = :mukam")
-            update_params["mukam"] = payload.mukam
+        if payload.mukam_id is not None:
+            update_fields.append("mukam_id = :mukam_id")
+            update_params["mukam_id"] = payload.mukam_id
         
         if payload.jute_supplier_id is not None:
             update_fields.append("jute_supplier_id = :supplier_id")
@@ -678,8 +693,36 @@ async def jute_gate_entry_update(
             update_fields.append("net_weight = :net_weight")
             update_params["net_weight"] = payload.net_weight
         elif payload.gross_weight is not None and payload.tare_weight is not None:
+            # Auto-calculate net_weight = gross - tare
             update_fields.append("net_weight = :net_weight")
             update_params["net_weight"] = payload.gross_weight - payload.tare_weight
+        
+        if payload.variable_shortage is not None:
+            update_fields.append("variable_shortage = :variable_shortage")
+            update_params["variable_shortage"] = payload.variable_shortage
+            # Recalculate actual_weight = net_weight - variable_shortage
+            # Get net_weight from payload or existing record
+            if "net_weight" in update_params:
+                net_wt = update_params["net_weight"]
+            elif payload.gross_weight is not None and payload.tare_weight is not None:
+                net_wt = payload.gross_weight - payload.tare_weight
+            else:
+                # Fetch existing net_weight from DB
+                existing = db.execute(
+                    text("SELECT net_weight FROM jute_gate_entry WHERE jute_gate_entry_id = :id"),
+                    {"id": jute_gate_entry_id}
+                ).fetchone()
+                net_wt = existing.net_weight if existing and existing.net_weight else 0
+            update_fields.append("actual_weight = :actual_weight")
+            update_params["actual_weight"] = net_wt - payload.variable_shortage
+        
+        if payload.vehicle_type_id is not None:
+            update_fields.append("vehicle_type_id = :vehicle_type_id")
+            update_params["vehicle_type_id"] = payload.vehicle_type_id
+        
+        if payload.marketing_slip is not None:
+            update_fields.append("marketing_slip = :marketing_slip")
+            update_params["marketing_slip"] = payload.marketing_slip
         
         if payload.remarks is not None:
             update_fields.append("remarks = :remarks")
@@ -701,11 +744,10 @@ async def jute_gate_entry_update(
             )
             
             # Insert new line items
-            total_actual_weight = 0.0
             for li in payload.line_items:
                 line_item = JuteGateEntryLi(
                     jute_gate_entry_id=jute_gate_entry_id,
-                    challan_item_name_id=li.challan_item_name_id,
+                    challan_item_id=li.challan_item_id,
                     challan_jute_quality_id=li.challan_jute_quality_id,
                     challan_quantity=li.challan_quantity,
                     challan_weight=li.challan_weight,
@@ -716,18 +758,10 @@ async def jute_gate_entry_update(
                     jute_uom=li.jute_uom,
                     remarks=li.remarks,
                     active=1,
-                    updated_by_name=username,
+                    updated_by=user_id,
                     updated_date_time=datetime.now(),
                 )
                 db.add(line_item)
-                if li.actual_weight:
-                    total_actual_weight += li.actual_weight
-            
-            # Update actual_weight in header
-            db.execute(
-                text("UPDATE jute_gate_entry SET actual_weight = :weight WHERE jute_gate_entry_id = :id"),
-                {"weight": total_actual_weight, "id": jute_gate_entry_id}
-            )
         
         db.commit()
         

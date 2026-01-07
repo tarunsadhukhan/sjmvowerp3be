@@ -317,6 +317,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
     Joins with branch_mst for co_id filtering, jute_supplier_mst for supplier name,
     jute_supp_party_map + party_mst for party details, jute_po for PO number,
     and status_mst for status name.
+    Updated: entry_branch_seq renamed to branch_gate_entry_no.
     """
     search_clause = ""
     if search:
@@ -332,7 +333,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
     sql = f"""
         SELECT 
             jge.jute_gate_entry_id,
-            jge.entry_branch_seq,
+            jge.branch_gate_entry_no,
             jge.branch_id,
             bm.branch_name,
             jge.po_id,
@@ -359,8 +360,8 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
         INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code AND jspm.map_id = jge.party_id
+        LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
+        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
         LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
         WHERE bm.co_id = :co_id
         {search_clause}
@@ -392,8 +393,8 @@ def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
         INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code AND jspm.map_id = jge.party_id
+        LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
+        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
         WHERE bm.co_id = :co_id
         {search_clause}
     """
@@ -407,11 +408,12 @@ def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
 def get_jute_gate_entry_by_id_query():
     """
     Query to get a single jute gate entry by ID.
+    Updated: entry_branch_seq renamed to branch_gate_entry_no, mukam renamed to mukam_id.
     """
     sql = """
         SELECT 
             jge.jute_gate_entry_id,
-            jge.entry_branch_seq,
+            jge.branch_gate_entry_no,
             jge.branch_id,
             bm.branch_name,
             jge.jute_gate_entry_date,
@@ -432,11 +434,13 @@ def get_jute_gate_entry_by_id_query():
             jge.party_id,
             jspm.supp_code,
             pm.supp_name AS party_name,
-            jge.mukam,
+            jge.mukam_id,
+            jmm.mukam_name AS mukam,
             jge.unit_conversion AS jute_uom,
             jge.gross_weight,
             jge.tare_weight,
             jge.net_weight,
+            jge.variable_shortage,
             jge.actual_weight,
             jge.remarks,
             jge.status_id,
@@ -450,6 +454,7 @@ def get_jute_gate_entry_by_id_query():
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id AND jspm.map_id = jge.party_id
         LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
         WHERE jge.jute_gate_entry_id = :jute_gate_entry_id AND bm.co_id = :co_id
     """
@@ -459,13 +464,14 @@ def get_jute_gate_entry_by_id_query():
 def get_jute_gate_entry_line_items_query():
     """
     Query to get line items for a jute gate entry.
+    Updated: challan_item_name_id renamed to challan_item_id, QC fields removed (now in jute_mr_li).
     """
     sql = """
         SELECT 
             jgli.jute_gate_entry_li_id,
             jgli.jute_gate_entry_id,
             jgli.po_line_item_num,
-            jgli.challan_item_name_id,
+            jgli.challan_item_id,
             im_ch.item_name AS challan_item_name,
             jgli.challan_jute_quality_id,
             jqm_ch.jute_quality AS challan_quality_name,
@@ -477,11 +483,12 @@ def get_jute_gate_entry_line_items_query():
             jqm_act.jute_quality AS actual_quality_name,
             jgli.actual_quantity,
             jgli.actual_weight,
+            jgli.allowable_moisture,
             jgli.jute_uom,
             jgli.remarks,
             jgli.active
         FROM jute_gate_entry_li jgli
-        LEFT JOIN item_mst im_ch ON im_ch.item_id = jgli.challan_item_name_id
+        LEFT JOIN item_mst im_ch ON im_ch.item_id = jgli.challan_item_id
         LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jgli.challan_jute_quality_id
         LEFT JOIN item_mst im_act ON im_act.item_id = jgli.actual_item_id
         LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jgli.actual_jute_quality_id
@@ -564,3 +571,249 @@ def get_open_jute_pos_query():
         ORDER BY jp.po_date DESC, jp.jute_po_id DESC
     """
     return text(sql)
+
+
+# =============================================================================
+# MATERIAL INSPECTION QUERIES
+# =============================================================================
+
+def get_material_inspection_table_query(co_id: int, search: str = None):
+    """
+    Query to get jute gate entries pending QC check (qc_check = 'N').
+    Returns entries that need material inspection.
+    Updated: entry_branch_seq renamed to branch_gate_entry_no, mukam renamed to mukam_id.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jge.jute_gate_entry_id AS CHAR) LIKE :search
+                OR jmm.mukam_name LIKE :search
+                OR jge.unit_conversion LIKE :search
+                OR jge.vehicle_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT 
+            jge.jute_gate_entry_id,
+            jge.branch_gate_entry_no,
+            jge.branch_id,
+            bm.branch_name,
+            jge.jute_gate_entry_date,
+            jge.unit_conversion,
+            jge.mukam_id,
+            jmm.mukam_name AS mukam,
+            jge.vehicle_no,
+            jge.challan_no,
+            jge.gross_weight,
+            jge.tare_weight,
+            jge.net_weight,
+            jge.variable_shortage,
+            jge.qc_check,
+            jge.status_id,
+            COALESCE(sm.status_name, 'Pending') AS status,
+            jge.updated_date_time
+        FROM jute_gate_entry jge
+        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
+        LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
+        WHERE bm.co_id = :co_id
+        AND jge.qc_check = 'N'
+        {search_clause}
+        ORDER BY jge.jute_gate_entry_date DESC, jge.jute_gate_entry_id DESC
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_material_inspection_table_count_query(co_id: int, search: str = None):
+    """
+    Query to get total count of gate entries pending QC check.
+    Updated: mukam renamed to mukam_id.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jge.jute_gate_entry_id AS CHAR) LIKE :search
+                OR jmm.mukam_name LIKE :search
+                OR jge.unit_conversion LIKE :search
+                OR jge.vehicle_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(*) AS total
+        FROM jute_gate_entry jge
+        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
+        WHERE bm.co_id = :co_id
+        AND jge.qc_check = 'N'
+        {search_clause}
+    """
+    return text(sql)
+
+
+def get_material_inspection_by_id_query():
+    """
+    Query to get a single gate entry for material inspection.
+    Updated: entry_branch_seq renamed to branch_gate_entry_no, mukam renamed to mukam_id.
+    """
+    sql = """
+        SELECT 
+            jge.jute_gate_entry_id,
+            jge.branch_gate_entry_no,
+            jge.branch_id,
+            bm.branch_name,
+            jge.jute_gate_entry_date,
+            jge.unit_conversion,
+            jge.mukam_id,
+            jmm.mukam_name AS mukam,
+            jge.vehicle_no,
+            jge.challan_no,
+            jge.challan_date,
+            jge.challan_weight,
+            jge.gross_weight,
+            jge.tare_weight,
+            jge.net_weight,
+            jge.variable_shortage,
+            jge.jute_supplier_id,
+            jsm.supplier_name,
+            jge.party_id,
+            jge.po_id,
+            jge.qc_check,
+            jge.status_id,
+            COALESCE(sm.status_name, 'Pending') AS status,
+            jge.remarks,
+            jge.updated_by,
+            jge.updated_date_time
+        FROM jute_gate_entry jge
+        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
+        LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
+        WHERE jge.jute_gate_entry_id = :gate_entry_id
+    """
+    return text(sql)
+
+
+def get_material_inspection_line_items_query():
+    """
+    Query to get line items for material inspection.
+    Includes challan and actual fields only - QC fields are now in jute_mr_li.
+    Updated: challan_item_name_id renamed to challan_item_id.
+    """
+    sql = """
+        SELECT 
+            jgli.jute_gate_entry_li_id,
+            jgli.jute_gate_entry_id,
+            jgli.po_line_item_num,
+            
+            -- Challan details
+            jgli.challan_item_id,
+            im_ch.item_name AS challan_item_name,
+            jgli.challan_jute_quality_id,
+            jqm_ch.jute_quality AS challan_quality_name,
+            jgli.challan_quantity,
+            jgli.challan_weight,
+            
+            -- Actual (received) details
+            jgli.actual_item_id,
+            im_act.item_name AS actual_item_name,
+            jgli.actual_jute_quality_id,
+            jqm_act.jute_quality AS actual_quality_name,
+            jgli.actual_quantity,
+            jgli.actual_weight,
+            
+            jgli.allowable_moisture,
+            jgli.jute_uom,
+            jgli.remarks,
+            jgli.active
+        FROM jute_gate_entry_li jgli
+        LEFT JOIN item_mst im_ch ON im_ch.item_id = jgli.challan_item_id
+        LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jgli.challan_jute_quality_id
+        LEFT JOIN item_mst im_act ON im_act.item_id = jgli.actual_item_id
+        LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jgli.actual_jute_quality_id
+        WHERE jgli.jute_gate_entry_id = :gate_entry_id
+        AND (jgli.active = 1 OR jgli.active IS NULL)
+        ORDER BY jgli.jute_gate_entry_li_id
+    """
+    return text(sql)
+
+
+def update_material_inspection_qc_complete():
+    """
+    Query to mark a gate entry as QC complete (qc_check = 'Y').
+    """
+    sql = """
+        UPDATE jute_gate_entry
+        SET qc_check = 'Y',
+            updated_by = :updated_by,
+            updated_date_time = :updated_date_time
+        WHERE jute_gate_entry_id = :gate_entry_id
+    """
+    return text(sql)
+
+
+def insert_jute_mr_query():
+    """
+    Query to insert a new jute MR (Material Receipt) record.
+    This is created when material inspection is completed.
+    """
+    sql = """
+        INSERT INTO jute_mr (
+            co_id, branch_id, jute_gate_entry_id, branch_gate_entry_no,
+            jute_gate_entry_date, challan_no, challan_date,
+            jute_supplier_id, party_id, mukam_id, unit_conversion,
+            po_id, mr_weight, vehicle_no, status_id, remarks,
+            updated_by, updated_date_time
+        ) VALUES (
+            :co_id, :branch_id, :jute_gate_entry_id, :branch_gate_entry_no,
+            :jute_gate_entry_date, :challan_no, :challan_date,
+            :jute_supplier_id, :party_id, :mukam_id, :unit_conversion,
+            :po_id, :mr_weight, :vehicle_no, :status_id, :remarks,
+            :updated_by, :updated_date_time
+        )
+    """
+    return text(sql)
+
+
+def insert_jute_mr_li_query():
+    """
+    Query to insert a jute MR line item with QC data.
+    QC data is now stored here instead of jute_gate_entry_li.
+    """
+    sql = """
+        INSERT INTO jute_mr_li (
+            jute_mr_id, jute_gate_entry_lineitem_id,
+            challan_item_id, challan_quality_id, challan_quantity, challan_weight,
+            actual_item_id, actual_quality, actual_qty, actual_weight,
+            allowable_moisture, actual_moisture, accepted_weight,
+            rate, warehouse_id, marka, crop_year,
+            remarks, status, active, updated_date_time
+        ) VALUES (
+            :jute_mr_id, :jute_gate_entry_lineitem_id,
+            :challan_item_id, :challan_quality_id, :challan_quantity, :challan_weight,
+            :actual_item_id, :actual_quality, :actual_qty, :actual_weight,
+            :allowable_moisture, :actual_moisture, :accepted_weight,
+            :rate, :warehouse_id, :marka, :crop_year,
+            :remarks, :status, 1, :updated_date_time
+        )
+    """
+    return text(sql)
+
+
+def insert_jute_moisture_rdg_query():
+    """
+    Query to insert moisture readings for a jute MR line item.
+    """
+    sql = """
+        INSERT INTO jute_moisture_rdg (
+            jute_mr_li_id, moisture_percentage
+        ) VALUES (
+            :jute_mr_li_id, :moisture_percentage
+        )
+    """
+    return text(sql)
+

@@ -49,24 +49,27 @@ class JuteQualityMst(Base):
 # =============================================================================
 
 class JuteGateEntry(Base):
-    """Jute gate entry table - stores gate entry information for incoming jute."""
+    """Jute gate entry table - stores gate entry information for incoming jute.
+    
+    Updated based on dev3 schema (2026-01-07).
+    """
     __tablename__ = "jute_gate_entry"
 
     jute_gate_entry_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    entry_branch_seq: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    branch_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Supplier/Party information
     jute_supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     party_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    mukam: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # PO reference
     po_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Challan/Consignment details
     challan_no: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    challan_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    challan_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     challan_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     consignment_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     consignment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -81,11 +84,12 @@ class JuteGateEntry(Base):
     gross_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True, default=0)
     tare_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     net_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True, default=0)
+    variable_shortage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     actual_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True, default=0)
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # Date/Time tracking
-    jute_gate_entry_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    jute_gate_entry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     in_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     out_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     out_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -107,7 +111,11 @@ class JuteGateEntry(Base):
 
 
 class JuteGateEntryLi(Base):
-    """Jute gate entry line item table - stores line item details for gate entries."""
+    """Jute gate entry line item table - stores line item details for gate entries.
+    
+    Updated based on dev3 schema (2026-01-07).
+    Note: QC fields were removed from this table - QC data now lives in jute_mr_li.
+    """
     __tablename__ = "jute_gate_entry_li"
 
     jute_gate_entry_li_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -117,7 +125,7 @@ class JuteGateEntryLi(Base):
     po_line_item_num: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # Challan details (from PO/Challan)
-    challan_item_name_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    challan_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     challan_jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     challan_quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     challan_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
@@ -128,12 +136,6 @@ class JuteGateEntryLi(Base):
     actual_quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     actual_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     
-    # QC (Quality Control verified) details
-    qc_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    qc_jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    qc_jute_quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    qc_jute_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    
     # Other details
     allowable_moisture: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     jute_uom: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
@@ -141,7 +143,7 @@ class JuteGateEntryLi(Base):
     
     # Status and audit
     active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
-    updated_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
@@ -149,6 +151,149 @@ class JuteGateEntryLi(Base):
     # Relationships
     gate_entry: Mapped[Optional["JuteGateEntry"]] = relationship(
         "JuteGateEntry", back_populates="line_items", foreign_keys=[jute_gate_entry_id]
+    )
+
+
+# =============================================================================
+# JUTE MR (MATERIAL RECEIPT) MODELS
+# =============================================================================
+
+class JuteMr(Base):
+    """Jute Material Receipt table - stores MR information created from gate entries.
+    
+    Created based on dev3 schema (2026-01-07).
+    """
+    __tablename__ = "jute_mr"
+
+    jute_mr_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # Gate Entry Reference
+    jute_gate_entry_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    branch_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jute_gate_entry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    
+    # Challan details
+    challan_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    challan_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    
+    # Supplier/Party information
+    jute_supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    party_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    party_branch_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Location details
+    mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # PO reference
+    po_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Weight and pricing
+    mr_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    frieght_paid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    # TCS fields
+    tcs_percentage: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
+    tcs_amount: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
+    
+    # Vehicle and transport
+    vehicle_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Status and audit
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    remarks: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    src_com_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    line_items: Mapped[List["JuteMrLi"]] = relationship(
+        "JuteMrLi", back_populates="jute_mr", foreign_keys="JuteMrLi.jute_mr_id"
+    )
+
+
+class JuteMrLi(Base):
+    """Jute MR line item table - stores QC verified line items for material receipts.
+    
+    Created based on dev3 schema (2026-01-07).
+    This is where QC data is stored after inspection.
+    """
+    __tablename__ = "jute_mr_li"
+
+    jute_mr_li_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_mr_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("jute_mr.jute_mr_id"), nullable=True, index=True
+    )
+    jute_gate_entry_lineitem_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # Challan details (from Gate Entry)
+    challan_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    challan_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    challan_quantity: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    challan_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
+    
+    # Actual (received) details
+    actual_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    actual_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
+    actual_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
+    
+    # Moisture details
+    allowable_moisture: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_moisture: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    # Claims and adjustments
+    claim_dust: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    claim_quality: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    shortage_kgs: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    
+    # Accepted and pricing
+    accepted_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
+    claim_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    water_damage_amount: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
+    premium_amount: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
+    total_price: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    
+    # Storage details
+    warehouse_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    marka: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    crop_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    # Status and audit
+    status: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    jute_mr: Mapped[Optional["JuteMr"]] = relationship(
+        "JuteMr", back_populates="line_items", foreign_keys=[jute_mr_id]
+    )
+    moisture_readings: Mapped[List["JuteMoistureRdg"]] = relationship(
+        "JuteMoistureRdg", back_populates="mr_line_item", foreign_keys="JuteMoistureRdg.jute_mr_li_id"
+    )
+
+
+class JuteMoistureRdg(Base):
+    """Jute moisture reading table - stores multiple moisture readings per MR line item.
+    
+    Created based on dev3 schema (2026-01-07).
+    """
+    __tablename__ = "jute_moisture_rdg"
+
+    jute_moisture_rdg_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_mr_li_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("jute_mr_li.jute_mr_li_id"), nullable=True, index=True
+    )
+    moisture_percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+
+    # Relationships
+    mr_line_item: Mapped[Optional["JuteMrLi"]] = relationship(
+        "JuteMrLi", back_populates="moisture_readings", foreign_keys=[jute_mr_li_id]
     )
 
 
