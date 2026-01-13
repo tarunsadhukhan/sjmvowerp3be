@@ -429,17 +429,42 @@ async def jute_gate_entry_create(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Create a new Jute Gate Entry (IN action)."""
+    """Create a new Jute Gate Entry (IN action) and corresponding MR (Material Receipt)."""
     try:
-        from src.models.jute import JuteGateEntry, JuteGateEntryLi
+        from src.models.jute import JuteGateEntry, JuteGateEntryLi, JuteMr, JuteMrLi
         
         user_id = token_data.get("user_id")
         username = token_data.get("username", "system")
         
-        # Generate entry sequence (get max branch_gate_entry_no and increment)
+        # Calculate financial year from jute_gate_entry_date
+        # Financial year: April 1 to March 31
+        # Example: January 20, 2025 → FY 2024-2025, April 15, 2025 → FY 2025-2026
+        entry_date = payload.jute_gate_entry_date
+        if entry_date.month >= 4:
+            fy_start_year = entry_date.year
+            fy_end_year = entry_date.year + 1
+        else:
+            fy_start_year = entry_date.year - 1
+            fy_end_year = entry_date.year
+        
+        # Financial year starts on April 1 and ends on March 31
+        fy_start_date = date(fy_start_year, 4, 1)
+        fy_end_date = date(fy_end_year, 3, 31)
+        
+        # Generate entry sequence (get max branch_gate_entry_no for branch + financial year and increment)
         max_seq_result = db.execute(
-            text("SELECT COALESCE(MAX(branch_gate_entry_no), 0) + 1 AS next_seq FROM jute_gate_entry WHERE branch_id = :branch_id"),
-            {"branch_id": payload.branch_id}
+            text("""
+                SELECT COALESCE(MAX(branch_gate_entry_no), 0) + 1 AS next_seq 
+                FROM jute_gate_entry 
+                WHERE branch_id = :branch_id 
+                  AND DATE(jute_gate_entry_date) >= :fy_start 
+                  AND DATE(jute_gate_entry_date) <= :fy_end
+            """),
+            {
+                "branch_id": payload.branch_id,
+                "fy_start": fy_start_date,
+                "fy_end": fy_end_date
+            }
         ).fetchone()
         next_seq = max_seq_result.next_seq if max_seq_result else 1
         
@@ -498,7 +523,9 @@ async def jute_gate_entry_create(
         db.add(gate_entry)
         db.flush()  # Get the generated ID
         
-        # Create line items
+        # Create line items and collect them for MR creation
+        gate_entry_line_items = []
+        total_actual_weight = 0.0
         for li in payload.line_items:
             line_item = JuteGateEntryLi(
                 jute_gate_entry_id=gate_entry.jute_gate_entry_id,
@@ -517,16 +544,89 @@ async def jute_gate_entry_create(
                 updated_date_time=datetime.now(),
             )
             db.add(line_item)
+            db.flush()  # Get the generated line item ID
+            gate_entry_line_items.append(line_item)
+            total_actual_weight += float(li.actual_weight or 0)
+        
+        # =============================================================================
+        # CREATE JUTE MR (Material Receipt) FROM GATE ENTRY
+        # =============================================================================
+        # MR status: 21 = Drafted
+        MR_STATUS_DRAFTED = 21
+        
+        # Generate MR sequence number for branch + financial year
+        max_mr_seq_result = db.execute(
+            text("""
+                SELECT COALESCE(MAX(branch_mr_no), 0) + 1 AS next_seq 
+                FROM jute_mr 
+                WHERE branch_id = :branch_id 
+                  AND DATE(jute_mr_date) >= :fy_start 
+                  AND DATE(jute_mr_date) <= :fy_end
+            """),
+            {
+                "branch_id": payload.branch_id,
+                "fy_start": fy_start_date,
+                "fy_end": fy_end_date
+            }
+        ).fetchone()
+        next_mr_seq = max_mr_seq_result.next_seq if max_mr_seq_result else 1
+        
+        # Create MR header
+        jute_mr = JuteMr(
+            branch_id=payload.branch_id,
+            branch_mr_no=next_mr_seq,
+            jute_mr_date=None,  # Leave MR date blank - to be set later
+            jute_gate_entry_id=gate_entry.jute_gate_entry_id,
+            jute_gate_entry_date=payload.jute_gate_entry_date,
+            challan_no=payload.challan_no,
+            challan_date=payload.challan_date,
+            jute_supplier_id=payload.jute_supplier_id,
+            party_id=str(payload.party_id) if payload.party_id else None,
+            mukam_id=payload.mukam_id,
+            unit_conversion=payload.jute_uom,
+            po_id=payload.po_id,
+            mr_weight=total_actual_weight,  # Sum of line item actual weights
+            vehicle_no=payload.vehicle_no,
+            status_id=MR_STATUS_DRAFTED,
+            remarks=payload.remarks,
+            src_com_id=payload.co_id,  # Source company from which gate entry was done
+            updated_by=user_id,
+            updated_date_time=datetime.now(),
+        )
+        db.add(jute_mr)
+        db.flush()  # Get the generated MR ID
+        
+        # Create MR line items
+        for ge_li in gate_entry_line_items:
+            mr_line_item = JuteMrLi(
+                jute_mr_id=jute_mr.jute_mr_id,
+                jute_gate_entry_lineitem_id=ge_li.jute_gate_entry_li_id,
+                challan_item_id=ge_li.challan_item_id,
+                challan_quality_id=ge_li.challan_jute_quality_id,
+                challan_quantity=ge_li.challan_quantity,
+                challan_weight=ge_li.challan_weight,
+                actual_item_id=ge_li.actual_item_id,
+                actual_quality=ge_li.actual_jute_quality_id,
+                actual_qty=ge_li.actual_quantity,
+                actual_weight=ge_li.actual_weight,
+                remarks=ge_li.remarks,
+                active=1,
+                updated_date_time=datetime.now(),
+            )
+            db.add(mr_line_item)
         
         db.commit()
         
         return {
             "success": True,
-            "message": "Jute Gate Entry created successfully",
+            "message": "Jute Gate Entry and MR created successfully",
             "jute_gate_entry_id": gate_entry.jute_gate_entry_id,
             "branch_gate_entry_no": next_seq,
+            "jute_mr_id": jute_mr.jute_mr_id,
+            "branch_mr_no": next_mr_seq,
             "net_weight": net_weight,
             "actual_weight": actual_weight,
+            "mr_weight": total_actual_weight,
             "status": "IN",
         }
 
@@ -743,7 +843,9 @@ async def jute_gate_entry_update(
                 {"id": jute_gate_entry_id}
             )
             
-            # Insert new line items
+            # Insert new line items and track for MR update
+            total_actual_weight = 0.0
+            new_ge_line_items = []
             for li in payload.line_items:
                 line_item = JuteGateEntryLi(
                     jute_gate_entry_id=jute_gate_entry_id,
@@ -762,6 +864,55 @@ async def jute_gate_entry_update(
                     updated_date_time=datetime.now(),
                 )
                 db.add(line_item)
+                db.flush()  # Get the generated ID
+                new_ge_line_items.append(line_item)
+                total_actual_weight += float(li.actual_weight or 0)
+            
+            # Update MR records linked to this gate entry
+            # Find the MR for this gate entry
+            mr_result = db.execute(
+                text("SELECT jute_mr_id FROM jute_mr WHERE jute_gate_entry_id = :ge_id"),
+                {"ge_id": jute_gate_entry_id}
+            ).fetchone()
+            
+            if mr_result:
+                mr_id = mr_result.jute_mr_id
+                
+                # Update MR weight (sum of line item actual weights)
+                db.execute(
+                    text("""
+                        UPDATE jute_mr 
+                        SET mr_weight = :mr_weight, updated_date_time = :updated_dt 
+                        WHERE jute_mr_id = :mr_id
+                    """),
+                    {"mr_weight": total_actual_weight, "updated_dt": datetime.now(), "mr_id": mr_id}
+                )
+                
+                # Delete existing MR line items
+                db.execute(
+                    text("DELETE FROM jute_mr_li WHERE jute_mr_id = :mr_id"),
+                    {"mr_id": mr_id}
+                )
+                
+                # Insert new MR line items
+                from src.models.jute import JuteMrLi
+                for ge_li in new_ge_line_items:
+                    mr_line_item = JuteMrLi(
+                        jute_mr_id=mr_id,
+                        jute_gate_entry_lineitem_id=ge_li.jute_gate_entry_li_id,
+                        challan_item_id=ge_li.challan_item_id,
+                        challan_quality_id=ge_li.challan_jute_quality_id,
+                        challan_quantity=ge_li.challan_quantity,
+                        challan_weight=ge_li.challan_weight,
+                        actual_item_id=ge_li.actual_item_id,
+                        actual_quality=ge_li.actual_jute_quality_id,
+                        actual_qty=ge_li.actual_quantity,
+                        actual_weight=ge_li.actual_weight,
+                        remarks=ge_li.remarks,
+                        active=1,
+                        updated_date_time=datetime.now(),
+                    )
+                    db.add(mr_line_item)
         
         db.commit()
         

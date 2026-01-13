@@ -21,6 +21,7 @@ from src.juteProcurement.query import (
     get_branches_query,
     get_all_suppliers_query,
 )
+from src.juteProcurement.formatters import format_jute_po_number
 
 logger = logging.getLogger(__name__)
 
@@ -523,10 +524,34 @@ async def jute_po_create(
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_message)
         
-        # Generate PO number (get max po_no and increment)
+        # Calculate financial year from po_date
+        # Financial year: April 1 to March 31
+        # Example: January 20, 2025 → FY 2024-2025, April 15, 2025 → FY 2025-2026
+        if payload.po_date.month >= 4:
+            fy_start_year = payload.po_date.year
+            fy_end_year = payload.po_date.year + 1
+        else:
+            fy_start_year = payload.po_date.year - 1
+            fy_end_year = payload.po_date.year
+        
+        # Financial year starts on April 1 and ends on March 31
+        fy_start_date = date(fy_start_year, 4, 1)
+        fy_end_date = date(fy_end_year, 3, 31)
+        
+        # Generate PO number (get max po_no for branch + financial year and increment)
         max_po_result = db.execute(
-            text("SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po FROM jute_po WHERE branch_id = :branch_id"),
-            {"branch_id": payload.branch_id}
+            text("""
+                SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po 
+                FROM jute_po 
+                WHERE branch_id = :branch_id 
+                  AND po_date >= :fy_start 
+                  AND po_date <= :fy_end
+            """),
+            {
+                "branch_id": payload.branch_id,
+                "fy_start": fy_start_date,
+                "fy_end": fy_end_date
+            }
         ).fetchone()
         next_po_no = max_po_result.next_po if max_po_result else 1
         
@@ -574,9 +599,22 @@ async def jute_po_create(
         
         db.commit()
         
-        # Generate po_num string for response (e.g., JPO-2026-00001)
-        year = payload.po_date.year
-        po_num = f"JPO-{year}-{next_po_no:05d}"
+        # Fetch company and branch prefix for formatted PO number
+        prefix_result = db.execute(
+            text("""
+                SELECT cm.co_prefix, bm.branch_prefix
+                FROM branch_mst bm
+                INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+                WHERE bm.branch_id = :branch_id
+            """),
+            {"branch_id": payload.branch_id}
+        ).fetchone()
+        
+        co_prefix = prefix_result.co_prefix if prefix_result else None
+        branch_prefix = prefix_result.branch_prefix if prefix_result else None
+        
+        # Generate formatted po_num string for response
+        po_num = format_jute_po_number(next_po_no, payload.po_date, co_prefix, branch_prefix)
         
         return {
             "success": True,

@@ -1,13 +1,23 @@
 from sqlalchemy.sql import text
 
+from src.juteProcurement.formatters import (
+    get_jute_po_number_sql_expression,
+    get_jute_gate_entry_number_sql_expression,
+)
+
 
 def get_jute_po_table_query(co_id: int, search: str = None):
     """
     Query to get jute PO list with pagination support.
-    Joins with branch_mst for co_id filtering, jute_supplier_mst for supplier name,
-    jute_supp_party_map + party_mst for party details, jute_mukam_mst for mukam name,
-    and status_mst for status name.
+    Joins with branch_mst for co_id filtering, co_mst for company prefix,
+    jute_supplier_mst for supplier name, jute_supp_party_map + party_mst for party details,
+    jute_mukam_mst for mukam name, and status_mst for status name.
+    
+    PO number format: {co_prefix}/{branch_prefix}/JPO/{year}/{sequence:05d}
     """
+    # Get the formatted PO number SQL expression
+    po_num_expr = get_jute_po_number_sql_expression()
+    
     search_clause = ""
     if search:
         search_clause = """
@@ -23,6 +33,7 @@ def get_jute_po_table_query(co_id: int, search: str = None):
         SELECT 
             jp.jute_po_id,
             jp.po_no,
+            {po_num_expr} AS po_num,
             jp.po_date,
             jp.party_id,
             jspm.supp_code,
@@ -32,6 +43,7 @@ def get_jute_po_table_query(co_id: int, search: str = None):
             jp.jute_mukam_id AS mukam_id,
             jmm.mukam_name AS mukam,
             jp.vehicle_type_id,
+            jlm.lorry_type AS vehicle_type,
             jp.vehicle_quantity AS vehicle_qty,
             jp.status_id,
             COALESCE(sm.status_name, jp.status_id) AS status,
@@ -44,6 +56,8 @@ def get_jute_po_table_query(co_id: int, search: str = None):
             jp.updated_by AS created_by
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+        LEFT JOIN jute_lorry_mst jlm ON jlm.jute_lorry_type_id = jp.vehicle_type_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
         LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
@@ -91,11 +105,15 @@ def get_jute_po_by_id_query():
     """
     Query to get a single jute PO by ID.
     Uses branch_mst to filter by co_id since jute_po doesn't have co_id column.
+    Includes formatted PO number with company and branch prefix.
     """
-    sql = """
+    po_num_expr = get_jute_po_number_sql_expression()
+    
+    sql = f"""
         SELECT 
             jp.jute_po_id,
             jp.po_no,
+            {po_num_expr} AS po_num,
             jp.po_date,
             jp.party_id,
             pm.supp_code,
@@ -130,6 +148,7 @@ def get_jute_po_by_id_query():
             jp.updated_date_time
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_lorry_mst jlm ON jlm.jute_lorry_type_id = jp.vehicle_type_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
@@ -317,11 +336,19 @@ def get_branches_query():
 def get_jute_gate_entry_table_query(co_id: int, search: str = None):
     """
     Query to get jute gate entry list with pagination support.
-    Joins with branch_mst for co_id filtering, jute_supplier_mst for supplier name,
-    jute_supp_party_map + party_mst for party details, jute_po for PO number,
-    and status_mst for status name.
-    Updated: entry_branch_seq renamed to branch_gate_entry_no.
+    Joins with branch_mst for co_id filtering, co_mst for company prefix,
+    jute_supplier_mst for supplier name, jute_supp_party_map + party_mst for party details,
+    jute_po for PO number, and status_mst for status name.
+    Includes formatted PO number and gate entry number with company and branch prefix.
     """
+    # Get the formatted PO number SQL expression (using jp alias for jute_po)
+    po_num_expr = get_jute_po_number_sql_expression(
+        po_no_column="jp.po_no",
+        po_date_column="jp.po_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+    
     search_clause = ""
     if search:
         search_clause = """
@@ -341,6 +368,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
             bm.branch_name,
             jge.po_id,
             jp.po_no,
+            CASE WHEN jp.jute_po_id IS NOT NULL THEN {po_num_expr} ELSE NULL END AS po_num,
             jge.jute_gate_entry_date,
             jge.in_time,
             jge.out_date,
@@ -361,6 +389,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
             jge.updated_date_time
         FROM jute_gate_entry jge
         INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
@@ -411,9 +440,17 @@ def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
 def get_jute_gate_entry_by_id_query():
     """
     Query to get a single jute gate entry by ID.
-    Updated: entry_branch_seq renamed to branch_gate_entry_no, mukam renamed to mukam_id.
+    Includes formatted PO number with company and branch prefix.
     """
-    sql = """
+    # Get the formatted PO number SQL expression (using jp alias for jute_po)
+    po_num_expr = get_jute_po_number_sql_expression(
+        po_no_column="jp.po_no",
+        po_date_column="jp.po_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+    
+    sql = f"""
         SELECT 
             jge.jute_gate_entry_id,
             jge.branch_gate_entry_no,
@@ -432,6 +469,7 @@ def get_jute_gate_entry_by_id_query():
             jge.transporter,
             jge.po_id,
             jp.po_no,
+            CASE WHEN jp.jute_po_id IS NOT NULL THEN {po_num_expr} ELSE NULL END AS po_num,
             jge.jute_supplier_id,
             jsm.supplier_name,
             jge.party_id,
@@ -453,6 +491,7 @@ def get_jute_gate_entry_by_id_query():
             jge.updated_date_time
         FROM jute_gate_entry jge
         INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id AND jspm.map_id = jge.party_id
@@ -555,12 +594,16 @@ def get_open_jute_pos_query():
     """
     Query to get list of approved Jute POs for selection in gate entry.
     Only shows POs with status_id = 3 (Approved).
+    Formats PO number with company and branch prefix.
     """
-    sql = """
+    po_num_expr = get_jute_po_number_sql_expression()
+    
+    sql = f"""
         SELECT 
             jp.jute_po_id,
-            jp.po_no,
+            {po_num_expr} AS po_num,
             jp.po_date,
+            jp.branch_id,
             jsm.supplier_name,
             jp.supplier_id,
             jmm.mukam_name,
@@ -568,6 +611,7 @@ def get_open_jute_pos_query():
             jp.jute_uom
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         WHERE bm.co_id = :co_id
