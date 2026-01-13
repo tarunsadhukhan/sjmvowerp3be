@@ -867,3 +867,54 @@ def insert_jute_moisture_rdg_query():
     """
     return text(sql)
 
+
+def get_moisture_readings_by_mr_li_id_query():
+    """
+    Query to get moisture readings for a specific jute MR line item.
+    """
+    sql = """
+        SELECT 
+            jute_moisture_rdg_id,
+            jute_mr_li_id,
+            moisture_percentage
+        FROM jute_moisture_rdg
+        WHERE jute_mr_li_id = :jute_mr_li_id
+        ORDER BY jute_moisture_rdg_id
+    """
+    return text(sql)
+
+
+def delete_moisture_readings_query():
+    """
+    Query to delete all moisture readings for a specific jute MR line item.
+    """
+    sql = """
+        DELETE FROM jute_moisture_rdg
+        WHERE jute_mr_li_id = :jute_mr_li_id
+    """
+    return text(sql)
+
+
+def update_mr_li_actual_moisture_query():
+    """
+    Query to update actual_moisture on jute_mr_li for a specific line item.
+    """
+    sql = """
+        UPDATE jute_mr_li
+        SET actual_moisture = :actual_moisture
+        WHERE jute_mr_li_id = :jute_mr_li_id
+    """
+    return text(sql)
+
+
+def update_mr_li_accepted_weight_query():
+    """
+    Query to update accepted_weight on jute_mr_li for a specific line item.
+    """
+    sql = """
+        UPDATE jute_mr_li
+        SET accepted_weight = :accepted_weight
+        WHERE jute_mr_li_id = :jute_mr_li_id
+    """
+    return text(sql)
+

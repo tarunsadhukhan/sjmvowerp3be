@@ -18,6 +18,7 @@ from datetime import datetime, date
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.juteProcurement.query import (
@@ -33,6 +34,7 @@ from src.juteProcurement.query import (
     get_jute_qualities_by_item_query,
     get_mukam_list_query,
 )
+from src.models.jute import JuteMrLi, JuteMoistureRdg
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,19 @@ class MaterialInspectionCompleteRequest(BaseModel):
     remarks: Optional[str] = None
     # Line items with QC data
     line_items: List[MRLineItemCreate] = []
+
+
+class MoistureReadingsRequest(BaseModel):
+    """Request model for saving moisture readings for a MR line item."""
+
+    moisture_readings: List[float]
+
+
+class MoistureReadingsResponse(BaseModel):
+    """Response model after saving moisture readings."""
+
+    average_moisture: float
+    readings: List[float]
 
 
 # =============================================================================
@@ -287,6 +302,154 @@ async def get_material_inspection_setup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_mr_line_item/{mr_li_id}")
+async def get_mr_line_item(
+    mr_li_id: int,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get a single jute MR line item with its moisture readings.
+
+    This is useful when viewing or editing moisture readings after MR creation.
+    """
+    try:
+        mr_li: Optional[JuteMrLi] = (
+            db.query(JuteMrLi)
+            .filter(JuteMrLi.jute_mr_li_id == mr_li_id)
+            .first()
+        )
+        if not mr_li:
+            raise HTTPException(status_code=404, detail="MR line item not found")
+
+        readings: List[JuteMoistureRdg] = (
+            db.query(JuteMoistureRdg)
+            .filter(JuteMoistureRdg.jute_mr_li_id == mr_li_id)
+            .order_by(JuteMoistureRdg.jute_moisture_rdg_id)
+            .all()
+        )
+        moisture_values = [
+            float(r.moisture_percentage)
+            for r in readings
+            if r.moisture_percentage is not None
+        ]
+
+        average = sum(moisture_values) / len(moisture_values) if moisture_values else 0.0
+
+        line_item = {
+            "jute_mr_li_id": mr_li.jute_mr_li_id,
+            "jute_mr_id": mr_li.jute_mr_id,
+            "jute_gate_entry_lineitem_id": mr_li.jute_gate_entry_lineitem_id,
+            "challan_item_id": mr_li.challan_item_id,
+            "challan_quality_id": mr_li.challan_quality_id,
+            "challan_quantity": mr_li.challan_quantity,
+            "challan_weight": mr_li.challan_weight,
+            "actual_item_id": mr_li.actual_item_id,
+            "actual_quality": mr_li.actual_quality,
+            "actual_qty": mr_li.actual_qty,
+            "actual_weight": mr_li.actual_weight,
+            "allowable_moisture": mr_li.allowable_moisture,
+            "actual_moisture": mr_li.actual_moisture,
+            "accepted_weight": mr_li.accepted_weight,
+        }
+
+        return {
+            "line_item": line_item,
+            "moisture_readings": moisture_values,
+            "average_moisture": average,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching MR line item with moisture readings")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/save_moisture_readings/{mr_li_id}", response_model=MoistureReadingsResponse)
+async def save_moisture_readings(
+    mr_li_id: int,
+    body: MoistureReadingsRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Save moisture readings for a jute MR line item.
+
+    - Deletes existing readings for the MR line item
+    - Inserts new readings
+    - Calculates average moisture and updates jute_mr_li.actual_moisture
+    - Recalculates accepted_weight using:
+        if actual_moisture > allowable_moisture:
+            accepted_weight = actual_weight - (actual_weight * (actual_moisture - allowable_moisture) / 100)
+        else:
+            accepted_weight = actual_weight
+    """
+    try:
+        mr_li: Optional[JuteMrLi] = (
+            db.query(JuteMrLi)
+            .filter(JuteMrLi.jute_mr_li_id == mr_li_id)
+            .first()
+        )
+        if not mr_li:
+            raise HTTPException(status_code=404, detail="MR line item not found")
+
+        # Clear existing readings
+        db.query(JuteMoistureRdg).filter(
+            JuteMoistureRdg.jute_mr_li_id == mr_li_id
+        ).delete()
+
+        readings = [float(r) for r in body.moisture_readings if r is not None]
+
+        # Insert new readings
+        for value in readings:
+            db.add(
+                JuteMoistureRdg(
+                    jute_mr_li_id=mr_li_id,
+                    moisture_percentage=value,
+                )
+            )
+
+        # Calculate average moisture
+        average = sum(readings) / len(readings) if readings else 0.0
+        mr_li.actual_moisture = f"{average:.2f}"
+
+        # Recalculate accepted_weight
+        actual_weight = float(mr_li.actual_weight or 0.0)
+        allowable_moisture = (
+            float(mr_li.allowable_moisture)
+            if mr_li.allowable_moisture is not None
+            else None
+        )
+
+        accepted_weight = actual_weight
+        if (
+            readings
+            and allowable_moisture is not None
+            and average > allowable_moisture
+            and actual_weight > 0
+        ):
+            deduction_percentage = average - allowable_moisture
+            accepted_weight = actual_weight - (
+                actual_weight * deduction_percentage / 100.0
+            )
+
+        mr_li.accepted_weight = accepted_weight
+
+        db.commit()
+
+        return MoistureReadingsResponse(
+            average_moisture=average,
+            readings=readings,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error saving moisture readings for MR line item")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/get_qualities_by_item/{item_id}")
 async def get_qualities_by_item(
     item_id: int,
@@ -405,6 +568,47 @@ async def complete_material_inspection(
             moisture_insert_query = insert_jute_moisture_rdg_query()
             
             for item in body.line_items:
+                # Determine average moisture from readings or provided value
+                avg_moisture: Optional[float] = None
+                if item.moisture_readings:
+                    values = [
+                        float(r.moisture_percentage)
+                        for r in item.moisture_readings
+                        if r.moisture_percentage is not None
+                    ]
+                    if values:
+                        avg_moisture = sum(values) / len(values)
+                elif item.actual_moisture:
+                    try:
+                        avg_moisture = float(item.actual_moisture)
+                    except (TypeError, ValueError):
+                        avg_moisture = None
+
+                if avg_moisture is not None:
+                    actual_moisture_str: Optional[str] = f"{avg_moisture:.2f}"
+                else:
+                    actual_moisture_str = item.actual_moisture
+
+                # Calculate accepted weight using average moisture and allowable moisture
+                actual_weight = float(item.actual_weight or 0.0)
+                allowable_moisture = (
+                    float(item.allowable_moisture)
+                    if item.allowable_moisture is not None
+                    else None
+                )
+
+                accepted_weight = actual_weight
+                if (
+                    avg_moisture is not None
+                    and allowable_moisture is not None
+                    and avg_moisture > allowable_moisture
+                    and actual_weight > 0
+                ):
+                    deduction_percentage = avg_moisture - allowable_moisture
+                    accepted_weight = actual_weight - (
+                        actual_weight * deduction_percentage / 100.0
+                    )
+
                 mr_li_params = {
                     "jute_mr_id": mr_id,
                     "jute_gate_entry_lineitem_id": item.gate_entry_line_item_id,
@@ -417,8 +621,8 @@ async def complete_material_inspection(
                     "actual_qty": item.actual_qty,
                     "actual_weight": item.actual_weight,
                     "allowable_moisture": item.allowable_moisture,
-                    "actual_moisture": item.actual_moisture,
-                    "accepted_weight": item.accepted_weight,
+                    "actual_moisture": actual_moisture_str,
+                    "accepted_weight": accepted_weight,
                     "rate": item.rate or 0,
                     "warehouse_id": item.warehouse_id,
                     "marka": item.marka,
