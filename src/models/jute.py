@@ -417,12 +417,11 @@ class JuteSuppPartyMap(Base):
     jute_supplier_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("jute_supplier_mst.supplier_id"), nullable=True, index=True
     )
-    supp_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    is_mapped: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_date_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
     )
+    party_id : Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     # Relationships
     jute_supplier: Mapped[Optional["JuteSupplierMst"]] = relationship(
@@ -474,8 +473,8 @@ class JuteAgentMap(Base):
 
     agent_map_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     party_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    agent_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
 # =============================================================================
 # JUTE PO MODELS

@@ -36,10 +36,12 @@ from src.masters.warehouse import router as warehouse_router
 from src.masters.castFactor import router as costFactor_router
 from src.masters.juteQuality import router as jute_quality_router
 from src.masters.juteSupplier import router as jute_supplier_router
+from src.masters.juteSupplierMap import router as jute_supplier_map_router
 from src.juteProcurement.jutePO import router as jute_po_router
 from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
 from src.juteProcurement.mr import router as jute_mr_router
+from src.juteProcurement.juteAgentMap import router as jute_agent_map_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -93,6 +95,7 @@ app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["maste
 app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
 app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
 app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=["masters-jute-supplier"])
+app.include_router(jute_supplier_map_router, prefix="/api/juteSupplierMap", tags=["masters-jute-supplier-map"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
@@ -107,6 +110,7 @@ app.include_router(jute_po_router, prefix="/api/jutePO", tags=["jute-procurement
 app.include_router(jute_gate_entry_router, prefix="/api/juteGateEntry", tags=["jute-procurement-gate-entry"])
 app.include_router(jute_material_inspection_router, prefix="/api/juteMaterialInspection", tags=["jute-procurement-material-inspection"])
 app.include_router(jute_mr_router, prefix="/api/juteMR", tags=["jute-procurement-mr"])
+app.include_router(jute_agent_map_router, prefix="/api/juteAgentMap", tags=["jute-procurement-agent-map"])
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
