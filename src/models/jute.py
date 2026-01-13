@@ -394,8 +394,7 @@ class JuteSupplierMst(Base):
     __tablename__ = "jute_supplier_mst"
 
     supplier_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)    
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     contact_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -463,6 +462,19 @@ class JuteLorryMst(Base):
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
+
+
+# =============================================================================
+# JUTE AGENT MAP MODEL
+# =============================================================================
+
+class JuteAgentMap(Base):
+    """Jute agent mapping table - maps agents (party branches) to branches."""
+    __tablename__ = "jute_agent_map"
+
+    agent_map_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    party_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
 
 # =============================================================================

@@ -35,6 +35,7 @@ from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
 from src.masters.castFactor import router as costFactor_router
 from src.masters.juteQuality import router as jute_quality_router
+from src.masters.juteSupplier import router as jute_supplier_router
 from src.juteProcurement.jutePO import router as jute_po_router
 from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
@@ -91,6 +92,7 @@ app.include_router(party_router, prefix="/api/partyMaster", tags=["masters-party
 app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["masters-warehouse"])
 app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
 app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
+app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=["masters-jute-supplier"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
