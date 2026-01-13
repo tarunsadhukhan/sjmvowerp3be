@@ -918,3 +918,202 @@ def update_mr_li_accepted_weight_query():
     """
     return text(sql)
 
+
+# =============================================================================
+# JUTE MR (MATERIAL RECEIPT) QUERIES
+# =============================================================================
+
+def get_jute_mr_table_query(co_id: int, search: str = None):
+    """
+    Query to get jute MR list with pagination support.
+    Joins with branch_mst for co_id filtering, jute_supplier_mst for supplier name,
+    party_mst for party details, jute_po for PO number, and jute_mukam_mst for mukam.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.branch_mr_no AS CHAR) LIKE :search
+                OR jsm.supplier_name LIKE :search
+                OR pm.supp_name LIKE :search
+                OR jm.challan_no LIKE :search
+                OR jm.vehicle_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT 
+            jm.jute_mr_id,
+            jm.branch_mr_no,
+            jm.jute_mr_date,
+            jm.branch_id,
+            bm.branch_name,
+            jm.jute_supplier_id,
+            jsm.supplier_name,
+            jm.party_id,
+            pm.supp_name AS party_name,
+            jm.party_branch_id,
+            pb.branch_name AS party_branch_name,
+            jm.po_id,
+            jp.po_no,
+            jp.po_date,
+            jm.challan_no,
+            jm.challan_date,
+            jm.mukam_id,
+            jmm.mukam_name AS mukam,
+            jm.vehicle_no,
+            jm.unit_conversion,
+            jm.mr_weight,
+            jm.remarks,
+            jm.status_id,
+            COALESCE(sm.status_name, 'Open') AS status,
+            jm.src_com_id,
+            jm.jute_gate_entry_date,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
+        LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE bm.co_id = :co_id
+        {search_clause}
+        ORDER BY jm.jute_mr_date DESC, jm.jute_mr_id DESC
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_jute_mr_table_count_query(co_id: int, search: str = None):
+    """
+    Query to get total count of jute MRs for pagination.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.branch_mr_no AS CHAR) LIKE :search
+                OR jsm.supplier_name LIKE :search
+                OR pm.supp_name LIKE :search
+                OR jm.challan_no LIKE :search
+                OR jm.vehicle_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(*) AS total
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        WHERE bm.co_id = :co_id
+        {search_clause}
+    """
+    return text(sql)
+
+
+def get_jute_mr_by_id_query():
+    """
+    Query to get a single jute MR by ID with all header details.
+    """
+    sql = """
+        SELECT 
+            jm.jute_mr_id,
+            jm.branch_mr_no,
+            jm.jute_mr_date,
+            jm.branch_id,
+            bm.branch_name,
+            jm.jute_supplier_id,
+            jsm.supplier_name,
+            jm.party_id,
+            pm.supp_name AS party_name,
+            jm.party_branch_id,
+            pb.branch_name AS party_branch_name,
+            jm.po_id,
+            jp.po_no,
+            jp.po_date,
+            jm.challan_no,
+            jm.challan_date,
+            jm.mukam_id,
+            jmm.mukam_name AS mukam,
+            jm.vehicle_no,
+            jm.unit_conversion,
+            jm.mr_weight,
+            jm.remarks,
+            jm.status_id,
+            COALESCE(sm.status_name, 'Open') AS status,
+            jm.src_com_id,
+            jm.jute_gate_entry_date,
+            jm.updated_by,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
+        LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE jm.jute_mr_id = :mr_id
+    """
+    return text(sql)
+
+
+def get_jute_mr_line_items_query():
+    """
+    Query to get line items for a jute MR.
+    """
+    sql = """
+        SELECT 
+            jmli.jute_mr_li_id,
+            jmli.jute_mr_id,
+            jmli.jute_gate_entry_lineitem_id,
+            jmli.actual_item_id,
+            im.item_name AS actual_item_name,
+            jmli.actual_quality,
+            jqm.jute_quality AS actual_quality_name,
+            jmli.actual_qty,
+            jmli.actual_weight,
+            jmli.allowable_moisture,
+            jmli.actual_moisture,
+            jmli.claim_dust,
+            jmli.shortage_kgs,
+            jmli.accepted_weight,
+            jmli.rate,
+            jmli.claim_rate,
+            jmli.claim_quality,
+            jmli.water_damage_amount,
+            jmli.premium_amount,
+            jmli.remarks,
+            jmli.status,
+            jmli.active
+        FROM jute_mr_li jmli
+        LEFT JOIN item_mst im ON im.item_id = jmli.actual_item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jmli.actual_quality
+        WHERE jmli.jute_mr_id = :mr_id
+        AND (jmli.active = 1 OR jmli.active IS NULL)
+        ORDER BY jmli.jute_mr_li_id
+    """
+    return text(sql)
+
+
+def get_all_active_company_branches_query():
+    """
+    Query to get all active branches from all companies.
+    Used for agent selection dropdown.
+    Returns company name and branch name for display.
+    """
+    sql = """
+        SELECT 
+            bm.branch_id,
+            cm.co_name AS company_name,
+            bm.branch_name
+        FROM branch_mst bm
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+        WHERE (bm.active = 1 OR bm.active IS NULL)
+        ORDER BY cm.co_name, bm.branch_name
+    """
+    return text(sql)
+
