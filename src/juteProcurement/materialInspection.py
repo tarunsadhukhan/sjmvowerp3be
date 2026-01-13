@@ -361,21 +361,28 @@ async def complete_material_inspection(
         user_id = token_data.get("user_id")
         now = datetime.now()
 
+        # Generate branch MR number
+        mr_no_result = db.execute(
+            text("SELECT COALESCE(MAX(branch_mr_no), 0) + 1 AS next_mr_no FROM jute_mr WHERE branch_id = :branch_id"),
+            {"branch_id": header.get("branch_id")}
+        ).fetchone()
+        next_mr_no = mr_no_result.next_mr_no if mr_no_result else 1
+
         # Create jute_mr record
         mr_insert_query = insert_jute_mr_query()
         mr_params = {
-            "co_id": co_id,
             "branch_id": header.get("branch_id"),
+            "branch_mr_no": next_mr_no,
+            "jute_mr_date": now.date(),
             "jute_gate_entry_id": gate_entry_id,
-            "branch_gate_entry_no": header.get("branch_gate_entry_no"),
             "jute_gate_entry_date": header.get("jute_gate_entry_date"),
             "challan_no": header.get("challan_no"),
             "challan_date": header.get("challan_date"),
             "jute_supplier_id": header.get("jute_supplier_id"),
-            "party_id": str(header.get("party_id")) if header.get("party_id") else None,
+            "party_id": header.get("party_id"),
             "mukam_id": header.get("mukam_id"),
             "unit_conversion": header.get("unit_conversion"),
-            "po_id": str(header.get("po_id")) if header.get("po_id") else None,
+            "po_id": header.get("po_id"),
             "mr_weight": body.mr_weight or header.get("net_weight"),
             "vehicle_no": header.get("vehicle_no"),
             "status_id": 1,  # Open status

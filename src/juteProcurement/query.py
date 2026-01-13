@@ -12,7 +12,7 @@ def get_jute_po_table_query(co_id: int, search: str = None):
     if search:
         search_clause = """
             AND (
-                jp.po_num LIKE :search
+                CAST(jp.po_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jmm.mukam_name LIKE :search
@@ -22,8 +22,9 @@ def get_jute_po_table_query(co_id: int, search: str = None):
     sql = f"""
         SELECT 
             jp.jute_po_id,
-            jp.po_num,
+            jp.po_no,
             jp.po_date,
+            jp.party_id,
             jspm.supp_code,
             pm.supp_name AS party_name,
             jp.supplier_id,
@@ -65,7 +66,7 @@ def get_jute_po_table_count_query(co_id: int, search: str = None):
     if search:
         search_clause = """
             AND (
-                jp.po_num LIKE :search
+                CAST(jp.po_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jmm.mukam_name LIKE :search
@@ -94,15 +95,17 @@ def get_jute_po_by_id_query():
     sql = """
         SELECT 
             jp.jute_po_id,
-            jp.po_num,
+            jp.po_no,
             jp.po_date,
+            jp.party_id,
             pm.supp_code,
             pm.supp_name AS supplier_name,
             jp.supplier_id,
-            COALESCE(jbm.supplier_name, '') AS broker_name,
+            jsm.supplier_name AS broker_name,
             jp.jute_mukam_id AS mukam_id,
             jmm.mukam_name AS mukam,
             jp.vehicle_type_id,
+            jlm.weight AS vehicle_capacity,
             jp.vehicle_quantity AS vehicle_qty,
             jp.status_id,
             COALESCE(sm.status_name, jp.status_id) AS status,
@@ -117,7 +120,6 @@ def get_jute_po_by_id_query():
             jp.frieght_charge,
             jp.jute_indent_id AS indent_no,
             jp.remarks,
-            jp.po_type,
             jp.channel_code,
             jp.contract_no,
             jp.contract_date,
@@ -128,7 +130,8 @@ def get_jute_po_by_id_query():
             jp.updated_date_time
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
-        LEFT JOIN jute_supplier_mst jbm ON jbm.supplier_id = jp.supplier_id
+        LEFT JOIN jute_lorry_mst jlm ON jlm.jute_lorry_type_id = jp.vehicle_type_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
@@ -141,29 +144,29 @@ def get_jute_po_by_id_query():
 def get_jute_po_line_items_query():
     """
     Query to get line items for a jute PO.
-    Note: jute_po_li.quality maps to jute_quality_mst.jute_qlty_id,
-    and jute_quality_mst.item_id maps to item_mst.item_id.
+    Uses item_id and jute_quality_id for lookups.
     """
     sql = """
         SELECT 
             jpli.jute_po_li_id,
             jpli.jute_po_id,
-            jqm.item_id AS item_id,
+            jpli.item_id,
             im.item_name AS item_name,
-            jpli.quality,
+            jpli.jute_quality_id,
             jqm.jute_quality AS quality_name,
             jpli.crop_year,
             jpli.marka,
             jpli.quantity,
-            jpli.uom,
             jpli.rate,
-            jpli.allowable_moisture_percentage,
-            jpli.actual_quantity AS weight,
-            jpli.value_wo_tax AS amount,
-            jpli.status
+            jpli.allowable_moisture,
+            jpli.value AS amount,
+            jpli.active,
+            jpli.status_id,
+            sm.status_name AS status
         FROM jute_po_li jpli
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.quality
-        LEFT JOIN item_mst im ON im.item_id = jqm.item_id
+        LEFT JOIN item_mst im ON im.item_id = jpli.item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.jute_quality_id
+        LEFT JOIN status_mst sm ON sm.status_id = jpli.status_id
         WHERE jpli.jute_po_id = :jute_po_id
         ORDER BY jpli.jute_po_li_id
     """
@@ -323,7 +326,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
     if search:
         search_clause = """
             AND (
-                jp.po_num LIKE :search
+                CAST(jp.po_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jge.vehicle_no LIKE :search
@@ -337,7 +340,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
             jge.branch_id,
             bm.branch_name,
             jge.po_id,
-            jp.po_num,
+            jp.po_no,
             jge.jute_gate_entry_date,
             jge.in_time,
             jge.out_date,
@@ -380,7 +383,7 @@ def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
     if search:
         search_clause = """
             AND (
-                jp.po_num LIKE :search
+                CAST(jp.po_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jge.vehicle_no LIKE :search
@@ -428,7 +431,7 @@ def get_jute_gate_entry_by_id_query():
             jge.driver_name,
             jge.transporter,
             jge.po_id,
-            jp.po_num,
+            jp.po_no,
             jge.jute_supplier_id,
             jsm.supplier_name,
             jge.party_id,
@@ -507,7 +510,7 @@ def get_jute_po_for_gate_entry_query():
     sql = """
         SELECT 
             jp.jute_po_id,
-            jp.po_num,
+            jp.po_no,
             jp.po_date,
             jp.supplier_id,
             jsm.supplier_name,
@@ -527,21 +530,22 @@ def get_jute_po_for_gate_entry_query():
 def get_jute_po_line_items_for_gate_entry_query():
     """
     Query to get PO line items for gate entry auto-fill.
+    Uses new columns: item_id, jute_quality_id.
     """
     sql = """
         SELECT 
             jpli.jute_po_li_id,
-            jqm.item_id AS item_id,
+            jpli.item_id,
             im.item_name AS item_name,
-            jpli.quality AS quality_id,
+            jpli.jute_quality_id AS quality_id,
             jqm.jute_quality AS quality_name,
             jpli.quantity,
-            jpli.actual_quantity AS weight,
-            jpli.uom
+            jpli.value AS amount,
+            jpli.allowable_moisture
         FROM jute_po_li jpli
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.quality
-        LEFT JOIN item_mst im ON im.item_id = jqm.item_id
-        WHERE jpli.jute_po_id = :po_id
+        LEFT JOIN item_mst im ON im.item_id = jpli.item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.jute_quality_id
+        WHERE jpli.jute_po_id = :po_id AND (jpli.active = 1 OR jpli.active IS NULL)
         ORDER BY jpli.jute_po_li_id
     """
     return text(sql)
@@ -555,7 +559,7 @@ def get_open_jute_pos_query():
     sql = """
         SELECT 
             jp.jute_po_id,
-            jp.po_num,
+            jp.po_no,
             jp.po_date,
             jsm.supplier_name,
             jp.supplier_id,
@@ -763,14 +767,16 @@ def insert_jute_mr_query():
     """
     sql = """
         INSERT INTO jute_mr (
-            co_id, branch_id, jute_gate_entry_id, branch_gate_entry_no,
-            jute_gate_entry_date, challan_no, challan_date,
+            branch_id, branch_mr_no, jute_mr_date,
+            jute_gate_entry_id, jute_gate_entry_date, 
+            challan_no, challan_date,
             jute_supplier_id, party_id, mukam_id, unit_conversion,
             po_id, mr_weight, vehicle_no, status_id, remarks,
             updated_by, updated_date_time
         ) VALUES (
-            :co_id, :branch_id, :jute_gate_entry_id, :branch_gate_entry_no,
-            :jute_gate_entry_date, :challan_no, :challan_date,
+            :branch_id, :branch_mr_no, :jute_mr_date,
+            :jute_gate_entry_id, :jute_gate_entry_date,
+            :challan_no, :challan_date,
             :jute_supplier_id, :party_id, :mukam_id, :unit_conversion,
             :po_id, :mr_weight, :vehicle_no, :status_id, :remarks,
             :updated_by, :updated_date_time

@@ -161,17 +161,19 @@ class JuteGateEntryLi(Base):
 class JuteMr(Base):
     """Jute Material Receipt table - stores MR information created from gate entries.
     
-    Created based on dev3 schema (2026-01-07).
+    Updated based on dev3 schema (2026-01-12).
     """
     __tablename__ = "jute_mr"
 
     jute_mr_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # MR identification
+    branch_mr_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jute_mr_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     
     # Gate Entry Reference
     jute_gate_entry_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    branch_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     jute_gate_entry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     
     # Challan details
@@ -181,23 +183,18 @@ class JuteMr(Base):
     # Supplier/Party information
     jute_supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     party_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    party_branch_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    party_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # Location details
     mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     # PO reference
-    po_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    po_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Weight and pricing
     mr_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     frieght_paid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    
-    # TCS fields
-    tcs_percentage: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
-    tcs_amount: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True, default=0)
     
     # Vehicle and transport
     vehicle_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -473,7 +470,10 @@ class JuteLorryMst(Base):
 # =============================================================================
 
 class JutePo(Base):
-    """Jute purchase order header table - stores jute PO transactions."""
+    """Jute purchase order header table - stores jute PO transactions.
+    
+    Updated based on dev3 schema (2026-01-08).
+    """
     __tablename__ = "jute_po"
 
     jute_po_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -485,9 +485,7 @@ class JutePo(Base):
     
     # PO identification
     po_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    po_num: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     po_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    po_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Contract details
@@ -496,8 +494,8 @@ class JutePo(Base):
     channel_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     
     # Terms and charges
-    credit_term: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    delivery_days: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credit_term: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    delivery_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     frieght_charge: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     brokrage_rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     brokrage_percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
@@ -515,7 +513,7 @@ class JutePo(Base):
     # Notes and remarks
     remarks: Mapped[Optional[str]] = mapped_column(String(4000), nullable=True)
     internal_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    footer_note: Mapped[Optional[str]] = mapped_column(String(4000), nullable=True)
+    footer_note: Mapped[Optional[str]] = mapped_column(String(65535), nullable=True)  # longtext
     
     # Audit fields
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -530,46 +528,37 @@ class JutePo(Base):
 
 
 class JutePoLi(Base):
-    """Jute purchase order line item table - stores individual items in a jute PO."""
+    """Jute purchase order line item table - stores individual items in a jute PO.
+    
+    Updated based on dev3 schema (2026-01-08).
+    """
     __tablename__ = "jute_po_li"
 
     jute_po_li_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_po_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("jute_po.jute_po_id"), nullable=True, index=True
     )
-    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    department_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
-    # PO reference
-    po_num: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    indent_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Item details
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    
+    # Quantity and pricing
+    quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    value: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
     
     # Jute details
-    quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     marka: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     crop_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    uom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
-    # Quantity details
-    quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    actual_quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    cancel_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    bale: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    loose: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    allowable_moisture_percentage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    
-    # Pricing
-    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    discount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    value_wo_tax: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
-    value_wt_tax: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    allowable_moisture: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     
     # Status
-    status: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="1")
+    active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Audit
-    auto_datetime_insert: Mapped[datetime] = mapped_column(
+    updated_date_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
     )
 

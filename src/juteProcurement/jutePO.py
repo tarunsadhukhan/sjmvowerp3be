@@ -27,6 +27,77 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# =============================================================================
+# WEIGHT CALCULATION CONSTANTS
+# =============================================================================
+
+# Weight per bale in kg
+WEIGHT_PER_BALE_KG = 150
+# Weight per loose unit in kg
+WEIGHT_PER_LOOSE_KG = 48
+# Allowed variance percentage for vehicle weight validation
+VEHICLE_WEIGHT_TOLERANCE_PERCENT = 5
+
+
+def calculate_line_item_weight(quantity: float, jute_unit: str) -> float:
+    """
+    Calculate weight for a line item based on unit type.
+    
+    Args:
+        quantity: Number of bales or loose units
+        jute_unit: "BALE" or "LOOSE"
+    
+    Returns:
+        Weight in kg
+    """
+    if jute_unit == "BALE":
+        return WEIGHT_PER_BALE_KG * quantity
+    else:
+        # LOOSE
+        return WEIGHT_PER_LOOSE_KG * quantity
+
+
+def validate_vehicle_weight(
+    total_weight_kg: float,
+    vehicle_capacity_qtl: float,
+    vehicle_quantity: int
+) -> tuple[bool, str]:
+    """
+    Validate that total line item weight is within ±5% of vehicle capacity.
+    
+    Args:
+        total_weight_kg: Total weight of all line items in kg
+        vehicle_capacity_qtl: Weight capacity of one vehicle in quintals
+        vehicle_quantity: Number of vehicles
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Convert total weight to quintals for comparison
+    total_weight_qtl = total_weight_kg / 100
+    expected_vehicle_weight_qtl = vehicle_capacity_qtl * vehicle_quantity
+    
+    if expected_vehicle_weight_qtl <= 0:
+        return False, "Vehicle capacity not configured"
+    
+    if total_weight_qtl <= 0:
+        return False, "No line items with weight"
+    
+    variance = total_weight_qtl - expected_vehicle_weight_qtl
+    variance_percent = (variance / expected_vehicle_weight_qtl) * 100
+    abs_variance_percent = abs(variance_percent)
+    
+    if abs_variance_percent > VEHICLE_WEIGHT_TOLERANCE_PERCENT:
+        direction = "exceeds" if variance_percent > 0 else "is below"
+        return False, (
+            f"Total weight ({total_weight_qtl:.2f} Qtl) {direction} "
+            f"vehicle capacity ({expected_vehicle_weight_qtl:.2f} Qtl) by {abs_variance_percent:.1f}%. "
+            f"Must be within ±{VEHICLE_WEIGHT_TOLERANCE_PERCENT}%."
+        )
+    
+    return True, ""
+
+
 @router.get("/get_jute_po_table")
 async def get_jute_po_table(
     request: Request,
@@ -354,13 +425,13 @@ async def get_qualities_by_item(
 
 class JutePOLineItemCreate(BaseModel):
     """Schema for a Jute PO line item."""
-    quality: Optional[int] = None
+    item_id: Optional[int] = None
+    jute_quality_id: Optional[int] = None
     crop_year: Optional[str] = None
     marka: Optional[str] = None
     quantity: float
-    uom: Optional[str] = None
     rate: float
-    allowable_moisture_percentage: Optional[float] = None
+    allowable_moisture: Optional[float] = None
 
 
 class JutePOCreate(BaseModel):
@@ -417,6 +488,41 @@ async def jute_po_create(
         
         user_id = token_data.get("user_id")
         
+        # Get vehicle weight for validation
+        vehicle_result = db.execute(
+            text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
+            {"vehicle_type_id": payload.vehicle_type_id}
+        ).fetchone()
+        vehicle_capacity_qtl = vehicle_result.weight if vehicle_result else 0
+        
+        # Calculate total weight and value from line items FIRST for validation
+        total_weight_kg = 0.0
+        total_value = 0.0
+        line_items_data = []
+        
+        for li in payload.line_items:
+            # Calculate weight based on unit type (fixed weights)
+            weight_kg = calculate_line_item_weight(li.quantity, payload.jute_unit)
+            
+            # Rate is per quintal (100 kg), so convert weight to quintals
+            weight_in_quintals = weight_kg / 100
+            amount = weight_in_quintals * li.rate
+            total_weight_kg += weight_kg
+            total_value += amount
+            
+            line_items_data.append({
+                "li": li,
+                "weight_kg": weight_kg,
+                "amount": amount,
+            })
+        
+        # Validate vehicle weight tolerance (±5%)
+        is_valid, error_message = validate_vehicle_weight(
+            total_weight_kg, vehicle_capacity_qtl, payload.vehicle_quantity
+        )
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_message)
+        
         # Generate PO number (get max po_no and increment)
         max_po_result = db.execute(
             text("SELECT COALESCE(MAX(po_no), 0) + 1 AS next_po FROM jute_po WHERE branch_id = :branch_id"),
@@ -424,39 +530,24 @@ async def jute_po_create(
         ).fetchone()
         next_po_no = max_po_result.next_po if max_po_result else 1
         
-        # Generate po_num string (e.g., JPO-2026-00001)
-        year = payload.po_date.year
-        po_num = f"JPO-{year}-{next_po_no:05d}"
-        
-        # Calculate total weight and value from line items
-        total_weight = 0.0
-        total_value = 0.0
-        
-        # Get vehicle weight for calculations
-        vehicle_result = db.execute(
-            text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
-            {"vehicle_type_id": payload.vehicle_type_id}
-        ).fetchone()
-        vehicle_weight = vehicle_result.weight if vehicle_result else 0
-        total_vehicle_weight = vehicle_weight * payload.vehicle_quantity
-        
         # Create header
         jute_po = JutePo(
             branch_id=payload.branch_id,
             po_no=next_po_no,
-            po_num=po_num,
             po_date=payload.po_date,
             jute_mukam_id=payload.mukam_id,
             jute_uom=payload.jute_unit,
-            supplier_id=str(payload.supplier_id),
+            supplier_id=payload.supplier_id,
             party_id=payload.party_id,
             vehicle_type_id=payload.vehicle_type_id,
             vehicle_quantity=payload.vehicle_quantity,
             channel_code=payload.channel_code,
-            credit_term=str(payload.credit_term) if payload.credit_term else None,
-            delivery_days=str(payload.delivery_timeline) if payload.delivery_timeline else None,
+            credit_term=payload.credit_term,
+            delivery_days=payload.delivery_timeline,
             frieght_charge=payload.freight_charge,
             remarks=payload.remarks,
+            weight=total_weight_kg,
+            jute_po_value=total_value,
             status_id=21,  # Draft status
             updated_by=user_id,
         )
@@ -465,42 +556,27 @@ async def jute_po_create(
         db.flush()  # Get the jute_po_id
         
         # Create line items
-        for li in payload.line_items:
-            # Calculate weight based on unit type
-            if payload.jute_unit == "LOOSE":
-                # For loose: (total_vehicle_weight * quantity%) / 100
-                weight = (total_vehicle_weight * li.quantity) / 100
-            else:
-                # For bale: 150 * quantity (150 kg per bale)
-                weight = 150 * li.quantity
-            
-            amount = weight * li.rate
-            total_weight += weight
-            total_value += amount
-            
+        for item_data in line_items_data:
+            li = item_data["li"]
             line_item = JutePoLi(
                 jute_po_id=jute_po.jute_po_id,
-                co_id=payload.co_id,
-                po_num=po_num,
-                quality=li.quality,
+                item_id=li.item_id,
+                jute_quality_id=li.jute_quality_id,
                 crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                 marka=li.marka,
                 quantity=li.quantity,
-                uom=li.uom,
                 rate=li.rate,
-                allowable_moisture_percentage=li.allowable_moisture_percentage,
-                actual_quantity=weight,
-                value_wo_tax=amount,
-                is_active="1",
+                allowable_moisture=li.allowable_moisture,
+                value=item_data["amount"],
+                status_id=21,  # Draft status (same as header)
             )
             db.add(line_item)
         
-        # Update totals on header
-        jute_po.weight = total_weight
-        jute_po.jute_po_value = total_value
-        jute_po.po_val_wo_tax = total_value
-        
         db.commit()
+        
+        # Generate po_num string for response (e.g., JPO-2026-00001)
+        year = payload.po_date.year
+        po_num = f"JPO-{year}-{next_po_no:05d}"
         
         return {
             "success": True,
@@ -536,10 +612,20 @@ async def jute_po_update(
         
         user_id = token_data.get("user_id")
         
-        # Get existing PO
+        # Get existing PO - verify it belongs to a branch under this co_id
+        # First get valid branch IDs for this company
+        valid_branches_result = db.execute(
+            text("SELECT branch_id FROM branch_mst WHERE co_id = :co_id"),
+            {"co_id": co_id}
+        ).fetchall()
+        valid_branch_ids = [r.branch_id for r in valid_branches_result]
+        
+        if not valid_branch_ids:
+            raise HTTPException(status_code=404, detail="No branches found for this company")
+        
         jute_po = db.query(JutePo).filter(
             JutePo.jute_po_id == jute_po_id,
-            JutePo.co_id == co_id
+            JutePo.branch_id.in_(valid_branch_ids)
         ).first()
         
         if not jute_po:
@@ -555,11 +641,11 @@ async def jute_po_update(
         if payload.po_date is not None:
             jute_po.po_date = payload.po_date
         if payload.mukam_id is not None:
-            jute_po.mukam = payload.mukam_id
+            jute_po.jute_mukam_id = payload.mukam_id
         if payload.jute_unit is not None:
             jute_po.jute_uom = payload.jute_unit
         if payload.supplier_id is not None:
-            jute_po.supplier_id = str(payload.supplier_id)
+            jute_po.supplier_id = payload.supplier_id
         if payload.party_id is not None:
             jute_po.party_id = payload.party_id
         if payload.vehicle_type_id is not None:
@@ -569,65 +655,79 @@ async def jute_po_update(
         if payload.channel_code is not None:
             jute_po.channel_code = payload.channel_code
         if payload.credit_term is not None:
-            jute_po.credit_term = str(payload.credit_term)
+            jute_po.credit_term = payload.credit_term
         if payload.delivery_timeline is not None:
-            jute_po.delivery_days = str(payload.delivery_timeline)
+            jute_po.delivery_days = payload.delivery_timeline
         if payload.freight_charge is not None:
             jute_po.frieght_charge = payload.freight_charge
         if payload.remarks is not None:
             jute_po.remarks = payload.remarks
         
         jute_po.updated_by = user_id
-        jute_po.mod_by = user_id
-        jute_po.mod_on = datetime.now()
+        jute_po.updated_date_time = datetime.now()
         
         # Update line items if provided
         if payload.line_items is not None:
-            # Soft delete existing line items
-            db.query(JutePoLi).filter(JutePoLi.jute_po_id == jute_po_id).update({"is_active": "0"})
-            
-            # Get vehicle weight for calculations
+            # Get vehicle weight for validation
             vehicle_result = db.execute(
                 text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
                 {"vehicle_type_id": jute_po.vehicle_type_id}
             ).fetchone()
-            vehicle_weight = vehicle_result.weight if vehicle_result else 0
-            total_vehicle_weight = vehicle_weight * (jute_po.vehicle_quantity or 0)
+            vehicle_capacity_qtl = vehicle_result.weight if vehicle_result else 0
             
-            total_weight = 0.0
-            total_value = 0.0
             jute_unit = payload.jute_unit or jute_po.jute_uom
             
-            # Create new line items
+            # Calculate total weight and value FIRST for validation
+            total_weight_kg = 0.0
+            total_value = 0.0
+            line_items_data = []
+            
             for li in payload.line_items:
-                if jute_unit == "LOOSE":
-                    weight = (total_vehicle_weight * li.quantity) / 100
-                else:
-                    weight = 150 * li.quantity
+                # Calculate weight based on unit type (fixed weights)
+                weight_kg = calculate_line_item_weight(li.quantity, jute_unit)
                 
-                amount = weight * li.rate
-                total_weight += weight
+                # Rate is per quintal (100 kg), so convert weight to quintals
+                weight_in_quintals = weight_kg / 100
+                amount = weight_in_quintals * li.rate
+                total_weight_kg += weight_kg
                 total_value += amount
                 
+                line_items_data.append({
+                    "li": li,
+                    "weight_kg": weight_kg,
+                    "amount": amount,
+                })
+            
+            # Validate vehicle weight tolerance (±5%)
+            is_valid, error_message = validate_vehicle_weight(
+                total_weight_kg, vehicle_capacity_qtl, jute_po.vehicle_quantity or 0
+            )
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=error_message)
+            
+            # Delete existing line items (triggers will log the deletions)
+            db.query(JutePoLi).filter(JutePoLi.jute_po_id == jute_po_id).delete()
+            
+            # Create new line items
+            for item_data in line_items_data:
+                li = item_data["li"]
                 line_item = JutePoLi(
                     jute_po_id=jute_po_id,
-                    po_num=jute_po.po_num,
-                    quality=li.quality,
+                    item_id=li.item_id,
+                    jute_quality_id=li.jute_quality_id,
                     crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                     marka=li.marka,
                     quantity=li.quantity,
-                    uom=li.uom,
                     rate=li.rate,
-                    allowable_moisture_percentage=li.allowable_moisture_percentage,
-                    actual_quantity=weight,
-                    value_wo_tax=amount
+                    allowable_moisture=li.allowable_moisture,
+                    value=item_data["amount"],
+                    status_id=jute_po.status_id,  # Same status as header
                 )
                 db.add(line_item)
             
             # Update totals
-            jute_po.weight = total_weight
+            jute_po.weight = total_weight_kg
             jute_po.jute_po_value = total_value
-            jute_po.po_val_wo_tax = total_value
         
         db.commit()
         
