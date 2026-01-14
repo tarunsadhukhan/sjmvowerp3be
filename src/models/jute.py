@@ -161,7 +161,8 @@ class JuteGateEntryLi(Base):
 class JuteMr(Base):
     """Jute Material Receipt table - stores MR information created from gate entries.
     
-    Updated based on dev3 schema (2026-01-12).
+    Updated based on dev3 schema (2026-01-14).
+    Added bill pass, financial amounts, invoice details, and file upload fields.
     """
     __tablename__ = "jute_mr"
 
@@ -205,6 +206,28 @@ class JuteMr(Base):
     src_com_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
+    # Bill pass details
+    bill_pass_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bill_pass_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    
+    # Financial amounts
+    total_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    claim_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    roundoff: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    net_total: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    tds_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    
+    # Invoice details
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    invoice_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    payment_due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    invoice_received_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    
+    # File uploads
+    invoice_upload: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    challan_upload: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Relationships
     line_items: Mapped[List["JuteMrLi"]] = relationship(
