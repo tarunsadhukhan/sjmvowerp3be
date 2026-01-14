@@ -18,6 +18,8 @@ from src.juteProcurement.query import (
     get_jute_mr_by_id_query,
     get_jute_mr_line_items_query,
     get_all_active_company_branches_query,
+    get_agent_map_options_query,
+    get_warehouse_options_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ class MRLineItemUpdate(BaseModel):
     water_damage_amount: Optional[float] = None
     premium_amount: Optional[float] = None
     remarks: Optional[str] = None
+    warehouse_id: Optional[int] = None
 
 
 class MRUpdateRequest(BaseModel):
@@ -152,8 +155,8 @@ async def get_agent_options(
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
     """
-    Get all active branches from all active companies for agent selection.
-    Returns branches with company name for display.
+    Get agent options from jute_agent_map table.
+    Returns agent branches that have been mapped for the current company.
     """
     try:
         q_co_id = request.query_params.get("co_id")
@@ -165,8 +168,8 @@ async def get_agent_options(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid co_id")
 
-        query = get_all_active_company_branches_query()
-        result = db.execute(query).fetchall()
+        query = get_agent_map_options_query()
+        result = db.execute(query, {"co_id": co_id}).fetchall()
         branches = [dict(r._mapping) for r in result]
 
         return {
@@ -177,6 +180,41 @@ async def get_agent_options(
         raise
     except Exception as e:
         logger.exception("Error fetching agent options")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_warehouse_options")
+async def get_warehouse_options(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get warehouse options for a specific branch.
+    Returns warehouses with hierarchical path (e.g., 'Main-Section A-Bin 1').
+    """
+    try:
+        q_branch_id = request.query_params.get("branch_id")
+        if not q_branch_id:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+        
+        try:
+            branch_id = int(q_branch_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+        query = get_warehouse_options_query()
+        result = db.execute(query, {"branch_id": branch_id}).fetchall()
+        warehouses = [dict(r._mapping) for r in result]
+
+        return {
+            "warehouses": warehouses,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching warehouse options")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -320,6 +358,7 @@ async def update_jute_mr(
                     water_damage_amount = :water_damage_amount,
                     premium_amount = :premium_amount,
                     remarks = :remarks,
+                    warehouse_id = :warehouse_id,
                     updated_date_time = :updated_date_time
                 WHERE jute_mr_li_id = :jute_mr_li_id
             """)
@@ -341,6 +380,7 @@ async def update_jute_mr(
                 "water_damage_amount": item.water_damage_amount,
                 "premium_amount": item.premium_amount,
                 "remarks": item.remarks,
+                "warehouse_id": item.warehouse_id,
                 "updated_date_time": now,
             })
 

@@ -1064,8 +1064,29 @@ def get_jute_mr_by_id_query():
 def get_jute_mr_line_items_query():
     """
     Query to get line items for a jute MR.
+    Includes warehouse_path using recursive CTE similar to item_group_path.
     """
     sql = """
+        WITH RECURSIVE warehouse_hierarchy AS (
+            SELECT 
+                wm.warehouse_id,
+                wm.branch_id,
+                wm.warehouse_name,
+                wm.parent_warehouse_id,
+                CAST(wm.warehouse_name AS CHAR(500)) AS warehouse_path
+            FROM warehouse_mst wm
+            WHERE wm.parent_warehouse_id IS NULL
+            UNION ALL
+            SELECT 
+                child.warehouse_id,
+                child.branch_id,
+                child.warehouse_name,
+                child.parent_warehouse_id,
+                CONCAT(parent.warehouse_path, '-', child.warehouse_name)
+            FROM warehouse_mst child
+            JOIN warehouse_hierarchy parent 
+                ON child.parent_warehouse_id = parent.warehouse_id
+        )
         SELECT 
             jmli.jute_mr_li_id,
             jmli.jute_mr_id,
@@ -1086,12 +1107,15 @@ def get_jute_mr_line_items_query():
             jmli.claim_quality,
             jmli.water_damage_amount,
             jmli.premium_amount,
+            jmli.warehouse_id,
+            wh.warehouse_path,
             jmli.remarks,
             jmli.status,
             jmli.active
         FROM jute_mr_li jmli
         LEFT JOIN item_mst im ON im.item_id = jmli.actual_item_id
         LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jmli.actual_quality
+        LEFT JOIN warehouse_hierarchy wh ON wh.warehouse_id = jmli.warehouse_id
         WHERE jmli.jute_mr_id = :mr_id
         AND (jmli.active = 1 OR jmli.active IS NULL)
         ORDER BY jmli.jute_mr_li_id
@@ -1117,3 +1141,62 @@ def get_all_active_company_branches_query():
     """
     return text(sql)
 
+
+def get_agent_map_options_query():
+    """
+    Query to get agent options from jute_agent_map table.
+    Returns agent branch info with party branch details.
+    Used for agent selection dropdown in MR.
+    """
+    sql = """
+        SELECT DISTINCT
+            jam.agent_branch_id,
+            cm.co_name AS company_name,
+            bm.branch_name,
+            CONCAT(cm.co_name, ' - ', bm.branch_name) AS display
+        FROM jute_agent_map jam
+        INNER JOIN branch_mst bm ON bm.branch_id = jam.agent_branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+        WHERE jam.co_id = :co_id
+            AND (bm.active = 1 OR bm.active IS NULL)
+        ORDER BY cm.co_name, bm.branch_name
+    """
+    return text(sql)
+
+
+def get_warehouse_options_query():
+    """
+    Query to get warehouse options with recursive path for dropdowns.
+    Uses same recursive logic as warehouse master page.
+    """
+    sql = """
+        WITH RECURSIVE warehouse_hierarchy AS (
+            SELECT 
+                wm.warehouse_id,
+                wm.branch_id,
+                wm.warehouse_name,
+                wm.parent_warehouse_id,
+                CAST(wm.warehouse_name AS CHAR(500)) AS warehouse_path
+            FROM warehouse_mst wm
+            WHERE wm.parent_warehouse_id IS NULL
+                AND wm.branch_id = :branch_id
+            UNION ALL
+            SELECT 
+                child.warehouse_id,
+                child.branch_id,
+                child.warehouse_name,
+                child.parent_warehouse_id,
+                CONCAT(parent.warehouse_path, '-', child.warehouse_name)
+            FROM warehouse_mst child
+            JOIN warehouse_hierarchy parent 
+                ON child.parent_warehouse_id = parent.warehouse_id
+            WHERE child.branch_id = :branch_id
+        )
+        SELECT 
+            wh.warehouse_id,
+            wh.warehouse_name,
+            wh.warehouse_path
+        FROM warehouse_hierarchy wh
+        ORDER BY wh.warehouse_path
+    """
+    return text(sql)

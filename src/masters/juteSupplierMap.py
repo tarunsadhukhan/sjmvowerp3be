@@ -210,7 +210,7 @@ async def get_available_parties_for_supplier(
     """
     Get parties available for mapping to a specific supplier.
     Returns parties for the co_id that are NOT already mapped to this supplier.
-    party_type_id contains "1" means it's a supplier type party.
+    party_type_id contains "3" means it's a jute supplying party type.
     """
     try:
         co_id = request.query_params.get("co_id")
@@ -219,7 +219,7 @@ async def get_available_parties_for_supplier(
 
         # Get parties for this co_id that are:
         # 1. Active
-        # 2. Supplier type (party_type_id contains "1")
+        # 2. Jute supplier type (party_type_id contains "3")
         # 3. NOT already mapped to this jute supplier
         parties_query = text("""
             SELECT 
@@ -229,7 +229,7 @@ async def get_available_parties_for_supplier(
             FROM party_mst pm
             WHERE pm.co_id = :co_id
               AND pm.active = 1
-              AND FIND_IN_SET("1", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+              AND FIND_IN_SET("3", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
               AND pm.party_id NOT IN (
                   SELECT jspm.party_id 
                   FROM jute_supp_party_map jspm 

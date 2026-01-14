@@ -118,6 +118,7 @@ def get_party_branches_with_party_query(co_id: int):
     """
     Query to get all party branches with their party names for party dropdown.
     Filters parties by the current co_id.
+    Only includes parties with party_type_id containing "3" (jute supplying parties).
     Returns: party_mst_branch_id, party_id, party_name, address, display (party_name - address)
     """
     sql = """
@@ -134,6 +135,7 @@ def get_party_branches_with_party_query(co_id: int):
         WHERE pm.co_id = :co_id
             AND pbm.active = 1
             AND pm.active = 1
+            AND FIND_IN_SET("3", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         ORDER BY pm.supp_name, pbm.address
     """
     return text(sql)
