@@ -36,7 +36,7 @@ def get_jute_po_table_query(co_id: int, search: str = None):
             {po_num_expr} AS po_num,
             jp.po_date,
             jp.party_id,
-            jspm.supp_code,
+            jspm_latest.party_id AS party_id_from_map,
             pm.supp_name AS party_name,
             jp.supplier_id,
             jsm.supplier_name,
@@ -59,8 +59,17 @@ def get_jute_po_table_query(co_id: int, search: str = None):
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_lorry_mst jlm ON jlm.jute_lorry_type_id = jp.vehicle_type_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN (
+            SELECT jspm1.jute_supplier_id, jspm1.party_id
+            FROM jute_supp_party_map jspm1
+            INNER JOIN (
+                SELECT jute_supplier_id, MAX(updated_date_time) as max_date
+                FROM jute_supp_party_map
+                GROUP BY jute_supplier_id
+            ) jspm2 ON jspm1.jute_supplier_id = jspm2.jute_supplier_id 
+                   AND jspm1.updated_date_time = jspm2.max_date
+        ) jspm_latest ON jspm_latest.jute_supplier_id = jp.supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = jspm_latest.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jp.status_id
         WHERE bm.co_id = :co_id
@@ -88,12 +97,21 @@ def get_jute_po_table_count_query(co_id: int, search: str = None):
         """
 
     sql = f"""
-        SELECT COUNT(*) AS total
+        SELECT COUNT(DISTINCT jp.jute_po_id) AS total
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jp.supplier_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN (
+            SELECT jspm1.jute_supplier_id, jspm1.party_id
+            FROM jute_supp_party_map jspm1
+            INNER JOIN (
+                SELECT jute_supplier_id, MAX(updated_date_time) as max_date
+                FROM jute_supp_party_map
+                GROUP BY jute_supplier_id
+            ) jspm2 ON jspm1.jute_supplier_id = jspm2.jute_supplier_id 
+                   AND jspm1.updated_date_time = jspm2.max_date
+        ) jspm_latest ON jspm_latest.jute_supplier_id = jp.supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = jspm_latest.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         WHERE bm.co_id = :co_id
         {search_clause}
@@ -116,7 +134,7 @@ def get_jute_po_by_id_query():
             {po_num_expr} AS po_num,
             jp.po_date,
             jp.party_id,
-            pm.supp_code,
+            pm.party_id,
             pm.supp_name AS supplier_name,
             jp.supplier_id,
             jsm.supplier_name AS broker_name,
@@ -273,7 +291,6 @@ def get_suppliers_by_mukam_query():
             jsm.supplier_id,
             jsm.supplier_name AS supplier_name
         FROM jute_supplier_mst jsm
-        WHERE (jsm.co_id = :co_id OR jsm.co_id IS NULL)
         ORDER BY jsm.supplier_name
     """
     return text(sql)
@@ -307,7 +324,6 @@ def get_all_suppliers_query():
             jsm.supplier_id AS supplier_id,
             jsm.supplier_name AS supplier_name
         FROM jute_supplier_mst jsm
-        WHERE (jsm.co_id = :co_id OR jsm.co_id IS NULL)
         ORDER BY jsm.supplier_name
     """
     return text(sql)
@@ -393,7 +409,7 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
         LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
         WHERE bm.co_id = :co_id
         {search_clause}
@@ -426,7 +442,7 @@ def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
         WHERE bm.co_id = :co_id
         {search_clause}
     """
@@ -473,7 +489,7 @@ def get_jute_gate_entry_by_id_query():
             jge.jute_supplier_id,
             jsm.supplier_name,
             jge.party_id,
-            jspm.supp_code,
+            jspm.party_id,
             pm.supp_name AS party_name,
             jge.mukam_id,
             jmm.mukam_name AS mukam,
@@ -495,7 +511,7 @@ def get_jute_gate_entry_by_id_query():
         LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
         LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id AND jspm.map_id = jge.party_id
-        LEFT JOIN party_mst pm ON pm.supp_code = jspm.supp_code
+        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
         WHERE jge.jute_gate_entry_id = :jute_gate_entry_id AND bm.co_id = :co_id
@@ -506,13 +522,14 @@ def get_jute_gate_entry_by_id_query():
 def get_jute_gate_entry_line_items_query():
     """
     Query to get line items for a jute gate entry.
-    Updated: challan_item_name_id renamed to challan_item_id, QC fields removed (now in jute_mr_li).
+    Updated 2026-01-14: Changed po_line_item_num to jute_po_li_id.
+    QC fields removed from this table (now in jute_mr_li).
     """
     sql = """
         SELECT 
             jgli.jute_gate_entry_li_id,
             jgli.jute_gate_entry_id,
-            jgli.po_line_item_num,
+            jgli.jute_po_li_id,
             jgli.challan_item_id,
             im_ch.item_name AS challan_item_name,
             jgli.challan_jute_quality_id,
@@ -750,13 +767,13 @@ def get_material_inspection_line_items_query():
     """
     Query to get line items for material inspection.
     Includes challan and actual fields only - QC fields are now in jute_mr_li.
-    Updated: challan_item_name_id renamed to challan_item_id.
+    Updated 2026-01-14: Changed po_line_item_num to jute_po_li_id.
     """
     sql = """
         SELECT 
             jgli.jute_gate_entry_li_id,
             jgli.jute_gate_entry_id,
-            jgli.po_line_item_num,
+            jgli.jute_po_li_id,
             
             -- Challan details
             jgli.challan_item_id,
@@ -1198,5 +1215,157 @@ def get_warehouse_options_query():
             wh.warehouse_path
         FROM warehouse_hierarchy wh
         ORDER BY wh.warehouse_path
+    """
+    return text(sql)
+
+
+# =============================================================================
+# JUTE BILL PASS QUERIES
+# =============================================================================
+
+def get_jute_bill_pass_table_query(co_id: int, search: str = None):
+    """
+    Query to get jute bill pass list with pagination support.
+    Bill passes are approved MRs (status_id = 3) from jute_mr table.
+    
+    Returns columns: bill_pass_no, bill_pass_date, mr_no, supplier, party, 
+                     invoice_no, invoice_date, amount (net_total)
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.bill_pass_no AS CHAR) LIKE :search
+                OR CAST(jm.branch_mr_no AS CHAR) LIKE :search
+                OR jsm.supplier_name LIKE :search
+                OR pm.supp_name LIKE :search
+                OR jm.invoice_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT 
+            jm.jute_mr_id,
+            jm.bill_pass_no,
+            jm.bill_pass_date,
+            jm.branch_mr_no AS mr_no,
+            jm.jute_mr_date AS mr_date,
+            jm.branch_id,
+            bm.branch_name,
+            jm.jute_supplier_id,
+            jsm.supplier_name,
+            jm.party_id,
+            pm.supp_name AS party_name,
+            jm.invoice_no,
+            jm.invoice_date,
+            jm.invoice_amount,
+            jm.total_amount,
+            jm.claim_amount,
+            jm.roundoff,
+            jm.net_total AS amount,
+            jm.tds_amount,
+            jm.payment_due_date,
+            jm.status_id,
+            COALESCE(sm.status_name, 'Approved') AS status,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE bm.co_id = :co_id
+        AND jm.status_id = 3
+        {search_clause}
+        ORDER BY jm.bill_pass_date DESC, jm.bill_pass_no DESC, jm.jute_mr_id DESC
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_jute_bill_pass_table_count_query(co_id: int, search: str = None):
+    """
+    Query to get total count of jute bill passes for pagination.
+    Counts only approved MRs (status_id = 3).
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.bill_pass_no AS CHAR) LIKE :search
+                OR CAST(jm.branch_mr_no AS CHAR) LIKE :search
+                OR jsm.supplier_name LIKE :search
+                OR pm.supp_name LIKE :search
+                OR jm.invoice_no LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(*) AS total
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        WHERE bm.co_id = :co_id
+        AND jm.status_id = 3
+        {search_clause}
+    """
+    return text(sql)
+
+
+def get_jute_bill_pass_by_id_query():
+    """
+    Query to get a single jute bill pass (approved MR) by ID with all details.
+    """
+    sql = """
+        SELECT 
+            jm.jute_mr_id,
+            jm.bill_pass_no,
+            jm.bill_pass_date,
+            jm.branch_mr_no AS mr_no,
+            jm.jute_mr_date AS mr_date,
+            jm.branch_id,
+            bm.branch_name,
+            jm.jute_supplier_id,
+            jsm.supplier_name,
+            jm.party_id,
+            pm.supp_name AS party_name,
+            jm.party_branch_id,
+            pb.branch_name AS party_branch_name,
+            jm.po_id,
+            jp.po_no,
+            jm.challan_no,
+            jm.challan_date,
+            jm.mukam_id,
+            jmm.mukam_name AS mukam,
+            jm.vehicle_no,
+            jm.mr_weight,
+            jm.invoice_no,
+            jm.invoice_date,
+            jm.invoice_amount,
+            jm.invoice_received_date,
+            jm.total_amount,
+            jm.claim_amount,
+            jm.roundoff,
+            jm.net_total AS amount,
+            jm.tds_amount,
+            jm.payment_due_date,
+            jm.invoice_upload,
+            jm.challan_upload,
+            jm.remarks,
+            jm.status_id,
+            COALESCE(sm.status_name, 'Approved') AS status,
+            jm.updated_by,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
+        LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
+        LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE jm.jute_mr_id = :jute_mr_id 
+        AND jm.status_id = 3
+        AND bm.co_id = :co_id
     """
     return text(sql)

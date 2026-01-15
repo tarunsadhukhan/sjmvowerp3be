@@ -344,7 +344,13 @@ async def get_po_details(
 # =============================================================================
 
 class JuteGateEntryLineItemCreate(BaseModel):
-    """Schema for a Jute Gate Entry line item."""
+    """Schema for a Jute Gate Entry line item.
+    
+    Updated 2026-01-14: Added jute_po_li_id and allowable_moisture.
+    When PO is referenced, jute_po_li_id links to PO line and allowable_moisture is copied from PO.
+    When no PO, allowable_moisture can be manually entered.
+    """
+    jute_po_li_id: Optional[int] = None
     challan_item_id: Optional[int] = None
     challan_jute_quality_id: Optional[int] = None
     challan_quantity: Optional[float] = None
@@ -353,6 +359,7 @@ class JuteGateEntryLineItemCreate(BaseModel):
     actual_jute_quality_id: Optional[int] = None
     actual_quantity: Optional[float] = None
     actual_weight: Optional[float] = None
+    allowable_moisture: Optional[float] = None
     jute_uom: Optional[str] = None
     remarks: Optional[str] = None
 
@@ -529,6 +536,7 @@ async def jute_gate_entry_create(
         for li in payload.line_items:
             line_item = JuteGateEntryLi(
                 jute_gate_entry_id=gate_entry.jute_gate_entry_id,
+                jute_po_li_id=li.jute_po_li_id,  # Reference to PO line item if PO is selected
                 challan_item_id=li.challan_item_id,
                 challan_jute_quality_id=li.challan_jute_quality_id,
                 challan_quantity=li.challan_quantity,
@@ -537,6 +545,7 @@ async def jute_gate_entry_create(
                 actual_jute_quality_id=li.actual_jute_quality_id,
                 actual_quantity=li.actual_quantity,
                 actual_weight=li.actual_weight,
+                allowable_moisture=li.allowable_moisture,  # From PO or manually entered
                 jute_uom=li.jute_uom or payload.jute_uom,
                 remarks=li.remarks,
                 active=1,
@@ -554,28 +563,14 @@ async def jute_gate_entry_create(
         # MR status: 21 = Drafted
         MR_STATUS_DRAFTED = 21
         
-        # Generate MR sequence number for branch + financial year
-        max_mr_seq_result = db.execute(
-            text("""
-                SELECT COALESCE(MAX(branch_mr_no), 0) + 1 AS next_seq 
-                FROM jute_mr 
-                WHERE branch_id = :branch_id 
-                  AND DATE(jute_mr_date) >= :fy_start 
-                  AND DATE(jute_mr_date) <= :fy_end
-            """),
-            {
-                "branch_id": payload.branch_id,
-                "fy_start": fy_start_date,
-                "fy_end": fy_end_date
-            }
-        ).fetchone()
-        next_mr_seq = max_mr_seq_result.next_seq if max_mr_seq_result else 1
+        # MR number will be generated later when MR is processed/approved
+        # At gate entry stage, MR is created without mr_no and mr_date
         
         # Create MR header
         jute_mr = JuteMr(
             branch_id=payload.branch_id,
-            branch_mr_no=next_mr_seq,
-            jute_mr_date=None,  # Leave MR date blank - to be set later
+            branch_mr_no=None,  # Will be generated later
+            jute_mr_date=None,  # Will be set later
             jute_gate_entry_id=gate_entry.jute_gate_entry_id,
             jute_gate_entry_date=payload.jute_gate_entry_date,
             challan_no=payload.challan_no,
@@ -623,7 +618,6 @@ async def jute_gate_entry_create(
             "jute_gate_entry_id": gate_entry.jute_gate_entry_id,
             "branch_gate_entry_no": next_seq,
             "jute_mr_id": jute_mr.jute_mr_id,
-            "branch_mr_no": next_mr_seq,
             "net_weight": net_weight,
             "actual_weight": actual_weight,
             "mr_weight": total_actual_weight,

@@ -42,6 +42,7 @@ from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
 from src.juteProcurement.mr import router as jute_mr_router
 from src.juteProcurement.juteAgentMap import router as jute_agent_map_router
+from src.juteProcurement.billPass import router as jute_bill_pass_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -111,6 +112,7 @@ app.include_router(jute_gate_entry_router, prefix="/api/juteGateEntry", tags=["j
 app.include_router(jute_material_inspection_router, prefix="/api/juteMaterialInspection", tags=["jute-procurement-material-inspection"])
 app.include_router(jute_mr_router, prefix="/api/juteMR", tags=["jute-procurement-mr"])
 app.include_router(jute_agent_map_router, prefix="/api/juteAgentMap", tags=["jute-procurement-agent-map"])
+app.include_router(jute_bill_pass_router, prefix="/api/juteBillPass", tags=["jute-procurement-bill-pass"])
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])

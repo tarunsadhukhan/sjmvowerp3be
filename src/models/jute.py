@@ -113,7 +113,9 @@ class JuteGateEntry(Base):
 class JuteGateEntryLi(Base):
     """Jute gate entry line item table - stores line item details for gate entries.
     
-    Updated based on dev3 schema (2026-01-07).
+    Updated based on dev3 schema (2026-01-14).
+    Changed po_line_item_num to jute_po_li_id to reference jute_po_li table.
+    Allowable moisture can be copied from PO line item or entered manually if no PO.
     Note: QC fields were removed from this table - QC data now lives in jute_mr_li.
     """
     __tablename__ = "jute_gate_entry_li"
@@ -122,7 +124,7 @@ class JuteGateEntryLi(Base):
     jute_gate_entry_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("jute_gate_entry.jute_gate_entry_id"), nullable=True, index=True
     )
-    po_line_item_num: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jute_po_li_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     
     # Challan details (from PO/Challan)
     challan_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

@@ -644,6 +644,25 @@ async def complete_material_inspection(
                             "jute_mr_li_id": mr_li_id,
                             "moisture_percentage": reading.moisture_percentage,
                         })
+                
+                # If allowable_moisture was provided and gate entry had no PO,
+                # update the gate_entry_li record with the allowable_moisture
+                if item.allowable_moisture is not None:
+                    db.execute(
+                        text("""
+                            UPDATE jute_gate_entry_li 
+                            SET allowable_moisture = :allowable_moisture,
+                                updated_by = :updated_by,
+                                updated_date_time = :updated_date_time
+                            WHERE jute_gate_entry_li_id = :gate_entry_li_id
+                        """),
+                        {
+                            "allowable_moisture": item.allowable_moisture,
+                            "updated_by": user_id,
+                            "updated_date_time": now,
+                            "gate_entry_li_id": item.gate_entry_line_item_id,
+                        }
+                    )
 
         # Mark gate entry as QC complete
         complete_query = update_material_inspection_qc_complete()
