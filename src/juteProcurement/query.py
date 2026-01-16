@@ -606,12 +606,15 @@ def get_jute_po_for_gate_entry_query():
             jp.po_date,
             jp.supplier_id,
             jsm.supplier_name,
+            jp.party_id,
+            pm.supp_name AS party_name,
             jp.jute_mukam_id AS mukam_id,
             jmm.mukam_name,
             jp.jute_uom,
             jp.branch_id
         FROM jute_po jp
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
+        LEFT JOIN party_mst pm ON pm.party_id = jp.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
         WHERE jp.jute_po_id = :po_id AND bm.co_id = :co_id
