@@ -468,12 +468,17 @@ async def jute_gate_entry_create(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Create a new Jute Gate Entry (IN action) and corresponding MR (Material Receipt)."""
+    """
+    Create a new Jute Gate Entry (IN action).
+    
+    Updated 2026-01-16: Gate Entry table was merged into jute_mr table.
+    This endpoint now directly inserts into jute_mr with gate entry fields.
+    Gate entry number is generated based on branch + financial year.
+    """
     try:
-        from src.models.jute import JuteGateEntry, JuteGateEntryLi, JuteMr, JuteMrLi
+        from src.models.jute import JuteMr, JuteMrLi
         
         user_id = token_data.get("user_id")
-        username = token_data.get("username", "system")
         
         # Calculate financial year from jute_gate_entry_date
         # Financial year: April 1 to March 31
@@ -490,14 +495,15 @@ async def jute_gate_entry_create(
         fy_start_date = date(fy_start_year, 4, 1)
         fy_end_date = date(fy_end_year, 3, 31)
         
-        # Generate entry sequence (get max branch_gate_entry_no for branch + financial year and increment)
+        # Generate gate entry sequence (get max jute_gate_entry_no for branch + financial year and increment)
+        # Now querying jute_mr table since gate entry was merged
         max_seq_result = db.execute(
             text("""
-                SELECT COALESCE(MAX(branch_gate_entry_no), 0) + 1 AS next_seq 
-                FROM jute_gate_entry 
+                SELECT COALESCE(MAX(jute_gate_entry_no), 0) + 1 AS next_seq 
+                FROM jute_mr 
                 WHERE branch_id = :branch_id 
-                  AND DATE(jute_gate_entry_date) >= :fy_start 
-                  AND DATE(jute_gate_entry_date) <= :fy_end
+                  AND jute_gate_entry_date >= :fy_start 
+                  AND jute_gate_entry_date <= :fy_end
             """),
             {
                 "branch_id": payload.branch_id,
@@ -505,7 +511,7 @@ async def jute_gate_entry_create(
                 "fy_end": fy_end_date
             }
         ).fetchone()
-        next_seq = max_seq_result.next_seq if max_seq_result else 1
+        next_gate_entry_no = max_seq_result.next_seq if max_seq_result else 1
         
         # Calculate weights:
         # net_weight = gross_weight - tare_weight
@@ -528,131 +534,95 @@ async def jute_gate_entry_create(
         else:
             in_time_dt = datetime.now()
         
-        # Create header
-        gate_entry = JuteGateEntry(
-            branch_gate_entry_no=next_seq,
+        # Create jute_mr record (combined gate entry + MR)
+        # At gate entry stage: gate entry fields are populated, MR fields (branch_mr_no, jute_mr_date) are null
+        jute_mr = JuteMr(
             branch_id=payload.branch_id,
-            jute_gate_entry_date=datetime.combine(payload.jute_gate_entry_date, time(0, 0)),
-            in_time=in_time_dt,
-            challan_no=payload.challan_no,
-            challan_date=datetime.combine(payload.challan_date, time(0, 0)),
-            challan_weight=payload.challan_weight,
-            vehicle_no=payload.vehicle_no,
-            driver_name=payload.driver_name,
-            transporter=payload.transporter,
+            # Gate entry identification
+            jute_gate_entry_no=next_gate_entry_no,
+            jute_gate_entry_date=payload.jute_gate_entry_date,
+            # MR fields - will be set later during MR processing
+            branch_mr_no=None,
+            jute_mr_date=None,
+            # PO reference
             po_id=payload.po_id,
-            unit_conversion=payload.jute_uom,
-            mukam_id=payload.mukam_id,
+            # Supplier/Party
             jute_supplier_id=payload.jute_supplier_id,
-            party_id=payload.party_id,
+            party_id=str(payload.party_id) if payload.party_id else None,
+            src_com_id=payload.co_id,
+            # Challan details
+            challan_no=payload.challan_no,
+            challan_date=payload.challan_date,
+            challan_weight=payload.challan_weight,
+            # Weight measurements
             gross_weight=payload.gross_weight,
             tare_weight=payload.tare_weight,
             net_weight=net_weight,
             variable_shortage=variable_shortage,
             actual_weight=actual_weight,
-            vehicle_type_id=payload.vehicle_type_id,
-            marketing_slip=payload.marketing_slip or 0,
-            remarks=payload.remarks,
-            status_id=GATE_ENTRY_STATUS_IN,  # IN status
-            qc_check="N",
-            updated_by=user_id,
-            updated_date_time=datetime.now(),
-        )
-        
-        db.add(gate_entry)
-        db.flush()  # Get the generated ID
-        
-        # Create line items and collect them for MR creation
-        gate_entry_line_items = []
-        total_actual_weight = 0.0
-        for li in payload.line_items:
-            line_item = JuteGateEntryLi(
-                jute_gate_entry_id=gate_entry.jute_gate_entry_id,
-                jute_po_li_id=li.jute_po_li_id,  # Reference to PO line item if PO is selected
-                challan_item_id=li.challan_item_id,
-                challan_jute_quality_id=li.challan_jute_quality_id,
-                challan_quantity=li.challan_quantity,
-                challan_weight=li.challan_weight,
-                actual_item_id=li.actual_item_id,
-                actual_jute_quality_id=li.actual_jute_quality_id,
-                actual_quantity=li.actual_quantity,
-                actual_weight=li.actual_weight,
-                allowable_moisture=li.allowable_moisture,  # From PO or manually entered
-                jute_uom=li.jute_uom or payload.jute_uom,
-                remarks=li.remarks,
-                active=1,
-                updated_by=user_id,
-                updated_date_time=datetime.now(),
-            )
-            db.add(line_item)
-            db.flush()  # Get the generated line item ID
-            gate_entry_line_items.append(line_item)
-            total_actual_weight += float(li.actual_weight or 0)
-        
-        # =============================================================================
-        # CREATE JUTE MR (Material Receipt) FROM GATE ENTRY
-        # =============================================================================
-        # MR status: 21 = Drafted
-        MR_STATUS_DRAFTED = 21
-        
-        # MR number will be generated later when MR is processed/approved
-        # At gate entry stage, MR is created without mr_no and mr_date
-        
-        # Create MR header
-        jute_mr = JuteMr(
-            branch_id=payload.branch_id,
-            branch_mr_no=None,  # Will be generated later
-            jute_mr_date=None,  # Will be set later
-            jute_gate_entry_id=gate_entry.jute_gate_entry_id,
-            jute_gate_entry_date=payload.jute_gate_entry_date,
-            challan_no=payload.challan_no,
-            challan_date=payload.challan_date,
-            jute_supplier_id=payload.jute_supplier_id,
-            party_id=str(payload.party_id) if payload.party_id else None,
+            # Vehicle and transport details
+            vehicle_no=payload.vehicle_no,
+            transporter=payload.transporter,
+            driver_name=payload.driver_name,
+            # Time tracking
+            in_time=in_time_dt,
+            out_date=None,
+            out_time=None,
+            # Location and unit
             mukam_id=payload.mukam_id,
             unit_conversion=payload.jute_uom,
-            po_id=payload.po_id,
-            mr_weight=total_actual_weight,  # Sum of line item actual weights
-            vehicle_no=payload.vehicle_no,
-            status_id=MR_STATUS_DRAFTED,
+            # QC and status
+            qc_check=0,  # Not checked yet
+            marketing_slip=payload.marketing_slip or 0,
+            status_id=GATE_ENTRY_STATUS_IN,  # IN status = 1
             remarks=payload.remarks,
-            src_com_id=payload.co_id,  # Source company from which gate entry was done
+            # Audit
             updated_by=user_id,
             updated_date_time=datetime.now(),
         )
-        db.add(jute_mr)
-        db.flush()  # Get the generated MR ID
         
-        # Create MR line items
-        for ge_li in gate_entry_line_items:
+        db.add(jute_mr)
+        db.flush()  # Get the generated ID
+        
+        # Create line items (if any provided)
+        total_actual_weight = 0.0
+        for li in payload.line_items:
             mr_line_item = JuteMrLi(
                 jute_mr_id=jute_mr.jute_mr_id,
-                jute_gate_entry_lineitem_id=ge_li.jute_gate_entry_li_id,
-                challan_item_id=ge_li.challan_item_id,
-                challan_quality_id=ge_li.challan_jute_quality_id,
-                challan_quantity=ge_li.challan_quantity,
-                challan_weight=ge_li.challan_weight,
-                actual_item_id=ge_li.actual_item_id,
-                actual_quality=ge_li.actual_jute_quality_id,
-                actual_qty=ge_li.actual_quantity,
-                actual_weight=ge_li.actual_weight,
-                remarks=ge_li.remarks,
+                jute_po_li_id=li.jute_po_li_id,
+                # Challan details
+                challan_item_id=li.challan_item_id,
+                challan_quality_id=li.challan_jute_quality_id,
+                challan_quantity=li.challan_quantity,
+                challan_weight=li.challan_weight,
+                # Actual details
+                actual_item_id=li.actual_item_id,
+                actual_quality=li.actual_jute_quality_id,
+                actual_qty=li.actual_quantity,
+                actual_weight=li.actual_weight,
+                # Moisture
+                allowable_moisture=li.allowable_moisture,
+                # Status and audit
+                remarks=li.remarks,
                 active=1,
                 updated_date_time=datetime.now(),
             )
             db.add(mr_line_item)
+            total_actual_weight += float(li.actual_weight or 0)
+        
+        # Update mr_weight with sum of line item weights (if any)
+        if total_actual_weight > 0:
+            jute_mr.mr_weight = total_actual_weight
         
         db.commit()
         
         return {
             "success": True,
-            "message": "Jute Gate Entry and MR created successfully",
-            "jute_gate_entry_id": gate_entry.jute_gate_entry_id,
-            "branch_gate_entry_no": next_seq,
+            "message": "Jute Gate Entry created successfully",
             "jute_mr_id": jute_mr.jute_mr_id,
+            "jute_gate_entry_no": next_gate_entry_no,
             "net_weight": net_weight,
             "actual_weight": actual_weight,
-            "mr_weight": total_actual_weight,
             "status": "IN",
         }
 
@@ -664,17 +634,22 @@ async def jute_gate_entry_create(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/jute_gate_entry_update/{jute_gate_entry_id}")
+@router.put("/jute_gate_entry_update/{jute_mr_id}")
 async def jute_gate_entry_update(
-    jute_gate_entry_id: int,
+    jute_mr_id: int,
     payload: JuteGateEntryUpdate,
     request: Request,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Update a Jute Gate Entry. Use action='OUT' to mark vehicle exit."""
+    """
+    Update a Jute Gate Entry. Use action='OUT' to mark vehicle exit.
+    
+    Updated 2026-01-16: Gate Entry table was merged into jute_mr table.
+    This endpoint now directly updates jute_mr.
+    """
     try:
-        from src.models.jute import JuteGateEntry, JuteGateEntryLi
+        from src.models.jute import JuteMr, JuteMrLi
         
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
@@ -682,17 +657,16 @@ async def jute_gate_entry_update(
         
         co_id = int(q_co_id)
         user_id = token_data.get("user_id")
-        username = token_data.get("username", "system")
         
-        # Get existing gate entry
+        # Get existing jute_mr record
         existing = db.execute(
             text("""
-                SELECT jge.jute_gate_entry_id, jge.status_id, jge.in_time
-                FROM jute_gate_entry jge
-                INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
-                WHERE jge.jute_gate_entry_id = :id AND bm.co_id = :co_id
+                SELECT jm.jute_mr_id, jm.status_id, jm.in_time, jm.jute_gate_entry_date
+                FROM jute_mr jm
+                INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+                WHERE jm.jute_mr_id = :id AND bm.co_id = :co_id
             """),
-            {"id": jute_gate_entry_id, "co_id": co_id}
+            {"id": jute_mr_id, "co_id": co_id}
         ).fetchone()
         
         if not existing:
@@ -715,20 +689,22 @@ async def jute_gate_entry_update(
             if in_time_dt and out_time_dt <= in_time_dt:
                 raise HTTPException(status_code=400, detail="Out date/time must be after In date/time")
             
-            # Update out date/time only (status remains unchanged - stays as OPEN/IN)
+            # Update out date/time and change status to OUT (closed)
             db.execute(
                 text("""
-                    UPDATE jute_gate_entry
+                    UPDATE jute_mr
                     SET out_date = :out_date, out_time = :out_time,
+                        status_id = :status_out,
                         updated_by = :user_id, updated_date_time = :updated_dt
-                    WHERE jute_gate_entry_id = :id
+                    WHERE jute_mr_id = :id
                 """),
                 {
-                    "out_date": datetime.combine(out_date, time(0, 0)),
+                    "out_date": out_date,
                     "out_time": out_time_dt,
+                    "status_out": GATE_ENTRY_STATUS_OUT,
                     "user_id": user_id,
                     "updated_dt": datetime.now(),
-                    "id": jute_gate_entry_id,
+                    "id": jute_mr_id,
                 }
             )
             db.commit()
@@ -736,12 +712,13 @@ async def jute_gate_entry_update(
             return {
                 "success": True,
                 "message": "Vehicle marked as OUT successfully",
-                "jute_gate_entry_id": jute_gate_entry_id,
+                "jute_mr_id": jute_mr_id,
+                "status": "OUT",
             }
         
         # Regular update (not OUT action)
         update_fields = []
-        update_params = {"id": jute_gate_entry_id, "user_id": user_id, "updated_dt": datetime.now()}
+        update_params = {"id": jute_mr_id, "user_id": user_id, "updated_dt": datetime.now()}
         
         if payload.branch_id is not None:
             update_fields.append("branch_id = :branch_id")
@@ -749,13 +726,14 @@ async def jute_gate_entry_update(
         
         if payload.jute_gate_entry_date is not None:
             update_fields.append("jute_gate_entry_date = :entry_date")
-            update_params["entry_date"] = datetime.combine(payload.jute_gate_entry_date, time(0, 0))
+            update_params["entry_date"] = payload.jute_gate_entry_date
         
         if payload.in_time is not None:
             try:
                 time_parts = payload.in_time.split(":")
+                entry_date = payload.jute_gate_entry_date or existing.jute_gate_entry_date or date.today()
                 in_time_dt = datetime.combine(
-                    payload.jute_gate_entry_date or date.today(),
+                    entry_date,
                     time(int(time_parts[0]), int(time_parts[1]))
                 )
                 update_fields.append("in_time = :in_time")
@@ -769,7 +747,7 @@ async def jute_gate_entry_update(
         
         if payload.challan_date is not None:
             update_fields.append("challan_date = :challan_date")
-            update_params["challan_date"] = datetime.combine(payload.challan_date, time(0, 0))
+            update_params["challan_date"] = payload.challan_date
         
         if payload.challan_weight is not None:
             update_fields.append("challan_weight = :challan_weight")
@@ -805,7 +783,7 @@ async def jute_gate_entry_update(
         
         if payload.party_id is not None:
             update_fields.append("party_id = :party_id")
-            update_params["party_id"] = payload.party_id
+            update_params["party_id"] = str(payload.party_id) if payload.party_id else None
         
         if payload.gross_weight is not None:
             update_fields.append("gross_weight = :gross_weight")
@@ -827,18 +805,17 @@ async def jute_gate_entry_update(
             update_fields.append("variable_shortage = :variable_shortage")
             update_params["variable_shortage"] = payload.variable_shortage
             # Recalculate actual_weight = net_weight - variable_shortage
-            # Get net_weight from payload or existing record
             if "net_weight" in update_params:
                 net_wt = update_params["net_weight"]
             elif payload.gross_weight is not None and payload.tare_weight is not None:
                 net_wt = payload.gross_weight - payload.tare_weight
             else:
                 # Fetch existing net_weight from DB
-                existing = db.execute(
-                    text("SELECT net_weight FROM jute_gate_entry WHERE jute_gate_entry_id = :id"),
-                    {"id": jute_gate_entry_id}
+                existing_wt = db.execute(
+                    text("SELECT net_weight FROM jute_mr WHERE jute_mr_id = :id"),
+                    {"id": jute_mr_id}
                 ).fetchone()
-                net_wt = existing.net_weight if existing and existing.net_weight else 0
+                net_wt = existing_wt.net_weight if existing_wt and existing_wt.net_weight else 0
             update_fields.append("actual_weight = :actual_weight")
             update_params["actual_weight"] = net_wt - payload.variable_shortage
         
@@ -858,94 +835,52 @@ async def jute_gate_entry_update(
         update_fields.append("updated_date_time = :updated_dt")
         
         if update_fields:
-            update_sql = f"UPDATE jute_gate_entry SET {', '.join(update_fields)} WHERE jute_gate_entry_id = :id"
+            update_sql = f"UPDATE jute_mr SET {', '.join(update_fields)} WHERE jute_mr_id = :id"
             db.execute(text(update_sql), update_params)
         
         # Update line items if provided
         if payload.line_items is not None:
             # Delete existing line items
             db.execute(
-                text("DELETE FROM jute_gate_entry_li WHERE jute_gate_entry_id = :id"),
-                {"id": jute_gate_entry_id}
+                text("DELETE FROM jute_mr_li WHERE jute_mr_id = :id"),
+                {"id": jute_mr_id}
             )
             
-            # Insert new line items and track for MR update
+            # Insert new line items
             total_actual_weight = 0.0
-            new_ge_line_items = []
             for li in payload.line_items:
-                line_item = JuteGateEntryLi(
-                    jute_gate_entry_id=jute_gate_entry_id,
+                mr_line_item = JuteMrLi(
+                    jute_mr_id=jute_mr_id,
+                    jute_po_li_id=li.jute_po_li_id,
                     challan_item_id=li.challan_item_id,
-                    challan_jute_quality_id=li.challan_jute_quality_id,
+                    challan_quality_id=li.challan_jute_quality_id,
                     challan_quantity=li.challan_quantity,
                     challan_weight=li.challan_weight,
                     actual_item_id=li.actual_item_id,
-                    actual_jute_quality_id=li.actual_jute_quality_id,
-                    actual_quantity=li.actual_quantity,
+                    actual_quality=li.actual_jute_quality_id,
+                    actual_qty=li.actual_quantity,
                     actual_weight=li.actual_weight,
-                    jute_uom=li.jute_uom,
+                    allowable_moisture=li.allowable_moisture,
                     remarks=li.remarks,
                     active=1,
-                    updated_by=user_id,
                     updated_date_time=datetime.now(),
                 )
-                db.add(line_item)
-                db.flush()  # Get the generated ID
-                new_ge_line_items.append(line_item)
+                db.add(mr_line_item)
                 total_actual_weight += float(li.actual_weight or 0)
             
-            # Update MR records linked to this gate entry
-            # Find the MR for this gate entry
-            mr_result = db.execute(
-                text("SELECT jute_mr_id FROM jute_mr WHERE jute_gate_entry_id = :ge_id"),
-                {"ge_id": jute_gate_entry_id}
-            ).fetchone()
-            
-            if mr_result:
-                mr_id = mr_result.jute_mr_id
-                
-                # Update MR weight (sum of line item actual weights)
+            # Update mr_weight with sum of line item weights
+            if total_actual_weight > 0:
                 db.execute(
-                    text("""
-                        UPDATE jute_mr 
-                        SET mr_weight = :mr_weight, updated_date_time = :updated_dt 
-                        WHERE jute_mr_id = :mr_id
-                    """),
-                    {"mr_weight": total_actual_weight, "updated_dt": datetime.now(), "mr_id": mr_id}
+                    text("UPDATE jute_mr SET mr_weight = :mr_weight WHERE jute_mr_id = :id"),
+                    {"mr_weight": total_actual_weight, "id": jute_mr_id}
                 )
-                
-                # Delete existing MR line items
-                db.execute(
-                    text("DELETE FROM jute_mr_li WHERE jute_mr_id = :mr_id"),
-                    {"mr_id": mr_id}
-                )
-                
-                # Insert new MR line items
-                from src.models.jute import JuteMrLi
-                for ge_li in new_ge_line_items:
-                    mr_line_item = JuteMrLi(
-                        jute_mr_id=mr_id,
-                        jute_gate_entry_lineitem_id=ge_li.jute_gate_entry_li_id,
-                        challan_item_id=ge_li.challan_item_id,
-                        challan_quality_id=ge_li.challan_jute_quality_id,
-                        challan_quantity=ge_li.challan_quantity,
-                        challan_weight=ge_li.challan_weight,
-                        actual_item_id=ge_li.actual_item_id,
-                        actual_quality=ge_li.actual_jute_quality_id,
-                        actual_qty=ge_li.actual_quantity,
-                        actual_weight=ge_li.actual_weight,
-                        remarks=ge_li.remarks,
-                        active=1,
-                        updated_date_time=datetime.now(),
-                    )
-                    db.add(mr_line_item)
         
         db.commit()
         
         return {
             "success": True,
             "message": "Jute Gate Entry updated successfully",
-            "jute_gate_entry_id": jute_gate_entry_id,
+            "jute_mr_id": jute_mr_id,
         }
 
     except HTTPException:
