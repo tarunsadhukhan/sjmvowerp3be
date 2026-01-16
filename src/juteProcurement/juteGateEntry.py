@@ -45,13 +45,15 @@ async def get_jute_gate_entry_table(
     
     Query params:
     - co_id: Company ID (required)
+    - branch_ids: Comma-separated list of branch IDs to filter by (optional)
     - page: Page number (default: 1)
     - limit: Records per page (default: 10)
-    - search: Search term for po_num, supplier_name, party_name, or vehicle_no
+    - search: Search term for gate entry no, challan no, or vehicle no
     """
     try:
         # Get query parameters
         q_co_id = request.query_params.get("co_id")
+        q_branch_ids = request.query_params.get("branch_ids", "").strip()
         q_page = request.query_params.get("page", "1")
         q_limit = request.query_params.get("limit", "10")
         q_search = request.query_params.get("search", "").strip()
@@ -64,6 +66,14 @@ async def get_jute_gate_entry_table(
             co_id = int(q_co_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        # Parse branch_ids (comma-separated list)
+        branch_ids = []
+        if q_branch_ids:
+            try:
+                branch_ids = [int(bid.strip()) for bid in q_branch_ids.split(",") if bid.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid branch_ids format")
 
         # Parse pagination
         try:
@@ -78,21 +88,37 @@ async def get_jute_gate_entry_table(
         # Build search parameter
         search_param = f"%{q_search}%" if q_search else None
 
-        # Get total count
-        count_query = get_jute_gate_entry_table_count_query(co_id=co_id, search=q_search if q_search else None)
+        # Build params dict for count query
         count_params = {"co_id": co_id}
         if search_param:
             count_params["search"] = search_param
+        # Add branch_id params
+        for i, bid in enumerate(branch_ids):
+            count_params[f"branch_id_{i}"] = bid
 
+        # Get total count
+        count_query = get_jute_gate_entry_table_count_query(
+            co_id=co_id, 
+            branch_ids=branch_ids if branch_ids else None,
+            search=q_search if q_search else None
+        )
         count_result = db.execute(count_query, count_params).fetchone()
         total = count_result.total if count_result else 0
 
-        # Get paginated data
-        data_query = get_jute_gate_entry_table_query(co_id=co_id, search=q_search if q_search else None)
+        # Build params dict for data query
         data_params = {"co_id": co_id, "limit": limit, "offset": offset}
         if search_param:
             data_params["search"] = search_param
+        # Add branch_id params
+        for i, bid in enumerate(branch_ids):
+            data_params[f"branch_id_{i}"] = bid
 
+        # Get paginated data
+        data_query = get_jute_gate_entry_table_query(
+            co_id=co_id,
+            branch_ids=branch_ids if branch_ids else None,
+            search=q_search if q_search else None
+        )
         result = db.execute(data_query, data_params).fetchall()
         rows = [dict(r._mapping) for r in result]
 
@@ -110,6 +136,9 @@ async def get_jute_gate_entry_table(
                 row["challan_date"] = str(row["challan_date"])
             if row.get("updated_date_time"):
                 row["updated_date_time"] = str(row["updated_date_time"])
+            # Map jute_mr_id to id for frontend compatibility
+            if row.get("jute_mr_id"):
+                row["id"] = row["jute_mr_id"]
 
         return {
             "data": rows,
@@ -126,15 +155,18 @@ async def get_jute_gate_entry_table(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/get_jute_gate_entry_by_id/{jute_gate_entry_id}")
+@router.get("/get_jute_gate_entry_by_id/{jute_mr_id}")
 async def get_jute_gate_entry_by_id(
-    jute_gate_entry_id: int,
+    jute_mr_id: int,
     request: Request,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
     """
     Get a single Jute Gate Entry by ID with line items.
+    
+    Updated 2026-01-15: Now uses jute_mr table (merged gate entry + MR).
+    The parameter is jute_mr_id which corresponds to the jute_mr table.
     """
     try:
         q_co_id = request.query_params.get("co_id")
@@ -148,7 +180,7 @@ async def get_jute_gate_entry_by_id(
             raise HTTPException(status_code=400, detail="Invalid co_id")
 
         query = get_jute_gate_entry_by_id_query()
-        result = db.execute(query, {"jute_gate_entry_id": jute_gate_entry_id, "co_id": co_id}).fetchone()
+        result = db.execute(query, {"jute_mr_id": jute_mr_id, "co_id": co_id}).fetchone()
 
         if not result:
             raise HTTPException(status_code=404, detail="Jute Gate Entry not found")
@@ -162,7 +194,7 @@ async def get_jute_gate_entry_by_id(
 
         # Fetch line items
         line_items_query = get_jute_gate_entry_line_items_query()
-        line_items_result = db.execute(line_items_query, {"jute_gate_entry_id": jute_gate_entry_id}).fetchall()
+        line_items_result = db.execute(line_items_query, {"jute_mr_id": jute_mr_id}).fetchall()
         row["line_items"] = [dict(r._mapping) for r in line_items_result]
 
         return row

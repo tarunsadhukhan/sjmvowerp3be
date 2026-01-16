@@ -346,15 +346,137 @@ def get_branches_query():
 
 
 # =============================================================================
-# JUTE GATE ENTRY QUERIES
+# JUTE GATE ENTRY QUERIES (using jute_mr table)
 # =============================================================================
 
-def get_jute_gate_entry_table_query(co_id: int, search: str = None):
+def get_jute_gate_entry_table_query(co_id: int, branch_ids: list = None, search: str = None):
     """
     Query to get jute gate entry list with pagination support.
-    Joins with branch_mst for co_id filtering, co_mst for company prefix,
-    jute_supplier_mst for supplier name, jute_supp_party_map + party_mst for party details,
-    jute_po for PO number, and status_mst for status name.
+    
+    Updated 2026-01-15: Now uses jute_mr table (merged gate entry + MR).
+    The old jute_gate_entry table was deleted - all gate entry data is now in jute_mr.
+    
+    Args:
+        co_id: Company ID for filtering
+        branch_ids: List of branch IDs to filter by (optional)
+        search: Search term for gate entry no, challan no, or vehicle no
+    
+    Columns: gate entry no, gate entry date, in time, out time, challan no, 
+    vehicle no, challan weight, gross weight.
+    """
+    # Get the formatted gate entry number SQL expression (using jm alias for jute_mr)
+    gate_entry_num_expr = get_jute_gate_entry_number_sql_expression(
+        gate_entry_no_column="jm.jute_gate_entry_no",
+        entry_date_column="jm.jute_gate_entry_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+    
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.jute_gate_entry_no AS CHAR) LIKE :search
+                OR jm.challan_no LIKE :search
+                OR jm.vehicle_no LIKE :search
+            )
+        """
+    
+    # Branch filter clause - uses IN clause with branch_ids list
+    branch_clause = ""
+    if branch_ids and len(branch_ids) > 0:
+        # Create placeholders for branch IDs
+        branch_placeholders = ", ".join([f":branch_id_{i}" for i in range(len(branch_ids))])
+        branch_clause = f"AND jm.branch_id IN ({branch_placeholders})"
+
+    sql = f"""
+        SELECT 
+            jm.jute_mr_id,
+            jm.jute_gate_entry_no,
+            CASE 
+                WHEN jm.jute_gate_entry_no IS NOT NULL 
+                THEN {gate_entry_num_expr} 
+                ELSE NULL 
+            END AS gate_entry_num,
+            jm.jute_gate_entry_date,
+            jm.in_time,
+            jm.out_date,
+            jm.out_time,
+            jm.challan_no,
+            jm.challan_date,
+            jm.challan_weight,
+            jm.vehicle_no,
+            jm.gross_weight,
+            jm.tare_weight,
+            jm.net_weight,
+            jm.branch_id,
+            bm.branch_name,
+            jm.status_id,
+            COALESCE(sm.status_name, 'IN') AS status,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE bm.co_id = :co_id
+        AND jm.jute_gate_entry_no IS NOT NULL
+        {branch_clause}
+        {search_clause}
+        ORDER BY jm.jute_gate_entry_date DESC, jm.jute_mr_id DESC
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_jute_gate_entry_table_count_query(co_id: int, branch_ids: list = None, search: str = None):
+    """
+    Query to get total count of jute gate entries for pagination.
+    
+    Updated 2026-01-15: Now uses jute_mr table (merged gate entry + MR).
+    
+    Args:
+        co_id: Company ID for filtering
+        branch_ids: List of branch IDs to filter by (optional)
+        search: Search term for gate entry no, challan no, or vehicle no
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(jm.jute_gate_entry_no AS CHAR) LIKE :search
+                OR jm.challan_no LIKE :search
+                OR jm.vehicle_no LIKE :search
+            )
+        """
+    
+    # Branch filter clause - uses IN clause with branch_ids list
+    branch_clause = ""
+    if branch_ids and len(branch_ids) > 0:
+        # Create placeholders for branch IDs
+        branch_placeholders = ", ".join([f":branch_id_{i}" for i in range(len(branch_ids))])
+        branch_clause = f"AND jm.branch_id IN ({branch_placeholders})"
+
+    sql = f"""
+        SELECT COUNT(*) AS total
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        WHERE bm.co_id = :co_id
+        AND jm.jute_gate_entry_no IS NOT NULL
+        {branch_clause}
+        {search_clause}
+    """
+    return text(sql)
+
+
+# =============================================================================
+# JUTE GATE ENTRY DETAIL QUERIES (using jute_mr table)
+# =============================================================================
+
+def get_jute_gate_entry_by_id_query():
+    """
+    Query to get a single jute gate entry by ID.
+    
+    Updated 2026-01-15: Now uses jute_mr table (merged gate entry + MR).
     Includes formatted PO number and gate entry number with company and branch prefix.
     """
     # Get the formatted PO number SQL expression (using jp alias for jute_po)
@@ -365,156 +487,67 @@ def get_jute_gate_entry_table_query(co_id: int, search: str = None):
         branch_prefix_column="bm.branch_prefix"
     )
     
-    search_clause = ""
-    if search:
-        search_clause = """
-            AND (
-                CAST(jp.po_no AS CHAR) LIKE :search
-                OR jsm.supplier_name LIKE :search
-                OR pm.supp_name LIKE :search
-                OR jge.vehicle_no LIKE :search
-            )
-        """
-
-    sql = f"""
-        SELECT 
-            jge.jute_gate_entry_id,
-            jge.branch_gate_entry_no,
-            jge.branch_id,
-            bm.branch_name,
-            jge.po_id,
-            jp.po_no,
-            CASE WHEN jp.jute_po_id IS NOT NULL THEN {po_num_expr} ELSE NULL END AS po_num,
-            jge.jute_gate_entry_date,
-            jge.in_time,
-            jge.out_date,
-            jge.out_time,
-            jge.jute_supplier_id,
-            jsm.supplier_name,
-            jge.party_id,
-            pm.supp_name AS party_name,
-            jge.vehicle_no,
-            jge.vehicle_type_id,
-            jge.challan_no,
-            jge.challan_date,
-            jge.gross_weight,
-            jge.tare_weight,
-            jge.net_weight,
-            jge.status_id,
-            COALESCE(sm.status_name, 'Pending') AS status,
-            jge.updated_date_time
-        FROM jute_gate_entry jge
-        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
-        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
-        LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
-        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
-        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
-        LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
-        WHERE bm.co_id = :co_id
-        {search_clause}
-        ORDER BY jge.jute_gate_entry_date DESC, jge.jute_gate_entry_id DESC
-        LIMIT :limit OFFSET :offset
-    """
-    return text(sql)
-
-
-def get_jute_gate_entry_table_count_query(co_id: int, search: str = None):
-    """
-    Query to get total count of jute gate entries for pagination.
-    Uses branch_mst to filter by co_id since jute_gate_entry doesn't have co_id column.
-    """
-    search_clause = ""
-    if search:
-        search_clause = """
-            AND (
-                CAST(jp.po_no AS CHAR) LIKE :search
-                OR jsm.supplier_name LIKE :search
-                OR pm.supp_name LIKE :search
-                OR jge.vehicle_no LIKE :search
-            )
-        """
-
-    sql = f"""
-        SELECT COUNT(*) AS total
-        FROM jute_gate_entry jge
-        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
-        LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
-        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.map_id = jge.party_id
-        LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
-        WHERE bm.co_id = :co_id
-        {search_clause}
-    """
-    return text(sql)
-
-
-# =============================================================================
-# JUTE GATE ENTRY DETAIL QUERIES
-# =============================================================================
-
-def get_jute_gate_entry_by_id_query():
-    """
-    Query to get a single jute gate entry by ID.
-    Includes formatted PO number with company and branch prefix.
-    """
-    # Get the formatted PO number SQL expression (using jp alias for jute_po)
-    po_num_expr = get_jute_po_number_sql_expression(
-        po_no_column="jp.po_no",
-        po_date_column="jp.po_date",
+    # Get the formatted gate entry number SQL expression
+    gate_entry_num_expr = get_jute_gate_entry_number_sql_expression(
+        gate_entry_no_column="jm.jute_gate_entry_no",
+        entry_date_column="jm.jute_gate_entry_date",
         co_prefix_column="cm.co_prefix",
         branch_prefix_column="bm.branch_prefix"
     )
     
     sql = f"""
         SELECT 
-            jge.jute_gate_entry_id,
-            jge.branch_gate_entry_no,
-            jge.branch_id,
+            jm.jute_mr_id,
+            jm.jute_gate_entry_no,
+            CASE 
+                WHEN jm.jute_gate_entry_no IS NOT NULL 
+                THEN {gate_entry_num_expr} 
+                ELSE NULL 
+            END AS gate_entry_num,
+            jm.branch_id,
             bm.branch_name,
-            jge.jute_gate_entry_date,
-            jge.in_time,
-            jge.out_date,
-            jge.out_time,
-            jge.challan_no,
-            jge.challan_date,
-            jge.challan_weight,
-            jge.vehicle_no,
-            jge.vehicle_type_id,
-            jge.driver_name,
-            jge.transporter,
-            jge.po_id,
+            jm.jute_gate_entry_date,
+            jm.in_time,
+            jm.out_date,
+            jm.out_time,
+            jm.challan_no,
+            jm.challan_date,
+            jm.challan_weight,
+            jm.vehicle_no,
+            jm.driver_name,
+            jm.transporter,
+            jm.po_id,
             jp.po_no,
             CASE WHEN jp.jute_po_id IS NOT NULL THEN {po_num_expr} ELSE NULL END AS po_num,
-            jge.jute_supplier_id,
+            jm.jute_supplier_id,
             jsm.supplier_name,
-            jge.party_id,
-            jspm.party_id,
+            jm.party_id,
             pm.supp_name AS party_name,
-            jge.mukam_id,
+            jm.mukam_id,
             jmm.mukam_name AS mukam,
-            jge.unit_conversion AS jute_uom,
-            jge.gross_weight,
-            jge.tare_weight,
-            jge.net_weight,
-            jge.variable_shortage,
-            jge.actual_weight,
-            jge.remarks,
-            jge.status_id,
-            COALESCE(sm.status_name, 'Pending') AS status,
-            jge.qc_check,
-            jge.updated_by,
-            jge.updated_date_time
-        FROM jute_gate_entry jge
-        INNER JOIN branch_mst bm ON bm.branch_id = jge.branch_id
+            jm.unit_conversion AS jute_uom,
+            jm.gross_weight,
+            jm.tare_weight,
+            jm.net_weight,
+            jm.variable_shortage,
+            jm.actual_weight,
+            jm.remarks,
+            jm.status_id,
+            COALESCE(sm.status_name, 'IN') AS status,
+            jm.qc_check,
+            jm.marketing_slip,
+            jm.updated_by,
+            jm.updated_date_time
+        FROM jute_mr jm
+        INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id
-        LEFT JOIN jute_po jp ON jp.jute_po_id = jge.po_id
-        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jge.jute_supplier_id
-        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jge.jute_supplier_id AND jspm.map_id = jge.party_id
+        LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
+        LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
+        LEFT JOIN jute_supp_party_map jspm ON jspm.jute_supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = jspm.party_id
-        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jge.mukam_id
-        LEFT JOIN status_mst sm ON sm.status_id = jge.status_id
-        WHERE jge.jute_gate_entry_id = :jute_gate_entry_id AND bm.co_id = :co_id
+        LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
+        LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
+        WHERE jm.jute_mr_id = :jute_mr_id AND bm.co_id = :co_id
     """
     return text(sql)
 
@@ -522,38 +555,38 @@ def get_jute_gate_entry_by_id_query():
 def get_jute_gate_entry_line_items_query():
     """
     Query to get line items for a jute gate entry.
-    Updated 2026-01-14: Changed po_line_item_num to jute_po_li_id.
-    QC fields removed from this table (now in jute_mr_li).
+    
+    Updated 2026-01-15: Now uses jute_mr_li table (merged gate entry line items + MR line items).
     """
     sql = """
         SELECT 
-            jgli.jute_gate_entry_li_id,
-            jgli.jute_gate_entry_id,
-            jgli.jute_po_li_id,
-            jgli.challan_item_id,
+            jmli.jute_mr_li_id,
+            jmli.jute_mr_id,
+            jmli.jute_po_li_id,
+            jmli.challan_item_id,
             im_ch.item_name AS challan_item_name,
-            jgli.challan_jute_quality_id,
+            jmli.challan_jute_quality_id,
             jqm_ch.jute_quality AS challan_quality_name,
-            jgli.challan_quantity,
-            jgli.challan_weight,
-            jgli.actual_item_id,
+            jmli.challan_quantity,
+            jmli.challan_weight,
+            jmli.actual_item_id,
             im_act.item_name AS actual_item_name,
-            jgli.actual_jute_quality_id,
+            jmli.actual_jute_quality_id,
             jqm_act.jute_quality AS actual_quality_name,
-            jgli.actual_quantity,
-            jgli.actual_weight,
-            jgli.allowable_moisture,
-            jgli.jute_uom,
-            jgli.remarks,
-            jgli.active
-        FROM jute_gate_entry_li jgli
-        LEFT JOIN item_mst im_ch ON im_ch.item_id = jgli.challan_item_id
-        LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jgli.challan_jute_quality_id
-        LEFT JOIN item_mst im_act ON im_act.item_id = jgli.actual_item_id
-        LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jgli.actual_jute_quality_id
-        WHERE jgli.jute_gate_entry_id = :jute_gate_entry_id
-        AND (jgli.active = 1 OR jgli.active IS NULL)
-        ORDER BY jgli.jute_gate_entry_li_id
+            jmli.actual_quantity,
+            jmli.actual_weight,
+            jmli.allowable_moisture,
+            jmli.jute_uom,
+            jmli.remarks,
+            jmli.active
+        FROM jute_mr_li jmli
+        LEFT JOIN item_mst im_ch ON im_ch.item_id = jmli.challan_item_id
+        LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jmli.challan_jute_quality_id
+        LEFT JOIN item_mst im_act ON im_act.item_id = jmli.actual_item_id
+        LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jmli.actual_jute_quality_id
+        WHERE jmli.jute_mr_id = :jute_mr_id
+        AND (jmli.active = 1 OR jmli.active IS NULL)
+        ORDER BY jmli.jute_mr_li_id
     """
     return text(sql)
 
