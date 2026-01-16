@@ -172,6 +172,9 @@ class JuteMrLi(Base):
     actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     actual_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     
+    # UOM (LOOSE/BALE)
+    unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
     # Moisture details
     allowable_moisture: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     actual_moisture: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

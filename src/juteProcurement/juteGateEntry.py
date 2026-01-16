@@ -6,7 +6,7 @@ Provides CRUD operations for jute gate entry management.
 from fastapi import Depends, Request, HTTPException, APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -458,7 +458,10 @@ class JuteGateEntryUpdate(BaseModel):
 
 # Gate Entry Status IDs
 GATE_ENTRY_STATUS_IN = 1  # "IN" - Vehicle has entered
-GATE_ENTRY_STATUS_OUT = 5  # "OUT" - Vehicle has exited (Closed)
+# Note: GATE_ENTRY_STATUS_OUT (5) is defined but no longer used.
+# The out_time field presence determines if OUT is complete, not status_id.
+# status_id remains in draft/IN state throughout the gate entry flow.
+GATE_ENTRY_STATUS_OUT = 5  # Reserved - not actively used for status changes
 
 
 @router.post("/jute_gate_entry_create")
@@ -681,27 +684,55 @@ async def jute_gate_entry_update(
             out_date = payload.out_date or date.today()
             try:
                 time_parts = payload.out_time.split(":")
-                out_time_dt = datetime.combine(out_date, time(int(time_parts[0]), int(time_parts[1])))
+                out_time_obj = time(int(time_parts[0]), int(time_parts[1]))
+                out_time_dt = datetime.combine(out_date, out_time_obj)
             except (ValueError, IndexError):
                 raise HTTPException(status_code=400, detail="Invalid out_time format. Use HH:MM")
             
-            in_time_dt = existing.in_time
+            # Get in_time and entry_date for comparison
+            in_time_raw = existing.in_time
+            entry_date = existing.jute_gate_entry_date or date.today()
+            
+            # Convert in_time to datetime for comparison
+            # MySQL TIME columns may return as timedelta, datetime.time, or string
+            in_time_dt = None
+            if in_time_raw:
+                if isinstance(in_time_raw, timedelta):
+                    # Convert timedelta to time (total_seconds -> hours, minutes)
+                    total_secs = int(in_time_raw.total_seconds())
+                    hours = total_secs // 3600
+                    minutes = (total_secs % 3600) // 60
+                    in_time_obj = time(hours % 24, minutes)
+                    in_time_dt = datetime.combine(entry_date, in_time_obj)
+                elif isinstance(in_time_raw, time):
+                    in_time_dt = datetime.combine(entry_date, in_time_raw)
+                elif isinstance(in_time_raw, datetime):
+                    in_time_dt = in_time_raw
+                elif isinstance(in_time_raw, str):
+                    try:
+                        parts = in_time_raw.split(":")
+                        in_time_obj = time(int(parts[0]), int(parts[1]))
+                        in_time_dt = datetime.combine(entry_date, in_time_obj)
+                    except (ValueError, IndexError):
+                        pass
+            
+            # Validate out datetime > in datetime
             if in_time_dt and out_time_dt <= in_time_dt:
                 raise HTTPException(status_code=400, detail="Out date/time must be after In date/time")
             
-            # Update out date/time and change status to OUT (closed)
+            # Update out date/time only - do NOT change status_id
+            # The out_time field is used to restrict further editing in gate entry pages.
+            # Status remains in draft until downstream processes (e.g., Material Inspection QC complete) change it.
             db.execute(
                 text("""
                     UPDATE jute_mr
                     SET out_date = :out_date, out_time = :out_time,
-                        status_id = :status_out,
                         updated_by = :user_id, updated_date_time = :updated_dt
                     WHERE jute_mr_id = :id
                 """),
                 {
                     "out_date": out_date,
                     "out_time": out_time_dt,
-                    "status_out": GATE_ENTRY_STATUS_OUT,
                     "user_id": user_id,
                     "updated_dt": datetime.now(),
                     "id": jute_mr_id,
@@ -713,7 +744,7 @@ async def jute_gate_entry_update(
                 "success": True,
                 "message": "Vehicle marked as OUT successfully",
                 "jute_mr_id": jute_mr_id,
-                "status": "OUT",
+                "out_time": out_time_dt.strftime("%H:%M") if out_time_dt else None,
             }
         
         # Regular update (not OUT action)
