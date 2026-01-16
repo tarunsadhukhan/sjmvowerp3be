@@ -578,6 +578,11 @@ async def complete_material_inspection(
         moisture_insert_query = insert_jute_moisture_rdg_query()
         
         for item in body.line_items:
+            # Skip line items without a valid jute_mr_li_id (shouldn't happen in normal flow)
+            if not item.jute_mr_li_id or item.jute_mr_li_id <= 0:
+                logger.warning(f"Skipping line item with invalid jute_mr_li_id: {item.jute_mr_li_id}")
+                continue
+                
             # Determine average moisture from readings or provided value
             avg_moisture: Optional[float] = None
             if item.moisture_readings:
