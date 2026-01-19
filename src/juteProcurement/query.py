@@ -948,14 +948,14 @@ def insert_jute_mr_query():
     sql = """
         INSERT INTO jute_mr (
             branch_id, branch_mr_no, jute_mr_date,
-            jute_gate_entry_id, jute_gate_entry_date, 
+            jute_gate_entry_no, jute_gate_entry_date, 
             challan_no, challan_date,
             jute_supplier_id, party_id, mukam_id, unit_conversion,
             po_id, mr_weight, vehicle_no, status_id, remarks,
             updated_by, updated_date_time
         ) VALUES (
             :branch_id, :branch_mr_no, :jute_mr_date,
-            :jute_gate_entry_id, :jute_gate_entry_date,
+            :jute_gate_entry_no, :jute_gate_entry_date,
             :challan_no, :challan_date,
             :jute_supplier_id, :party_id, :mukam_id, :unit_conversion,
             :po_id, :mr_weight, :vehicle_no, :status_id, :remarks,
@@ -972,14 +972,14 @@ def insert_jute_mr_li_query():
     """
     sql = """
         INSERT INTO jute_mr_li (
-            jute_mr_id, jute_gate_entry_lineitem_id,
+            jute_mr_id, jute_po_li_id,
             challan_item_id, challan_quality_id, challan_quantity, challan_weight,
             actual_item_id, actual_quality, actual_qty, actual_weight,
             allowable_moisture, actual_moisture, accepted_weight,
             rate, warehouse_id, marka, crop_year,
             remarks, status, active, updated_date_time
         ) VALUES (
-            :jute_mr_id, :jute_gate_entry_lineitem_id,
+            :jute_mr_id, :jute_po_li_id,
             :challan_item_id, :challan_quality_id, :challan_quantity, :challan_weight,
             :actual_item_id, :actual_quality, :actual_qty, :actual_weight,
             :allowable_moisture, :actual_moisture, :accepted_weight,
@@ -1064,7 +1064,18 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
     Query to get jute MR list with pagination support.
     Joins with branch_mst for co_id filtering, jute_supplier_mst for supplier name,
     party_mst for party details, jute_po for PO number, and jute_mukam_mst for mukam.
+    
+    Only shows entries where out_time IS NOT NULL (vehicle has exited).
+    Entries without out_time continue to show in the gate entry table.
     """
+    # Get the formatted gate entry number SQL expression
+    gate_entry_num_expr = get_jute_gate_entry_number_sql_expression(
+        gate_entry_no_column="jm.jute_gate_entry_no",
+        entry_date_column="jm.jute_gate_entry_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+    
     search_clause = ""
     if search:
         search_clause = """
@@ -1104,10 +1115,17 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
             jm.status_id,
             COALESCE(sm.status_name, 'Open') AS status,
             jm.src_com_id,
+            jm.jute_gate_entry_no,
             jm.jute_gate_entry_date,
+            CASE 
+                WHEN jm.jute_gate_entry_no IS NOT NULL 
+                THEN {gate_entry_num_expr}
+                ELSE NULL 
+            END AS gate_entry_no,
             jm.updated_date_time
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
@@ -1115,6 +1133,7 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
         WHERE bm.co_id = :co_id
+        AND jm.out_time IS NOT NULL
         {search_clause}
         ORDER BY jm.jute_mr_date DESC, jm.jute_mr_id DESC
         LIMIT :limit OFFSET :offset
@@ -1125,6 +1144,7 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
 def get_jute_mr_table_count_query(co_id: int, search: str = None):
     """
     Query to get total count of jute MRs for pagination.
+    Only counts entries where out_time IS NOT NULL (vehicle has exited).
     """
     search_clause = ""
     if search:
@@ -1145,6 +1165,7 @@ def get_jute_mr_table_count_query(co_id: int, search: str = None):
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         WHERE bm.co_id = :co_id
+        AND jm.out_time IS NOT NULL
         {search_clause}
     """
     return text(sql)
@@ -1201,6 +1222,7 @@ def get_jute_mr_line_items_query():
     """
     Query to get line items for a jute MR.
     Includes warehouse_path using recursive CTE similar to item_group_path.
+    Joins with jute_po_li to get rate from PO if not set on MR line item.
     """
     sql = """
         WITH RECURSIVE warehouse_hierarchy AS (
@@ -1226,7 +1248,7 @@ def get_jute_mr_line_items_query():
         SELECT 
             jmli.jute_mr_li_id,
             jmli.jute_mr_id,
-            jmli.jute_gate_entry_lineitem_id,
+            jmli.jute_po_li_id,
             jmli.actual_item_id,
             im.item_name AS actual_item_name,
             jmli.actual_quality,
@@ -1238,7 +1260,8 @@ def get_jute_mr_line_items_query():
             jmli.claim_dust,
             jmli.shortage_kgs,
             jmli.accepted_weight,
-            jmli.rate,
+            COALESCE(NULLIF(jmli.rate, 0), jpli.rate) AS rate,
+            jpli.rate AS po_rate,
             jmli.claim_rate,
             jmli.claim_quality,
             jmli.water_damage_amount,
@@ -1252,6 +1275,7 @@ def get_jute_mr_line_items_query():
         LEFT JOIN item_mst im ON im.item_id = jmli.actual_item_id
         LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jmli.actual_quality
         LEFT JOIN warehouse_hierarchy wh ON wh.warehouse_id = jmli.warehouse_id
+        LEFT JOIN jute_po_li jpli ON jpli.jute_po_li_id = jmli.jute_po_li_id
         WHERE jmli.jute_mr_id = :mr_id
         AND (jmli.active = 1 OR jmli.active IS NULL)
         ORDER BY jmli.jute_mr_li_id

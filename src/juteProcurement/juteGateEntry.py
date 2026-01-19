@@ -862,6 +862,24 @@ async def jute_gate_entry_update(
             update_fields.append("remarks = :remarks")
             update_params["remarks"] = payload.remarks
         
+        # Handle out_date and out_time for regular SAVE (not just OUT action)
+        if payload.out_date is not None:
+            update_fields.append("out_date = :out_date")
+            update_params["out_date"] = payload.out_date
+        
+        if payload.out_time is not None:
+            try:
+                time_parts = payload.out_time.split(":")
+                out_date = payload.out_date or existing.out_date or date.today()
+                out_time_dt = datetime.combine(
+                    out_date,
+                    time(int(time_parts[0]), int(time_parts[1]))
+                )
+                update_fields.append("out_time = :out_time")
+                update_params["out_time"] = out_time_dt
+            except (ValueError, IndexError):
+                pass
+        
         update_fields.append("updated_by = :user_id")
         update_fields.append("updated_date_time = :updated_dt")
         

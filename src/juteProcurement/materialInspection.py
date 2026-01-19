@@ -366,7 +366,7 @@ async def get_mr_line_item(
         line_item = {
             "jute_mr_li_id": mr_li.jute_mr_li_id,
             "jute_mr_id": mr_li.jute_mr_id,
-            "jute_gate_entry_lineitem_id": mr_li.jute_gate_entry_lineitem_id,
+            "jute_po_li_id": mr_li.jute_po_li_id,
             "challan_item_id": mr_li.challan_item_id,
             "challan_quality_id": mr_li.challan_quality_id,
             "challan_quantity": mr_li.challan_quantity,
