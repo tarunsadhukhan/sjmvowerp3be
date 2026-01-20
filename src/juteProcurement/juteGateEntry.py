@@ -409,9 +409,9 @@ class JuteGateEntryCreate(BaseModel):
     driver_name: str
     transporter: str
     po_id: Optional[int] = None
-    jute_uom: str  # LOOSE or BALE
-    mukam_id: int
-    jute_supplier_id: int
+    jute_uom: Optional[str] = None  # LOOSE or BALE
+    mukam_id: Optional[int] = None
+    jute_supplier_id: Optional[int] = None
     party_id: Optional[int] = None
     gross_weight: float
     tare_weight: float
@@ -420,7 +420,7 @@ class JuteGateEntryCreate(BaseModel):
     vehicle_type_id: Optional[int] = None
     marketing_slip: Optional[int] = None  # 1 if checked, 0 if not
     remarks: Optional[str] = None
-    line_items: List[JuteGateEntryLineItemCreate]
+    line_items: Optional[List[JuteGateEntryLineItemCreate]] = None
 
 
 class JuteGateEntryUpdate(BaseModel):
@@ -589,7 +589,7 @@ async def jute_gate_entry_create(
         
         # Create line items (if any provided)
         total_actual_weight = 0.0
-        for li in payload.line_items:
+        for li in (payload.line_items or []):
             mr_line_item = JuteMrLi(
                 jute_mr_id=jute_mr.jute_mr_id,
                 jute_po_li_id=li.jute_po_li_id,
