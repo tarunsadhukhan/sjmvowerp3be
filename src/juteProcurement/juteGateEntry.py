@@ -720,24 +720,50 @@ async def jute_gate_entry_update(
             if in_time_dt and out_time_dt <= in_time_dt:
                 raise HTTPException(status_code=400, detail="Out date/time must be after In date/time")
             
-            # Update out date/time only - do NOT change status_id
-            # The out_time field is used to restrict further editing in gate entry pages.
-            # Status remains in draft until downstream processes (e.g., Material Inspection QC complete) change it.
-            db.execute(
-                text("""
-                    UPDATE jute_mr
-                    SET out_date = :out_date, out_time = :out_time,
-                        updated_by = :user_id, updated_date_time = :updated_dt
-                    WHERE jute_mr_id = :id
-                """),
-                {
-                    "out_date": out_date,
-                    "out_time": out_time_dt,
-                    "user_id": user_id,
-                    "updated_dt": datetime.now(),
-                    "id": jute_mr_id,
-                }
-            )
+            # Build dynamic update for OUT action - include all weight fields that may be provided
+            out_update_fields = ["out_date = :out_date", "out_time = :out_time"]
+            out_update_params = {
+                "out_date": out_date,
+                "out_time": out_time_dt,
+                "user_id": user_id,
+                "updated_dt": datetime.now(),
+                "id": jute_mr_id,
+            }
+            
+            # Include weight fields if provided in payload
+            if payload.gross_weight is not None:
+                out_update_fields.append("gross_weight = :gross_weight")
+                out_update_params["gross_weight"] = payload.gross_weight
+            
+            if payload.tare_weight is not None:
+                out_update_fields.append("tare_weight = :tare_weight")
+                out_update_params["tare_weight"] = payload.tare_weight
+            
+            if payload.net_weight is not None:
+                out_update_fields.append("net_weight = :net_weight")
+                out_update_params["net_weight"] = payload.net_weight
+            
+            if payload.variable_shortage is not None:
+                out_update_fields.append("variable_shortage = :variable_shortage")
+                out_update_params["variable_shortage"] = payload.variable_shortage
+            
+            if payload.challan_weight is not None:
+                out_update_fields.append("challan_weight = :challan_weight")
+                out_update_params["challan_weight"] = payload.challan_weight
+            
+            # Calculate actual_weight if net_weight and variable_shortage are provided
+            if payload.net_weight is not None:
+                actual_weight = payload.net_weight - (payload.variable_shortage or 0)
+                out_update_fields.append("actual_weight = :actual_weight")
+                out_update_params["actual_weight"] = actual_weight
+            
+            out_update_fields.append("updated_by = :user_id")
+            out_update_fields.append("updated_date_time = :updated_dt")
+            
+            # Update out date/time and weight fields
+            # Note: status_id is NOT changed here - it remains in draft until QC complete
+            out_update_sql = f"UPDATE jute_mr SET {', '.join(out_update_fields)} WHERE jute_mr_id = :id"
+            db.execute(text(out_update_sql), out_update_params)
             db.commit()
             
             return {

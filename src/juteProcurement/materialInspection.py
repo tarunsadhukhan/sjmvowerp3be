@@ -52,6 +52,12 @@ class MoistureReading(BaseModel):
 class MRLineItemCreate(BaseModel):
     """Model for updating a jute_mr_li record with QC data."""
     jute_mr_li_id: int  # Line item ID from jute_mr_li table
+    jute_po_li_id: Optional[int] = None  # Reference to PO line item
+    # Challan data (from supplier)
+    challan_item_id: Optional[int] = None
+    challan_quality_id: Optional[int] = None
+    challan_quantity: Optional[float] = None
+    challan_weight: Optional[float] = None
     # Actual data (received/QC verified)
     actual_item_id: Optional[int] = None
     actual_quality_id: Optional[int] = None
@@ -73,9 +79,29 @@ class MRLineItemCreate(BaseModel):
 class MaterialInspectionCompleteRequest(BaseModel):
     """Request model for completing quality check on a jute MR."""
     jute_mr_id: int  # Now uses jute_mr_id instead of gate_entry_id
-    # MR-level data
-    net_weight: Optional[float] = None
+    # Header-level data
+    branch_id: Optional[int] = None
+    jute_gate_entry_date: Optional[str] = None
+    in_time: Optional[str] = None
+    out_date: Optional[str] = None
+    out_time: Optional[str] = None
+    challan_no: Optional[str] = None
+    challan_date: Optional[str] = None
+    challan_weight: Optional[float] = None
+    vehicle_no: Optional[str] = None
+    vehicle_type_id: Optional[int] = None
+    driver_name: Optional[str] = None
+    transporter: Optional[str] = None
+    po_id: Optional[int] = None
+    jute_uom: Optional[str] = None
+    mukam_id: Optional[int] = None
+    jute_supplier_id: Optional[int] = None
+    party_id: Optional[int] = None
+    gross_weight: Optional[float] = None
     tare_weight: Optional[float] = None
+    net_weight: Optional[float] = None
+    variable_shortage: Optional[float] = None
+    marketing_slip: Optional[int] = None
     remarks: Optional[str] = None
     # Line items with QC data
     line_items: List[MRLineItemCreate] = []
@@ -558,12 +584,71 @@ async def complete_material_inspection(
         mr_updates = []
         mr_params = {"jute_mr_id": jute_mr_id, "updated_by": user_id, "updated_date_time": now}
         
-        if body.net_weight is not None:
-            mr_updates.append("net_weight = :net_weight")
-            mr_params["net_weight"] = body.net_weight
+        # All header fields that can be updated during QC Complete
+        if body.branch_id is not None:
+            mr_updates.append("branch_id = :branch_id")
+            mr_params["branch_id"] = body.branch_id
+        if body.jute_gate_entry_date is not None:
+            mr_updates.append("jute_gate_entry_date = :jute_gate_entry_date")
+            mr_params["jute_gate_entry_date"] = body.jute_gate_entry_date
+        if body.in_time is not None:
+            mr_updates.append("in_time = :in_time")
+            mr_params["in_time"] = body.in_time
+        if body.out_date is not None:
+            mr_updates.append("out_date = :out_date")
+            mr_params["out_date"] = body.out_date
+        if body.out_time is not None:
+            mr_updates.append("out_time = :out_time")
+            mr_params["out_time"] = body.out_time
+        if body.challan_no is not None:
+            mr_updates.append("challan_no = :challan_no")
+            mr_params["challan_no"] = body.challan_no
+        if body.challan_date is not None:
+            mr_updates.append("challan_date = :challan_date")
+            mr_params["challan_date"] = body.challan_date
+        if body.challan_weight is not None:
+            mr_updates.append("challan_weight = :challan_weight")
+            mr_params["challan_weight"] = body.challan_weight
+        if body.vehicle_no is not None:
+            mr_updates.append("vehicle_no = :vehicle_no")
+            mr_params["vehicle_no"] = body.vehicle_no
+        # Note: vehicle_type_id column doesn't exist in jute_mr table, skipping
+        if body.driver_name is not None:
+            mr_updates.append("driver_name = :driver_name")
+            mr_params["driver_name"] = body.driver_name
+        if body.transporter is not None:
+            mr_updates.append("transporter = :transporter")
+            mr_params["transporter"] = body.transporter
+        if body.po_id is not None:
+            mr_updates.append("po_id = :po_id")
+            mr_params["po_id"] = body.po_id
+        if body.jute_uom is not None:
+            mr_updates.append("unit_conversion = :jute_uom")
+            mr_params["jute_uom"] = body.jute_uom
+        if body.mukam_id is not None:
+            mr_updates.append("mukam_id = :mukam_id")
+            mr_params["mukam_id"] = body.mukam_id
+        if body.jute_supplier_id is not None:
+            mr_updates.append("jute_supplier_id = :jute_supplier_id")
+            mr_params["jute_supplier_id"] = body.jute_supplier_id
+        if body.party_id is not None:
+            mr_updates.append("party_id = :party_id")
+            mr_params["party_id"] = body.party_id
+        if body.gross_weight is not None:
+            mr_updates.append("gross_weight = :gross_weight")
+            mr_params["gross_weight"] = body.gross_weight
         if body.tare_weight is not None:
             mr_updates.append("tare_weight = :tare_weight")
             mr_params["tare_weight"] = body.tare_weight
+        if body.net_weight is not None:
+            mr_updates.append("net_weight = :net_weight")
+            mr_params["net_weight"] = body.net_weight
+        if body.variable_shortage is not None:
+            mr_updates.append("variable_shortage = :variable_shortage")
+            mr_params["variable_shortage"] = body.variable_shortage
+        if body.marketing_slip is not None:
+            mr_updates.append("marketing_slip = :marketing_slip")
+            mr_params["marketing_slip"] = body.marketing_slip
         if body.remarks is not None:
             mr_updates.append("remarks = :remarks")
             mr_params["remarks"] = body.remarks
@@ -578,11 +663,6 @@ async def complete_material_inspection(
         moisture_insert_query = insert_jute_moisture_rdg_query()
         
         for item in body.line_items:
-            # Skip line items without a valid jute_mr_li_id (shouldn't happen in normal flow)
-            if not item.jute_mr_li_id or item.jute_mr_li_id <= 0:
-                logger.warning(f"Skipping line item with invalid jute_mr_li_id: {item.jute_mr_li_id}")
-                continue
-                
             # Determine average moisture from readings or provided value
             avg_moisture: Optional[float] = None
             if item.moisture_readings:
@@ -615,53 +695,118 @@ async def complete_material_inspection(
                 deduction_percentage = avg_moisture - allowable_moisture
                 accepted_weight = actual_weight - (actual_weight * deduction_percentage / 100.0)
 
-            # Update the existing jute_mr_li record
-            update_li_sql = text("""
-                UPDATE jute_mr_li
-                SET actual_item_id = COALESCE(:actual_item_id, actual_item_id),
-                    actual_jute_quality_id = COALESCE(:actual_quality_id, actual_jute_quality_id),
-                    actual_quantity = COALESCE(:actual_qty, actual_quantity),
-                    actual_weight = COALESCE(:actual_weight, actual_weight),
-                    allowable_moisture = COALESCE(:allowable_moisture, allowable_moisture),
-                    actual_moisture = COALESCE(:actual_moisture, actual_moisture),
-                    accepted_weight = :accepted_weight,
-                    rate = COALESCE(:rate, rate),
-                    warehouse_id = COALESCE(:warehouse_id, warehouse_id),
-                    marka = COALESCE(:marka, marka),
-                    crop_year = COALESCE(:crop_year, crop_year),
-                    remarks = COALESCE(:remarks, remarks),
-                    updated_date_time = :updated_date_time
-                WHERE jute_mr_li_id = :jute_mr_li_id
-            """)
-            
-            db.execute(update_li_sql, {
-                "jute_mr_li_id": item.jute_mr_li_id,
-                "actual_item_id": item.actual_item_id,
-                "actual_quality_id": item.actual_quality_id,
-                "actual_qty": item.actual_qty,
-                "actual_weight": item.actual_weight,
-                "allowable_moisture": item.allowable_moisture,
-                "actual_moisture": actual_moisture_str,
-                "accepted_weight": accepted_weight,
-                "rate": item.rate,
-                "warehouse_id": item.warehouse_id,
-                "marka": item.marka,
-                "crop_year": item.crop_year,
-                "remarks": item.remarks,
-                "updated_date_time": now,
-            })
+            # Check if this is a new line item (jute_mr_li_id = 0 or None) or existing
+            if not item.jute_mr_li_id or item.jute_mr_li_id <= 0:
+                # INSERT new line item
+                insert_li_sql = text("""
+                    INSERT INTO jute_mr_li (
+                        jute_mr_id, jute_po_li_id,
+                        challan_item_id, challan_quality_id, challan_quantity, challan_weight,
+                        actual_item_id, actual_quality, actual_qty, actual_weight,
+                        allowable_moisture, actual_moisture, accepted_weight,
+                        rate, warehouse_id, marka, crop_year, remarks,
+                        active, updated_date_time
+                    ) VALUES (
+                        :jute_mr_id, :jute_po_li_id,
+                        :challan_item_id, :challan_quality_id, :challan_quantity, :challan_weight,
+                        :actual_item_id, :actual_quality_id, :actual_qty, :actual_weight,
+                        :allowable_moisture, :actual_moisture, :accepted_weight,
+                        :rate, :warehouse_id, :marka, :crop_year, :remarks,
+                        1, :updated_date_time
+                    )
+                """)
+                
+                result = db.execute(insert_li_sql, {
+                    "jute_mr_id": jute_mr_id,
+                    "jute_po_li_id": item.jute_po_li_id,
+                    "challan_item_id": item.challan_item_id,
+                    "challan_quality_id": item.challan_quality_id,
+                    "challan_quantity": item.challan_quantity,
+                    "challan_weight": item.challan_weight,
+                    "actual_item_id": item.actual_item_id,
+                    "actual_quality_id": item.actual_quality_id,
+                    "actual_qty": item.actual_qty,
+                    "actual_weight": item.actual_weight,
+                    "allowable_moisture": item.allowable_moisture,
+                    "actual_moisture": actual_moisture_str,
+                    "accepted_weight": accepted_weight,
+                    "rate": item.rate,
+                    "warehouse_id": item.warehouse_id,
+                    "marka": item.marka,
+                    "crop_year": item.crop_year,
+                    "remarks": item.remarks,
+                    "updated_date_time": now,
+                })
+                
+                # Get the newly inserted ID for moisture readings
+                new_li_id = result.lastrowid
+                
+                # Insert moisture readings for new line item
+                if item.moisture_readings and new_li_id:
+                    for reading in item.moisture_readings:
+                        db.execute(moisture_insert_query, {
+                            "jute_mr_li_id": new_li_id,
+                            "moisture_percentage": reading.moisture_percentage,
+                        })
+            else:
+                # UPDATE existing line item (including challan fields)
+                # Note: actual_quality column stores the quality ID (not actual_jute_quality_id)
+                update_li_sql = text("""
+                    UPDATE jute_mr_li
+                    SET jute_po_li_id = COALESCE(:jute_po_li_id, jute_po_li_id),
+                        challan_item_id = COALESCE(:challan_item_id, challan_item_id),
+                        challan_quality_id = COALESCE(:challan_quality_id, challan_quality_id),
+                        challan_quantity = COALESCE(:challan_quantity, challan_quantity),
+                        challan_weight = COALESCE(:challan_weight, challan_weight),
+                        actual_item_id = COALESCE(:actual_item_id, actual_item_id),
+                        actual_quality = COALESCE(:actual_quality_id, actual_quality),
+                        actual_qty = COALESCE(:actual_qty, actual_qty),
+                        actual_weight = COALESCE(:actual_weight, actual_weight),
+                        allowable_moisture = COALESCE(:allowable_moisture, allowable_moisture),
+                        actual_moisture = COALESCE(:actual_moisture, actual_moisture),
+                        accepted_weight = :accepted_weight,
+                        rate = COALESCE(:rate, rate),
+                        warehouse_id = COALESCE(:warehouse_id, warehouse_id),
+                        marka = COALESCE(:marka, marka),
+                        crop_year = COALESCE(:crop_year, crop_year),
+                        remarks = COALESCE(:remarks, remarks),
+                        updated_date_time = :updated_date_time
+                    WHERE jute_mr_li_id = :jute_mr_li_id
+                """)
+                
+                db.execute(update_li_sql, {
+                    "jute_mr_li_id": item.jute_mr_li_id,
+                    "jute_po_li_id": item.jute_po_li_id,
+                    "challan_item_id": item.challan_item_id,
+                    "challan_quality_id": item.challan_quality_id,
+                    "challan_quantity": item.challan_quantity,
+                    "challan_weight": item.challan_weight,
+                    "actual_item_id": item.actual_item_id,
+                    "actual_quality_id": item.actual_quality_id,
+                    "actual_qty": item.actual_qty,
+                    "actual_weight": item.actual_weight,
+                    "allowable_moisture": item.allowable_moisture,
+                    "actual_moisture": actual_moisture_str,
+                    "accepted_weight": accepted_weight,
+                    "rate": item.rate,
+                    "warehouse_id": item.warehouse_id,
+                    "marka": item.marka,
+                    "crop_year": item.crop_year,
+                    "remarks": item.remarks,
+                    "updated_date_time": now,
+                })
 
-            # Delete existing moisture readings and insert new ones
-            if item.moisture_readings:
-                db.execute(
-                    text("DELETE FROM jute_moisture_rdg WHERE jute_mr_li_id = :jute_mr_li_id"),
-                    {"jute_mr_li_id": item.jute_mr_li_id}
-                )
-                for reading in item.moisture_readings:
-                    db.execute(moisture_insert_query, {
-                        "jute_mr_li_id": item.jute_mr_li_id,
-                        "moisture_percentage": reading.moisture_percentage,
-                    })
+                # Delete existing moisture readings and insert new ones
+                if item.moisture_readings:
+                    db.execute(
+                        text("DELETE FROM jute_moisture_rdg WHERE jute_mr_li_id = :jute_mr_li_id"),
+                        {"jute_mr_li_id": item.jute_mr_li_id}
+                    )
+                    for reading in item.moisture_readings:
+                        db.execute(moisture_insert_query, {
+                            "jute_mr_li_id": item.jute_mr_li_id,
+                            "moisture_percentage": reading.moisture_percentage,
+                        })
 
         # Mark jute_mr as QC complete
         complete_query = update_material_inspection_qc_complete()

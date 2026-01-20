@@ -55,6 +55,7 @@ class MRLineItemUpdate(BaseModel):
 class MRUpdateRequest(BaseModel):
     """Request model for updating MR header and line items."""
     mr_weight: Optional[float] = None
+    party_branch_id: Optional[int] = None
     remarks: Optional[str] = None
     src_com_id: Optional[int] = None
     line_items: List[MRLineItemUpdate] = []
@@ -215,6 +216,58 @@ async def get_warehouse_options(
         raise
     except Exception as e:
         logger.exception("Error fetching warehouse options")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_party_branches")
+async def get_party_branches(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get party branches for a specific party.
+    Returns party branches with address info for the dropdown.
+    Used in MR edit to select party branch (mandatory field).
+    
+    Query params:
+    - party_id: Party ID (required)
+    """
+    try:
+        q_party_id = request.query_params.get("party_id")
+        if not q_party_id:
+            raise HTTPException(status_code=400, detail="party_id is required")
+        
+        try:
+            party_id = int(q_party_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid party_id")
+
+        query = text("""
+            SELECT 
+                pbm.party_mst_branch_id,
+                pbm.party_id,
+                pbm.address,
+                pbm.gst_no,
+                pm.supp_name AS party_name,
+                CONCAT(COALESCE(pm.supp_name, ''), ' - ', COALESCE(pbm.address, '')) AS display
+            FROM party_branch_mst pbm
+            LEFT JOIN party_mst pm ON pm.party_id = pbm.party_id
+            WHERE pbm.party_id = :party_id
+                AND pbm.active = 1
+            ORDER BY pbm.address
+        """)
+        result = db.execute(query, {"party_id": party_id}).fetchall()
+        branches = [dict(r._mapping) for r in result]
+
+        return {
+            "branches": branches,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching party branches")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -390,6 +443,7 @@ async def update_jute_mr(
         update_header_query = text("""
             UPDATE jute_mr
             SET mr_weight = :mr_weight,
+                party_branch_id = :party_branch_id,
                 remarks = :remarks,
                 src_com_id = :src_com_id,
                 updated_by = :updated_by,
@@ -400,6 +454,7 @@ async def update_jute_mr(
         db.execute(update_header_query, {
             "mr_id": mr_id,
             "mr_weight": mr_weight,
+            "party_branch_id": body.party_branch_id,
             "remarks": body.remarks,
             "src_com_id": body.src_com_id,
             "updated_by": user_id,

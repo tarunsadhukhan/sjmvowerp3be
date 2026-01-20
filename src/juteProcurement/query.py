@@ -36,7 +36,6 @@ def get_jute_po_table_query(co_id: int, search: str = None):
             {po_num_expr} AS po_num,
             jp.po_date,
             jp.party_id,
-            jspm_latest.party_id AS party_id_from_map,
             pm.supp_name AS party_name,
             jp.supplier_id,
             jsm.supplier_name,
@@ -59,17 +58,7 @@ def get_jute_po_table_query(co_id: int, search: str = None):
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_lorry_mst jlm ON jlm.jute_lorry_type_id = jp.vehicle_type_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jp.supplier_id
-        LEFT JOIN (
-            SELECT jspm1.jute_supplier_id, jspm1.party_id
-            FROM jute_supp_party_map jspm1
-            INNER JOIN (
-                SELECT jute_supplier_id, MAX(updated_date_time) as max_date
-                FROM jute_supp_party_map
-                GROUP BY jute_supplier_id
-            ) jspm2 ON jspm1.jute_supplier_id = jspm2.jute_supplier_id 
-                   AND jspm1.updated_date_time = jspm2.max_date
-        ) jspm_latest ON jspm_latest.jute_supplier_id = jp.supplier_id
-        LEFT JOIN party_mst pm ON pm.party_id = jspm_latest.party_id
+        LEFT JOIN party_mst pm ON pm.party_id = jp.party_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jp.jute_mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jp.status_id
         WHERE bm.co_id = :co_id
@@ -1174,6 +1163,7 @@ def get_jute_mr_table_count_query(co_id: int, search: str = None):
 def get_jute_mr_by_id_query():
     """
     Query to get a single jute MR by ID with all header details.
+    Includes actual_weight from gate entry and party branch info from party_branch_mst.
     """
     sql = """
         SELECT 
@@ -1187,7 +1177,7 @@ def get_jute_mr_by_id_query():
             jm.party_id,
             pm.supp_name AS party_name,
             jm.party_branch_id,
-            pb.branch_name AS party_branch_name,
+            CONCAT(COALESCE(pm.supp_name, ''), ' - ', COALESCE(pbm.address, '')) AS party_branch_name,
             jm.po_id,
             jp.po_no,
             jp.po_date,
@@ -1197,6 +1187,7 @@ def get_jute_mr_by_id_query():
             jmm.mukam_name AS mukam,
             jm.vehicle_no,
             jm.unit_conversion,
+            jm.actual_weight,
             jm.mr_weight,
             jm.remarks,
             jm.status_id,
@@ -1209,7 +1200,7 @@ def get_jute_mr_by_id_query():
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
-        LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
+        LEFT JOIN party_branch_mst pbm ON pbm.party_mst_branch_id = jm.party_branch_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
