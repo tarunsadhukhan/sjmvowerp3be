@@ -116,6 +116,7 @@ class JuteMr(Base):
     # Bill pass details
     bill_pass_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     bill_pass_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    bill_pass_complete: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     
     # Financial amounts
     total_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
@@ -171,6 +172,7 @@ class JuteMrLi(Base):
     actual_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     actual_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
+    actual_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     
     # UOM (LOOSE/BALE)
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
