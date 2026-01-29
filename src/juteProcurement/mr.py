@@ -675,6 +675,175 @@ def get_next_mr_no_for_fy(db: Session, branch_id: int, mr_date: date) -> int:
     return result[0] if result else 1
 
 
+def get_next_bill_pass_no_for_fy(db: Session, branch_id: int, bill_pass_date: date) -> int:
+    """
+    Get the next Bill Pass number for the given branch and financial year.
+    
+    Bill Pass numbering is per branch per financial year.
+    Financial year: April 1 to March 31.
+    
+    Args:
+        db: Database session
+        branch_id: Branch ID
+        bill_pass_date: Bill Pass date to determine the financial year
+    
+    Returns:
+        Next Bill Pass number (1-based)
+    """
+    # Build the financial year SQL expression for bill_pass_date
+    fy_expr = get_financial_year_sql_expression("bill_pass_date")
+    
+    # Determine the current financial year from bill_pass_date
+    if bill_pass_date.month >= 4:  # April onwards
+        fy_start_year = bill_pass_date.year
+    else:  # January to March
+        fy_start_year = bill_pass_date.year - 1
+    
+    fy_string = f"{fy_start_year % 100:02d}-{(fy_start_year + 1) % 100:02d}"
+    
+    query = text(f"""
+        SELECT COALESCE(MAX(bill_pass_no), 0) + 1 AS next_no
+        FROM jute_mr
+        WHERE branch_id = :branch_id
+          AND bill_pass_date IS NOT NULL
+          AND {fy_expr} = :fy_string
+    """)
+    
+    result = db.execute(query, {"branch_id": branch_id, "fy_string": fy_string}).fetchone()
+    return result[0] if result else 1
+
+
+# =============================================================================
+# TDS CALCULATION HELPERS
+# =============================================================================
+
+# TDS threshold: Rs. 50 lacs (50,00,000)
+TDS_THRESHOLD = 5000000.0
+
+# TDS rate: 0.1% (0.001)
+TDS_RATE = 0.001
+
+
+def get_cumulative_mr_value_for_party_in_fy(db: Session, party_id: str, mr_date: date, exclude_mr_id: int = None) -> float:
+    """
+    Get the cumulative value of all approved MRs for a party in the given financial year.
+    
+    Args:
+        db: Database session
+        party_id: Party ID
+        mr_date: MR date to determine the financial year
+        exclude_mr_id: MR ID to exclude from the calculation (for current MR)
+    
+    Returns:
+        Total value of approved MRs for the party in the FY (uses total_amount column)
+    """
+    # Build the financial year SQL expression for jute_mr_date
+    fy_expr = get_financial_year_sql_expression("jute_mr_date")
+    
+    # Determine the current financial year from mr_date
+    if mr_date.month >= 4:  # April onwards
+        fy_start_year = mr_date.year
+    else:  # January to March
+        fy_start_year = mr_date.year - 1
+    
+    fy_string = f"{fy_start_year % 100:02d}-{(fy_start_year + 1) % 100:02d}"
+    
+    exclude_clause = ""
+    params = {"party_id": party_id, "fy_string": fy_string, "status_approved": MR_STATUS_APPROVED}
+    
+    if exclude_mr_id:
+        exclude_clause = "AND jute_mr_id != :exclude_mr_id"
+        params["exclude_mr_id"] = exclude_mr_id
+    
+    query = text(f"""
+        SELECT COALESCE(SUM(COALESCE(total_amount, 0)), 0) AS cumulative_value
+        FROM jute_mr
+        WHERE party_id = :party_id
+          AND status_id = :status_approved
+          AND jute_mr_date IS NOT NULL
+          AND {fy_expr} = :fy_string
+          {exclude_clause}
+    """)
+    
+    result = db.execute(query, params).fetchone()
+    return float(result[0]) if result and result[0] else 0.0
+
+
+def calculate_mr_amounts(db: Session, mr_id: int) -> dict:
+    """
+    Calculate total_amount, claim_amount for an MR from its line items.
+    
+    Formulas:
+    - total_amount = sum of (accepted_weight / 100) * rate  [weight in KG, rate per quintal]
+    - claim_amount = sum of (accepted_weight / 100) * claim_rate
+    
+    Returns:
+        dict with total_amount and claim_amount
+    """
+    query = text("""
+        SELECT 
+            COALESCE(SUM((COALESCE(accepted_weight, actual_weight, 0) / 100) * COALESCE(rate, 0)), 0) AS total_amount,
+            COALESCE(SUM((COALESCE(accepted_weight, actual_weight, 0) / 100) * COALESCE(claim_rate, 0)), 0) AS claim_amount
+        FROM jute_mr_li
+        WHERE jute_mr_id = :mr_id
+          AND (active = 1 OR active IS NULL)
+    """)
+    
+    result = db.execute(query, {"mr_id": mr_id}).fetchone()
+    
+    if result:
+        return {
+            "total_amount": float(result[0]) if result[0] else 0.0,
+            "claim_amount": float(result[1]) if result[1] else 0.0,
+        }
+    return {"total_amount": 0.0, "claim_amount": 0.0}
+
+
+def calculate_tds_amount(cumulative_previous: float, current_total: float) -> tuple:
+    """
+    Calculate TDS amount based on cumulative MR value and threshold.
+    
+    TDS Logic:
+    - TDS is 0.1% of the net total
+    - TDS applies only if cumulative MR value for the party in FY exceeds Rs. 50 lacs
+    - If crossing threshold with current bill, TDS applies only on amount exceeding threshold
+    
+    Args:
+        cumulative_previous: Sum of all previous approved MRs for the party in FY
+        current_total: Total amount of the current MR
+    
+    Returns:
+        tuple: (tds_amount, tds_applicable_amount, is_tds_applicable)
+    """
+    cumulative_after = cumulative_previous + current_total
+    
+    # If cumulative (including current) is below threshold, no TDS
+    if cumulative_after <= TDS_THRESHOLD:
+        return (0.0, 0.0, False)
+    
+    # Calculate the amount on which TDS applies
+    if cumulative_previous >= TDS_THRESHOLD:
+        # Already crossed threshold - TDS on full current amount
+        tds_applicable_amount = current_total
+    else:
+        # Crossing threshold with this MR - TDS only on amount exceeding threshold
+        tds_applicable_amount = cumulative_after - TDS_THRESHOLD
+    
+    tds_amount = round(tds_applicable_amount * TDS_RATE, 2)
+    
+    return (tds_amount, tds_applicable_amount, True)
+
+
+def calculate_roundoff(amount: float) -> float:
+    """
+    Calculate roundoff to nearest rupee.
+    
+    Returns the roundoff adjustment (can be positive or negative).
+    """
+    rounded = round(amount)
+    return round(rounded - amount, 2)
+
+
 # NOTE: open_mr endpoint is commented out because MR already arrives in Open status
 # from the weighbridge system. There is no Draft → Open transition in this workflow.
 # The endpoint is preserved for reference in case the workflow changes in the future.
@@ -894,6 +1063,76 @@ async def approve_mr(
             update_fields.append("branch_mr_no = :branch_mr_no")
             update_params["branch_mr_no"] = new_branch_mr_no
 
+        # For final approval, also set bill_pass_date = mr_date and generate bill_pass_no
+        new_bill_pass_no = None
+        calculated_amounts = {}
+        if is_final_approval and parsed_mr_date:
+            # bill_pass_date = jute_mr_date (same date)
+            update_fields.append("bill_pass_date = :bill_pass_date")
+            update_params["bill_pass_date"] = parsed_mr_date
+            
+            # Generate bill_pass_no based on branch + financial year
+            new_bill_pass_no = get_next_bill_pass_no_for_fy(db, db_branch_id, parsed_mr_date)
+            update_fields.append("bill_pass_no = :bill_pass_no")
+            update_params["bill_pass_no"] = new_bill_pass_no
+            
+            # Calculate amounts from line items
+            mr_amounts = calculate_mr_amounts(db, mr_id)
+            total_amount = mr_amounts["total_amount"]
+            claim_amount = mr_amounts["claim_amount"]
+            
+            # Calculate TDS based on cumulative party MR value in FY
+            tds_amount = 0.0
+            tds_applicable_amount = 0.0
+            is_tds_applicable = False
+            cumulative_previous = 0.0
+            
+            if party_id:
+                cumulative_previous = get_cumulative_mr_value_for_party_in_fy(
+                    db, party_id, parsed_mr_date, exclude_mr_id=mr_id
+                )
+                tds_amount, tds_applicable_amount, is_tds_applicable = calculate_tds_amount(
+                    cumulative_previous, total_amount
+                )
+            
+            # Calculate net total: total_amount - claim_amount
+            net_before_roundoff = total_amount - claim_amount
+            
+            # Calculate roundoff
+            roundoff = calculate_roundoff(net_before_roundoff)
+            
+            # Net total (amount column) = net_before_roundoff + roundoff
+            net_total = net_before_roundoff + roundoff
+            
+            # Store all calculated amounts
+            update_fields.append("total_amount = :total_amount")
+            update_params["total_amount"] = total_amount
+            
+            update_fields.append("claim_amount = :claim_amount")
+            update_params["claim_amount"] = claim_amount
+            
+            update_fields.append("roundoff = :roundoff")
+            update_params["roundoff"] = roundoff
+            
+            update_fields.append("net_total = :net_total")
+            update_params["net_total"] = net_total
+            
+            update_fields.append("tds_amount = :tds_amount")
+            update_params["tds_amount"] = tds_amount
+            
+            calculated_amounts = {
+                "total_amount": total_amount,
+                "claim_amount": claim_amount,
+                "roundoff": roundoff,
+                "net_total": net_total,
+                "tds_amount": tds_amount,
+                "tds_applicable_amount": tds_applicable_amount,
+                "is_tds_applicable": is_tds_applicable,
+                "cumulative_previous": cumulative_previous,
+                "cumulative_after": cumulative_previous + total_amount,
+                "tds_threshold": TDS_THRESHOLD,
+            }
+
         update_query = text(f"""
             UPDATE jute_mr
             SET {', '.join(update_fields)}
@@ -911,6 +1150,9 @@ async def approve_mr(
             "status_name": "Approved",
             "branch_mr_no": new_branch_mr_no,
             "jute_mr_date": str(parsed_mr_date) if parsed_mr_date else None,
+            "bill_pass_no": new_bill_pass_no,
+            "bill_pass_date": str(parsed_mr_date) if parsed_mr_date else None,
+            "calculated_amounts": calculated_amounts,
         }
 
     except HTTPException:
