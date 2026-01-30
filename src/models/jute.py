@@ -516,3 +516,58 @@ class JutePoLi(Base):
     jute_po: Mapped[Optional["JutePo"]] = relationship(
         "JutePo", back_populates="line_items"
     )
+
+
+# =============================================================================
+# JUTE YARN TYPE MASTER
+# =============================================================================
+
+class JuteYarnTypeMst(Base):
+    """Jute yarn type master table - stores yarn type information.
+    
+    Based on dev3 schema (2026-01-29).
+    """
+    __tablename__ = "jute_yarn_type_mst"
+
+    jute_yarn_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_yarn_type_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    yarn_items: Mapped[List["JuteYarnMst"]] = relationship(
+        "JuteYarnMst", back_populates="yarn_type"
+    )
+
+
+# =============================================================================
+# JUTE YARN MASTER
+# =============================================================================
+
+class JuteYarnMst(Base):
+    """Jute yarn master table - stores yarn information.
+    
+    Based on dev3 schema (2026-01-29).
+    """
+    __tablename__ = "jute_yarn_mst"
+
+    jute_yarn_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_yarn_count: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    jute_yarn_type_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("jute_yarn_type_mst.jute_yarn_type_id"), nullable=True, index=True
+    )
+    jute_yarn_remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    jute_yarn_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    yarn_type: Mapped[Optional["JuteYarnTypeMst"]] = relationship(
+        "JuteYarnTypeMst", back_populates="yarn_items"
+    )

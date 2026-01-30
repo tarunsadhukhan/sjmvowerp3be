@@ -37,6 +37,8 @@ from src.masters.castFactor import router as costFactor_router
 from src.masters.juteQuality import router as jute_quality_router
 from src.masters.juteSupplier import router as jute_supplier_router
 from src.masters.juteSupplierMap import router as jute_supplier_map_router
+from src.masters.yarnTypeMaster import router as yarn_type_router
+from src.masters.yarnMaster import router as yarn_master_router
 from src.juteProcurement.jutePO import router as jute_po_router
 from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
@@ -97,6 +99,8 @@ app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["mas
 app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
 app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=["masters-jute-supplier"])
 app.include_router(jute_supplier_map_router, prefix="/api/juteSupplierMap", tags=["masters-jute-supplier-map"])
+app.include_router(yarn_type_router, prefix="/api/yarnTypeMaster", tags=["masters-yarn-type"])
+app.include_router(yarn_master_router, prefix="/api/yarnMaster", tags=["masters-yarn"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
