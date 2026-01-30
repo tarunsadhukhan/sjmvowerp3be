@@ -27,6 +27,23 @@ class Base(DeclarativeBase):
 
 
 # =============================================================================
+# JUTE YARN TYPE MASTER
+# =============================================================================
+
+class JuteYarnTypeMst(Base):
+    """Jute yarn type master table - stores yarn type information."""
+    __tablename__ = "jute_yarn_type_mst"
+
+    jute_yarn_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    jute_yarn_type_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+
+
+# =============================================================================
 # JUTE QUALITY MASTER
 # =============================================================================
 
@@ -43,6 +60,52 @@ class JuteQualityMst(Base):
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
 
+
+# =============================================================================
+# YARN QUALITY MASTER
+# =============================================================================
+
+class YarnQualityMst(Base):
+    """Yarn quality master table - stores quality information for yarn products."""
+    __tablename__ = "yarn_quality_master"
+
+    yarn_quality_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quality_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    yarn_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    twist_per_inch: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    std_count: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    std_doff: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    std_wt_doff: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_eff: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
+    
+
+
+# =============================================================================
+# MACHINE SPG DETAILS
+# =============================================================================
+
+class MachineSpgDetails(Base):
+    """Machine SPG details table - stores spindle details for spinning machines."""
+    __tablename__ = "mechine_spg_details"
+
+    mc_spg_det_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mechine_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    frame_type: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default=None)
+    speed: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    no_of_spindle: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    weight_per_spindle: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    is_active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )
 
 # =============================================================================
 # JUTE MR (MATERIAL RECEIPT) MODELS
