@@ -1510,3 +1510,88 @@ def get_jute_bill_pass_by_id_query():
         AND bm.co_id = :co_id
     """
     return text(sql)
+
+
+# =============================================================================
+# JUTE ISSUE QUERIES
+# =============================================================================
+
+def get_jute_issue_table_query(co_id: int, search: str = None):
+    """
+    Query to get jute issue list with pagination support.
+    Joins with branch_mst for co_id filtering, yarn_type_mst for yarn details,
+    jute_quality_mst for quality info, and status_mst for status name.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(ji.jute_issue_id AS CHAR) LIKE :search
+                OR jytm.jute_yarn_type_name LIKE :search
+                OR jqm.jute_quality LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT 
+            ji.jute_issue_id,
+            ji.branch_id,
+            bm.branch_name,
+            ji.issue_date,
+            ji.status_id,
+            COALESCE(sm.status_name, 'Draft') AS status,
+            ji.issue_value,
+            ji.jute_quality_id,
+            jqm.jute_quality,
+            ji.jute_mr_li_id,
+            mrli.jute_mr_id,
+            mr.branch_mr_no AS mr_no,
+            ji.yarn_type_id,
+            jytm.jute_yarn_type_name AS yarn_type_name,
+            ji.quantity,
+            ji.weight,
+            ji.unit_conversion,
+            ji.updated_by AS created_by,
+            ji.update_date_time
+        FROM jute_issue ji
+        INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+        LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ji.jute_quality_id
+        LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
+        LEFT JOIN jute_mr mr ON mr.jute_mr_id = mrli.jute_mr_id
+        LEFT JOIN jute_yarn_type_mst jytm ON jytm.jute_yarn_type_id = ji.yarn_type_id
+        WHERE bm.co_id = :co_id
+        {search_clause}
+        ORDER BY ji.issue_date DESC, ji.jute_issue_id DESC
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_jute_issue_table_count_query(co_id: int, search: str = None):
+    """
+    Query to get total count of jute issues for pagination.
+    Uses branch_mst to filter by co_id since jute_issue doesn't have co_id column directly.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(ji.jute_issue_id AS CHAR) LIKE :search
+                OR jytm.jute_yarn_type_name LIKE :search
+                OR jqm.jute_quality LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(DISTINCT ji.jute_issue_id) AS total
+        FROM jute_issue ji
+        INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ji.jute_quality_id
+        LEFT JOIN jute_yarn_type_mst jytm ON jytm.jute_yarn_type_id = ji.yarn_type_id
+        WHERE bm.co_id = :co_id
+        {search_clause}
+    """
+    return text(sql)
