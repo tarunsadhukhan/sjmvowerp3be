@@ -33,6 +33,12 @@ from src.procurement.query import (
 	get_max_indent_no_for_branch_fy,
 	get_all_approved_indents_query,
 )
+from src.procurement.constants import (
+	INDENT_TYPES,
+	VALID_INDENT_TYPE_VALUES,
+	normalize_indent_type,
+	is_valid_indent_type,
+)
 from datetime import datetime
 from typing import Optional
 
@@ -378,24 +384,9 @@ async def get_indent_by_id(
 		detail_results = db.execute(detail_query, detail_params).fetchall()
 		details = [dict(r._mapping) for r in detail_results]
 
-		# Get indent_type - it's stored as string ("regular", "open", "bom") in indent_type_id column
+		# Get indent_type - use normalize_indent_type from constants for consistency
 		indent_type_id = header.get("indent_type_id")
-		if indent_type_id is None:
-			indent_type_str = ""
-		elif isinstance(indent_type_id, str):
-			# Already a string, use it directly
-			indent_type_str = indent_type_id
-		else:
-			# If it's numeric, map it (though it shouldn't be based on create logic)
-			indent_type_map = {
-				1: "regular",
-				2: "open",
-				3: "bom",
-				"1": "regular",
-				"2": "open",
-				"3": "bom",
-			}
-			indent_type_str = indent_type_map.get(indent_type_id, str(indent_type_id))
+		indent_type_str = normalize_indent_type(indent_type_id)
 
 		# Format dates - frontend expects YYYY-MM-DD format
 		indent_date = header.get("indent_date")
@@ -555,6 +546,11 @@ async def create_indent(
 		indent_type = payload.get("indent_type")
 		if not indent_type:
 			raise HTTPException(status_code=400, detail="indent_type is required")
+		if not is_valid_indent_type(indent_type):
+			raise HTTPException(
+				status_code=400, 
+				detail=f"Invalid indent_type '{indent_type}'. Valid values: {VALID_INDENT_TYPE_VALUES}"
+			)
 
 		date_str = payload.get("date")
 		if not date_str:
@@ -710,6 +706,11 @@ async def update_indent(
 		indent_type = payload.get("indent_type")
 		if not indent_type:
 			raise HTTPException(status_code=400, detail="indent_type is required")
+		if not is_valid_indent_type(indent_type):
+			raise HTTPException(
+				status_code=400, 
+				detail=f"Invalid indent_type '{indent_type}'. Valid values: {VALID_INDENT_TYPE_VALUES}"
+			)
 
 		date_str = payload.get("date")
 		if not date_str:

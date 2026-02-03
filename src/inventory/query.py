@@ -250,51 +250,167 @@ def get_available_inward_inventory_query():
     Get available inventory from inward details for issuing.
     Returns items with available qty (approved_qty - already issued qty).
     Used for selecting SR line items when creating an issue.
+    Uses the vw_approved_inward_qty view for approved inwards.
+    
+    The inward_no is formatted as co_prefix/branch_prefix/GRN/financial_year/sequence_no
     """
     sql = """SELECT
-        pid.inward_dtl_id,
-        pid.inward_id,
-        pi.inward_no,
-        pi.inward_date,
-        pi.branch_id,
+        v.inward_dtl_id,
+        v.inward_id,
+        pi.inward_sequence_no,
+        CONCAT_WS('/',
+            NULLIF(cm.co_prefix, ''),
+            NULLIF(bm.branch_prefix, ''),
+            'GRN',
+            CASE
+                WHEN MONTH(v.inward_date) >= 4 THEN CONCAT(YEAR(v.inward_date), '-', YEAR(v.inward_date) + 1)
+                ELSE CONCAT(YEAR(v.inward_date) - 1, '-', YEAR(v.inward_date))
+            END,
+            pi.inward_sequence_no
+        ) AS inward_no,
+        v.inward_date,
+        v.branch_id,
         bm.branch_name,
-        pid.item_id,
+        v.item_id,
         im.item_name,
         im.item_code,
         igm.item_grp_id,
         igm.item_grp_name,
+        igm.item_grp_code,
         pid.item_make_id,
         imk.item_make_name,
-        pid.uom_id,
+        v.uom_id,
         um.uom_name,
-        pid.approved_qty,
-        pid.accepted_rate AS rate,
-        (pid.approved_qty - COALESCE(
-            (SELECT SUM(il.issue_qty) 
-             FROM issue_li il 
-             INNER JOIN issue_hdr ih ON ih.issue_id = il.issue_id 
-             WHERE il.inward_dtl_id = pid.inward_dtl_id 
-               AND ih.status_id NOT IN (4, 6)  -- Not Rejected, Not Cancelled
-               AND (ih.active = 1 OR ih.active IS NULL)
-            ), 0
-        )) AS available_qty,
+        v.approved_qty,
+        v.issue_qty,
+        v.balance_qty AS available_qty,
+        v.accepted_rate AS rate,
         pid.warehouse_id,
         wm.warehouse_name
-    FROM proc_inward_dtl AS pid
-    INNER JOIN proc_inward AS pi ON pi.inward_id = pid.inward_id
-    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
-    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    FROM vw_approved_inward_qty AS v
+    INNER JOIN proc_inward AS pi ON pi.inward_id = v.inward_id
+    INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
-    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = v.uom_id
     LEFT JOIN warehouse_mst AS wm ON wm.warehouse_id = pid.warehouse_id
-    WHERE pid.active = 1
-        AND pid.status_id = 3  -- Approved inwards only
-        AND pi.branch_id = :branch_id
-        AND (:item_id IS NULL OR pid.item_id = :item_id)
+    WHERE v.branch_id = :branch_id
+        AND v.balance_qty > 0
+        AND (:item_id IS NULL OR v.item_id = :item_id)
         AND (:item_grp_id IS NULL OR im.item_grp_id = :item_grp_id)
-    HAVING available_qty > 0
-    ORDER BY pi.inward_date ASC, pid.inward_dtl_id ASC;"""
+    ORDER BY v.inward_date ASC, v.inward_dtl_id ASC;"""
+    return text(sql)
+
+
+def get_searchable_inventory_list_query():
+    """
+    Get paginated searchable inventory list from approved inwards.
+    Supports search by item group code/name, item code/name, and inward number.
+    Used for the inventory search table in create issue page.
+    """
+    sql = """SELECT
+        v.inward_dtl_id,
+        v.inward_id,
+        pi.inward_sequence_no,
+        CONCAT_WS('/',
+            NULLIF(cm.co_prefix, ''),
+            NULLIF(bm.branch_prefix, ''),
+            'GRN',
+            CASE
+                WHEN MONTH(v.inward_date) >= 4 THEN CONCAT(YEAR(v.inward_date), '-', YEAR(v.inward_date) + 1)
+                ELSE CONCAT(YEAR(v.inward_date) - 1, '-', YEAR(v.inward_date))
+            END,
+            pi.inward_sequence_no
+        ) AS inward_no,
+        v.inward_date,
+        v.branch_id,
+        bm.branch_name,
+        v.item_id,
+        im.item_name,
+        im.item_code,
+        igm.item_grp_id,
+        igm.item_grp_name,
+        igm.item_grp_code,
+        pid.item_make_id,
+        imk.item_make_name,
+        v.uom_id,
+        um.uom_name,
+        v.approved_qty,
+        v.issue_qty,
+        v.balance_qty AS available_qty,
+        v.accepted_rate AS rate,
+        pid.warehouse_id,
+        wm.warehouse_name
+    FROM vw_approved_inward_qty AS v
+    INNER JOIN proc_inward AS pi ON pi.inward_id = v.inward_id
+    INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = v.uom_id
+    LEFT JOIN warehouse_mst AS wm ON wm.warehouse_id = pid.warehouse_id
+    WHERE v.branch_id = :branch_id
+        AND v.balance_qty > 0
+        AND (
+            :search_like IS NULL
+            OR im.item_code LIKE :search_like
+            OR im.item_name LIKE :search_like
+            OR igm.item_grp_code LIKE :search_like
+            OR igm.item_grp_name LIKE :search_like
+            OR pi.inward_sequence_no LIKE :search_like
+            OR CONCAT_WS('/',
+                NULLIF(cm.co_prefix, ''),
+                NULLIF(bm.branch_prefix, ''),
+                'GRN',
+                CASE
+                    WHEN MONTH(v.inward_date) >= 4 THEN CONCAT(YEAR(v.inward_date), '-', YEAR(v.inward_date) + 1)
+                    ELSE CONCAT(YEAR(v.inward_date) - 1, '-', YEAR(v.inward_date))
+                END,
+                pi.inward_sequence_no
+            ) LIKE :search_like
+        )
+    ORDER BY v.inward_date DESC, v.inward_dtl_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_searchable_inventory_count_query():
+    """
+    Get total count for searchable inventory list.
+    """
+    sql = """SELECT COUNT(1) AS total
+    FROM vw_approved_inward_qty AS v
+    INNER JOIN proc_inward AS pi ON pi.inward_id = v.inward_id
+    INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    WHERE v.branch_id = :branch_id
+        AND v.balance_qty > 0
+        AND (
+            :search_like IS NULL
+            OR im.item_code LIKE :search_like
+            OR im.item_name LIKE :search_like
+            OR igm.item_grp_code LIKE :search_like
+            OR igm.item_grp_name LIKE :search_like
+            OR pi.inward_sequence_no LIKE :search_like
+            OR CONCAT_WS('/',
+                NULLIF(cm.co_prefix, ''),
+                NULLIF(bm.branch_prefix, ''),
+                'GRN',
+                CASE
+                    WHEN MONTH(v.inward_date) >= 4 THEN CONCAT(YEAR(v.inward_date), '-', YEAR(v.inward_date) + 1)
+                    ELSE CONCAT(YEAR(v.inward_date) - 1, '-', YEAR(v.inward_date))
+                END,
+                pi.inward_sequence_no
+            ) LIKE :search_like
+        );"""
     return text(sql)
 
 
@@ -324,6 +440,29 @@ def get_machines_by_dept_query():
     FROM machine_mst AS m
     LEFT JOIN machine_type_mst AS mt ON mt.machine_type_id = m.machine_type_id
     WHERE m.dept_id = :dept_id
+        AND m.active = 1
+    ORDER BY m.machine_name;"""
+    return text(sql)
+
+
+def get_machines_by_branch_query():
+    """
+    Get all machines for a branch (across all departments).
+    Machines are linked to departments, and departments have branch_id.
+    Frontend will filter by selected department.
+    """
+    sql = """SELECT
+        m.machine_id,
+        m.machine_name,
+        m.dept_id,
+        dm.dept_desc AS dept_name,
+        m.machine_type_id,
+        mt.machine_type_name,
+        m.mech_code
+    FROM machine_mst AS m
+    LEFT JOIN machine_type_mst AS mt ON mt.machine_type_id = m.machine_type_id
+    LEFT JOIN dept_mst AS dm ON dm.dept_id = m.dept_id
+    WHERE dm.branch_id = :branch_id
         AND m.active = 1
     ORDER BY m.machine_name;"""
     return text(sql)

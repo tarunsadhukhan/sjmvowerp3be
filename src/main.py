@@ -34,6 +34,19 @@ from src.inventory.issue import router as issue_router
 from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
 from src.masters.castFactor import router as costFactor_router
+from src.masters.juteQuality import router as jute_quality_router
+from src.masters.juteSupplier import router as jute_supplier_router
+from src.masters.juteSupplierMap import router as jute_supplier_map_router
+from src.masters.yarnTypeMaster import router as yarn_type_router
+from src.masters.yarnMaster import router as yarn_master_router
+from src.masters.batchPlanMaster import router as batch_plan_master_router
+from src.juteProcurement.jutePO import router as jute_po_router
+from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
+from src.juteProcurement.materialInspection import router as jute_material_inspection_router
+from src.juteProcurement.mr import router as jute_mr_router
+from src.juteProcurement.juteAgentMap import router as jute_agent_map_router
+from src.juteProcurement.billPass import router as jute_bill_pass_router
+from src.juteProcurement.issue import router as jute_issue_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -85,6 +98,12 @@ app.include_router(project_router, prefix="/api/projectMaster", tags=["masters-p
 app.include_router(party_router, prefix="/api/partyMaster", tags=["masters-party"])
 app.include_router(warehouse_router, prefix="/api/warehouseMaster", tags=["masters-warehouse"])
 app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["masters-costFactor"])
+app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
+app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=["masters-jute-supplier"])
+app.include_router(jute_supplier_map_router, prefix="/api/juteSupplierMap", tags=["masters-jute-supplier-map"])
+app.include_router(yarn_type_router, prefix="/api/yarnTypeMaster", tags=["masters-yarn-type"])
+app.include_router(yarn_master_router, prefix="/api/yarnMaster", tags=["masters-yarn"])
+app.include_router(batch_plan_master_router, prefix="/api/batchPlanMaster", tags=["masters-batch-plan"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
@@ -93,6 +112,15 @@ app.include_router(material_inspection_router, prefix="/api/materialInspection",
 app.include_router(sr_router, prefix="/api/storesReceipt", tags=["procurement-stores-receipt"])
 app.include_router(drcr_note_router, prefix="/api/drcrNote", tags=["procurement-drcr-note"])
 app.include_router(billpass_router, prefix="/api/billPass", tags=["procurement-bill-pass"])
+
+# Jute Procurement routers
+app.include_router(jute_po_router, prefix="/api/jutePO", tags=["jute-procurement-po"])
+app.include_router(jute_gate_entry_router, prefix="/api/juteGateEntry", tags=["jute-procurement-gate-entry"])
+app.include_router(jute_material_inspection_router, prefix="/api/juteMaterialInspection", tags=["jute-procurement-material-inspection"])
+app.include_router(jute_mr_router, prefix="/api/juteMR", tags=["jute-procurement-mr"])
+app.include_router(jute_agent_map_router, prefix="/api/juteAgentMap", tags=["jute-procurement-agent-map"])
+app.include_router(jute_bill_pass_router, prefix="/api/juteBillPass", tags=["jute-procurement-bill-pass"])
+app.include_router(jute_issue_router, prefix="/api/juteIssue", tags=["jute-procurement-issue"])
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
