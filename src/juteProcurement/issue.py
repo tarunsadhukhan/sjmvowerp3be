@@ -403,7 +403,7 @@ async def get_max_issue_date(
     Used to set default date for new issues (max_date + 1).
     
     Query params:
-    - co_id: Company ID (required)
+    - co_id: Company ID (required for tenant resolution)
     - branch_id: Branch ID (required)
     """
     try:
@@ -415,16 +415,15 @@ async def get_max_issue_date(
         if not q_branch_id:
             raise HTTPException(status_code=400, detail="branch_id is required")
 
-        co_id = int(q_co_id)
         branch_id = int(q_branch_id)
 
         query = text("""
             SELECT MAX(issue_date) as max_date
             FROM jute_issue
-            WHERE co_id = :co_id AND branch_id = :branch_id
+            WHERE branch_id = :branch_id
         """)
         
-        result = db.execute(query, {"co_id": co_id, "branch_id": branch_id}).fetchone()
+        result = db.execute(query, {"branch_id": branch_id}).fetchone()
         max_date = result.max_date if result else None
 
         return {
