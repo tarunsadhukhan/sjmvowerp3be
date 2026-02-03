@@ -392,6 +392,51 @@ async def get_issues_by_date(
         raise HTTPException(status_code=500, detail=f"Error fetching issues: {str(e)}")
 
 
+@router.get("/get_max_issue_date")
+async def get_max_issue_date(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Get the maximum issue date for a branch.
+    Used to set default date for new issues (max_date + 1).
+    
+    Query params:
+    - co_id: Company ID (required for tenant resolution)
+    - branch_id: Branch ID (required)
+    """
+    try:
+        q_co_id = request.query_params.get("co_id")
+        q_branch_id = request.query_params.get("branch_id")
+
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        if not q_branch_id:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+
+        branch_id = int(q_branch_id)
+
+        query = text("""
+            SELECT MAX(issue_date) as max_date
+            FROM jute_issue
+            WHERE branch_id = :branch_id
+        """)
+        
+        result = db.execute(query, {"branch_id": branch_id}).fetchone()
+        max_date = result.max_date if result else None
+
+        return {
+            "max_date": max_date.isoformat() if max_date else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching max issue date: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching max issue date: {str(e)}")
+
+
 @router.post("/create_issue")
 async def create_issue(
     body: JuteIssueCreate,
