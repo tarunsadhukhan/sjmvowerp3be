@@ -312,30 +312,30 @@ async def update_jute_bill_pass(
             update_fields.append("payment_due_date = :payment_due_date")
             update_params["payment_due_date"] = body.payment_due_date if body.payment_due_date else None
 
-        # Add financial fields if provided
+        # Add financial fields if provided (round to 2 decimal places for currency precision)
         if body.total_amount is not None:
             update_fields.append("total_amount = :total_amount")
-            update_params["total_amount"] = body.total_amount
+            update_params["total_amount"] = round(body.total_amount, 2)
 
         if body.claim_amount is not None:
             update_fields.append("claim_amount = :claim_amount")
-            update_params["claim_amount"] = body.claim_amount
+            update_params["claim_amount"] = round(body.claim_amount, 2)
 
         if body.roundoff is not None:
             update_fields.append("roundoff = :roundoff")
-            update_params["roundoff"] = body.roundoff
+            update_params["roundoff"] = round(body.roundoff, 2)
 
         if body.net_total is not None:
             update_fields.append("net_total = :net_total")
-            update_params["net_total"] = body.net_total
+            update_params["net_total"] = round(body.net_total, 2)
 
         if body.tds_amount is not None:
             update_fields.append("tds_amount = :tds_amount")
-            update_params["tds_amount"] = body.tds_amount
+            update_params["tds_amount"] = round(body.tds_amount, 2)
 
         if body.frieght_paid is not None:
             update_fields.append("frieght_paid = :frieght_paid")
-            update_params["frieght_paid"] = body.frieght_paid
+            update_params["frieght_paid"] = round(body.frieght_paid, 2)
 
         # Add file upload fields if provided
         if body.invoice_upload is not None:
