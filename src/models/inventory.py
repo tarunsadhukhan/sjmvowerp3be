@@ -87,8 +87,48 @@ class IssueLi(Base):
     )
 
 
+class VwApprovedInwardQty(Base):
+    """
+    Read-only model for vw_approved_inward_qty view.
+    Shows approved inward quantities with issue and balance tracking.
+    Only includes inwards with sr_status = 3 (approved).
+    """
+    __tablename__ = "vw_approved_inward_qty"
+    __table_args__ = {"extend_existing": True}
+
+    # Primary key for the view
+    inward_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inward_id: Mapped[int] = mapped_column(Integer)
+    item_id: Mapped[int] = mapped_column(Integer)
+    approved_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    accepted_rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    inward_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sr_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    issue_qty: Mapped[float] = mapped_column(Double)  # COALESCE ensures non-null
+    balance_qty: Mapped[float] = mapped_column(Double)  # Calculated: approved_qty - issue_qty
+
+
+class VwItemBalanceQtyByBranch(Base):
+    """
+    Read-only model for vw_item_balance_qty_by_branch view.
+    Aggregates balance quantities by branch and item.
+    """
+    __tablename__ = "vw_item_balance_qty_by_branch"
+    __table_args__ = {"extend_existing": True}
+
+    # Composite primary key for the view
+    branch_id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(primary_key=True)
+    total_balance_qty: Mapped[float] = mapped_column()
+
+
 __all__ = [
     "Base",
     "IssueHdr",
     "IssueLi",
+    "VwApprovedInwardQty",
+    "VwItemBalanceQtyByBranch",
 ]

@@ -661,6 +661,35 @@ def get_supplier_branches(party_id: int):
     return text(sql)
 
 
+def get_all_supplier_branches_bulk(co_id: int = None):
+    """Get branch addresses for ALL active suppliers in a single query.
+    This avoids the N+1 query problem when fetching branches for many suppliers.
+    Results should be grouped by party_id in Python."""
+    sql = """SELECT 
+        pbm.party_mst_branch_id,
+        pbm.party_id,
+        pbm.address AS branch_address1,
+        pbm.address_additional AS branch_address2,
+        pbm.city_id,
+        cim.city_name,
+        cim.state_id,
+        sm.state AS state,
+        pbm.zip_code,
+        pbm.contact_person,
+        pbm.contact_no,
+        pbm.gst_no
+    FROM party_branch_mst pbm
+    INNER JOIN party_mst pm ON pm.party_id = pbm.party_id
+    LEFT JOIN city_mst cim ON cim.city_id = pbm.city_id
+    LEFT JOIN state_mst sm ON sm.state_id = cim.state_id
+    WHERE pbm.active = 1
+        AND pm.active = 1
+        AND FIND_IN_SET("1", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+        AND (:co_id IS NULL OR pm.co_id = :co_id)
+    ORDER BY pbm.party_id, pbm.party_mst_branch_id;"""
+    return text(sql)
+
+
 def get_company_branch_addresses(co_id: int = None, branch_id: int = None):
     """Get branch addresses for company branches with state information. If branch_id is provided, filter by that branch."""
     sql = """SELECT 
@@ -1049,7 +1078,7 @@ def get_po_additional_by_id_query():
         ppa.net_amount,
         ppa.remarks
     FROM proc_po_additional AS ppa
-    LEFT JOIN additional_charges_master AS acm ON acm.additional_charges_id = ppa.additional_charges_id
+    LEFT JOIN additional_charges_mst AS acm ON acm.additional_charges_id = ppa.additional_charges_id
     WHERE ppa.po_id = :po_id
     ORDER BY ppa.po_additional_id;"""
     return text(sql)
@@ -1734,6 +1763,8 @@ def get_inward_dtl_for_sr_query():
         pid.discount_value,
         pid.discount_amount,
         pid.remarks,
+        pid.warehouse_id,
+        wh.warehouse_name,
         ppd.rate AS po_rate,
         COALESCE(im.tax_percentage, 0) AS tax_percentage
     FROM proc_inward_dtl AS pid
@@ -1743,6 +1774,7 @@ def get_inward_dtl_for_sr_query():
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN warehouse_mst AS wh ON wh.warehouse_id = pid.warehouse_id
     WHERE pid.inward_id = :inward_id
         AND pid.active = 1
     ORDER BY pid.inward_dtl_id;"""
@@ -1750,7 +1782,7 @@ def get_inward_dtl_for_sr_query():
 
 
 def update_inward_dtl_sr():
-    """Update inward detail with SR rate and discount values."""
+    """Update inward detail with SR rate, discount, and warehouse values."""
     sql = """UPDATE proc_inward_dtl
     SET 
         accepted_rate = :accepted_rate,
@@ -1758,6 +1790,7 @@ def update_inward_dtl_sr():
         discount_mode = :discount_mode,
         discount_value = :discount_value,
         discount_amount = :discount_amount,
+        warehouse_id = :warehouse_id,
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
     WHERE inward_dtl_id = :inward_dtl_id;"""
@@ -2281,3 +2314,87 @@ def get_bill_pass_drcr_note_lines_query():
     ORDER BY dnd.debit_credit_note_id, dnd.debit_credit_note_dtl_id;
     """
     return text(sql)
+
+
+# =============================================================================
+# ADDITIONAL CHARGES QUERIES
+# =============================================================================
+
+def get_additional_charges_mst_list():
+    """Get list of all additional charges from master table."""
+    sql = """
+    SELECT 
+        additional_charges_id,
+        additional_charges_name,
+        default_value
+    FROM additional_charges_mst
+    ORDER BY additional_charges_name;
+    """
+    return text(sql)
+
+
+def get_inward_additional_charges_query():
+    """Get additional charges for an inward/SR by inward_id."""
+    sql = """
+    SELECT 
+        pia.proc_inward_additional_id,
+        pia.inward_id,
+        pia.additional_charges_id,
+        acm.additional_charges_name,
+        acm.default_value AS default_tax_pct,
+        pia.qty,
+        pia.rate,
+        pia.net_amount
+    FROM proc_inward_additional pia
+    LEFT JOIN additional_charges_mst acm 
+        ON acm.additional_charges_id = pia.additional_charges_id
+    WHERE pia.inward_id = :inward_id
+    ORDER BY pia.proc_inward_additional_id;
+    """
+    return text(sql)
+
+
+def insert_inward_additional():
+    """Insert a new additional charge for inward/SR."""
+    sql = """
+    INSERT INTO proc_inward_additional (
+        inward_id,
+        additional_charges_id,
+        qty,
+        rate,
+        net_amount
+    ) VALUES (
+        :inward_id,
+        :additional_charges_id,
+        :qty,
+        :rate,
+        :net_amount
+    );
+    """
+    return text(sql)
+
+
+def update_inward_additional():
+    """Update an existing additional charge for inward/SR."""
+    sql = """
+    UPDATE proc_inward_additional
+    SET 
+        qty = :qty,
+        rate = :rate,
+        net_amount = :net_amount
+    WHERE proc_inward_additional_id = :proc_inward_additional_id;
+    """
+    return text(sql)
+
+
+def delete_inward_additional():
+    """Delete an additional charge for inward/SR."""
+    sql = """
+    DELETE FROM proc_inward_additional
+    WHERE proc_inward_additional_id = :proc_inward_additional_id;
+    """
+    return text(sql)
+
+
+# Note: GST for additional charges is not supported in current schema
+# proc_gst table does not have a link to proc_inward_additional

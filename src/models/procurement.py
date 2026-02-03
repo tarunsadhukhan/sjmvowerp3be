@@ -252,12 +252,27 @@ class ProcInward(Base):
     details: Mapped[List["ProcInwardDtl"]] = relationship(
         "ProcInwardDtl", back_populates="inward"
     )
+    additional_charges: Mapped[List["ProcInwardAdditional"]] = relationship(
+        "ProcInwardAdditional", back_populates="inward"
+    )
     tds_details: Mapped[List["ProcTds"]] = relationship(
         "ProcTds", back_populates="inward"
     )
     drcr_notes: Mapped[List["DrcrNote"]] = relationship(
         "DrcrNote", back_populates="inward"
     )
+
+
+class ProcInwardAdditional(Base):
+    """Additional charges for inward/SR documents (freight, insurance, etc.)."""
+    __tablename__ = "proc_inward_additional"
+
+    proc_inward_additional_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    inward_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    additional_charges_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    net_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
 
 
 class ProcInwardDtl(Base):
@@ -725,6 +740,7 @@ __all__ = [
     # Inward
     "ProcInward",
     "ProcInwardDtl",
+    "ProcInwardAdditional",
     # PO
     "ProcPo",
     "ProcPoDtl",

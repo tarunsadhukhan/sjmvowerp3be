@@ -21,6 +21,11 @@ from src.procurement.query import (
     update_inward_sr,
     insert_drcr_note,
     insert_drcr_note_dtl,
+    get_additional_charges_mst_list,
+    get_inward_additional_charges_query,
+    insert_inward_additional,
+    update_inward_additional,
+    delete_inward_additional,
 )
 from src.procurement.inward import format_inward_no
 
@@ -53,6 +58,24 @@ class SRLineItemUpdate(BaseModel):
     discount_mode: Optional[int] = None
     discount_value: Optional[float] = None
     discount_amount: Optional[float] = None
+    warehouse_id: Optional[int] = None
+
+
+class SRAdditionalChargeUpdate(BaseModel):
+    """Model for an additional charge in SR."""
+    inward_additional_id: Optional[int] = None  # None for new charges
+    additional_charges_id: int
+    qty: int = 1
+    rate: float
+    net_amount: Optional[float] = None
+    remarks: Optional[str] = None
+    # Optional tax fields
+    apply_tax: bool = False
+    tax_pct: Optional[float] = None
+    igst_amount: Optional[float] = None
+    sgst_amount: Optional[float] = None
+    cgst_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
 
 
 class SRSaveRequest(BaseModel):
@@ -65,6 +88,7 @@ class SRSaveRequest(BaseModel):
     invoice_date: Optional[str] = None
     invoice_amount: Optional[float] = None
     line_items: List[SRLineItemUpdate]
+    additional_charges: Optional[List[SRAdditionalChargeUpdate]] = None
 
 
 class SRApproveRequest(BaseModel):
@@ -253,6 +277,29 @@ async def get_sr_by_inward_id(
                 item["accepted_rate"] = item.get("po_rate") or item.get("rate") or 0
             line_items.append(item)
         
+        # Get warehouses for the branch
+        branch_id = header.get("branch_id")
+        logger.info(f"Fetching warehouses for branch_id: {branch_id}")
+        warehouse_query = text("""
+            SELECT warehouse_id, warehouse_name, branch_id
+            FROM warehouse_mst
+            WHERE (branch_id IS NULL OR branch_id = :branch_id)
+            ORDER BY warehouse_name
+        """)
+        warehouse_result = db.execute(warehouse_query, {"branch_id": branch_id}).fetchall()
+        warehouses = [dict(row._mapping) for row in warehouse_result]
+        logger.info(f"Found {len(warehouses)} warehouses: {warehouses}")
+        
+        # Get additional charges master list
+        addl_charges_mst_query = get_additional_charges_mst_list()
+        addl_charges_mst_result = db.execute(addl_charges_mst_query).fetchall()
+        additional_charges_options = [dict(row._mapping) for row in addl_charges_mst_result]
+        
+        # Get existing additional charges for this inward
+        addl_charges_query = get_inward_additional_charges_query()
+        addl_charges_result = db.execute(addl_charges_query, {"inward_id": inward_id}).fetchall()
+        additional_charges = [dict(row._mapping) for row in addl_charges_result]
+        
         return {
             "header": {
                 "inward_id": header.get("inward_id"),
@@ -298,6 +345,9 @@ async def get_sr_by_inward_id(
                 "net_amount": header.get("net_amount"),
             },
             "line_items": line_items,
+            "warehouses": warehouses,
+            "additional_charges_options": additional_charges_options,
+            "additional_charges": additional_charges,
         }
     except HTTPException:
         raise
@@ -340,6 +390,9 @@ async def save_sr(
             gross_amount += amount or 0
             net_amount += (amount or 0) - (line.discount_amount or 0)
             
+            # Log the warehouse_id being saved
+            logger.info(f"Saving line item {line.inward_dtl_id}: warehouse_id={line.warehouse_id}, accepted_rate={line.accepted_rate}")
+            
             update_query = update_inward_dtl_sr()
             db.execute(update_query, {
                 "inward_dtl_id": line.inward_dtl_id,
@@ -348,9 +401,60 @@ async def save_sr(
                 "discount_mode": line.discount_mode,
                 "discount_value": line.discount_value,
                 "discount_amount": line.discount_amount,
+                "warehouse_id": line.warehouse_id,
                 "updated_by": user_id,
                 "updated_date_time": now,
             })
+        
+        # Handle additional charges
+        additional_charges_total = 0.0
+        if request_body.additional_charges:
+            # Get existing additional charge IDs to track which to keep
+            existing_query = text("""
+                SELECT proc_inward_additional_id FROM proc_inward_additional 
+                WHERE inward_id = :inward_id
+            """)
+            existing_result = db.execute(existing_query, {"inward_id": request_body.inward_id}).fetchall()
+            existing_ids = {row.proc_inward_additional_id for row in existing_result}
+            updated_ids = set()
+            
+            for charge in request_body.additional_charges:
+                charge_net_amount = charge.net_amount or (charge.qty * charge.rate)
+                additional_charges_total += charge_net_amount
+                
+                if charge.inward_additional_id and charge.inward_additional_id in existing_ids:
+                    # Update existing charge
+                    update_addl_query = update_inward_additional()
+                    db.execute(update_addl_query, {
+                        "proc_inward_additional_id": charge.inward_additional_id,
+                        "qty": charge.qty,
+                        "rate": charge.rate,
+                        "net_amount": charge_net_amount,
+                    })
+                    updated_ids.add(charge.inward_additional_id)
+                else:
+                    # Insert new charge
+                    insert_addl_query = insert_inward_additional()
+                    db.execute(insert_addl_query, {
+                        "inward_id": request_body.inward_id,
+                        "additional_charges_id": charge.additional_charges_id,
+                        "qty": charge.qty,
+                        "rate": charge.rate,
+                        "net_amount": charge_net_amount,
+                    })
+                    # Note: GST for additional charges not supported in current schema
+            
+            # Delete charges that were removed
+            ids_to_delete = existing_ids - updated_ids
+            for del_id in ids_to_delete:
+                delete_addl_query = delete_inward_additional()
+                db.execute(delete_addl_query, {
+                    "proc_inward_additional_id": del_id,
+                })
+        
+        # Update totals to include additional charges
+        gross_amount += additional_charges_total
+        net_amount += additional_charges_total
         
         # Get branch_id for SR number generation
         branch_query = text("SELECT branch_id FROM proc_inward WHERE inward_id = :id")
