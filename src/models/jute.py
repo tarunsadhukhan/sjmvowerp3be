@@ -659,3 +659,71 @@ class JuteIssueDev3(Base):
     # Audit fields
     updated_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     update_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+# =============================================================================
+# JUTE STOCK OUTSTANDING VIEW
+# =============================================================================
+
+class VwJuteStockOutstanding(Base):
+    """View model for vw_jute_stock_outstanding - shows available MR stock for issue.
+
+    This view calculates balance quantity and weight by subtracting issued amounts
+    from the original MR line item amounts.
+
+    Note: The view does NOT include item_id or jute_mr_id columns.
+    To get these, join with jute_mr_li table on jute_mr_li_id.
+
+    Actual View Definition (from database):
+    SELECT
+        jml.jute_mr_li_id,
+        jm.branch_id,
+        jm.branch_mr_no,
+        jml.actual_quality,
+        jml.actual_qty,
+        jml.actual_weight,
+        jm.unit_conversion,
+        (jml.actual_qty - IFNULL(iss.issqty, 0)) AS bal_qty,
+        ROUND((jml.actual_weight - IFNULL(iss.isswt, 0)), 3) AS bal_weight,
+        jml.accepted_weight,
+        ROUND((jml.accepted_weight / jml.actual_qty) * IFNULL(iss.issqty, 0), 3) AS bal_accepted_weight,
+        jml.rate,
+        jml.actual_rate
+    FROM jute_mr jm
+    JOIN jute_mr_li jml ON jm.jute_mr_id = jml.jute_mr_id
+    LEFT JOIN (
+        SELECT ji.jute_mr_li_id, SUM(ji.quantity) AS issqty, SUM(ji.weight) AS isswt
+        FROM jute_issue ji
+        GROUP BY ji.jute_mr_li_id
+    ) iss ON iss.jute_mr_li_id = jml.jute_mr_li_id
+    """
+    __tablename__ = "vw_jute_stock_outstanding"
+
+    # Primary key for ORM (view doesn't have PK, but ORM needs one)
+    jute_mr_li_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Branch and MR info
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    branch_mr_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Quality
+    actual_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Original quantities from MR
+    actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Unit conversion (e.g., "LOOSE", "BALE")
+    unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Calculated balance (available for issue) - note: column names use underscore
+    bal_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bal_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Weight fields
+    accepted_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bal_accepted_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Rate fields
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
