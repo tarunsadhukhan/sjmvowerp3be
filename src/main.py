@@ -37,6 +37,8 @@ from src.masters.castFactor import router as costFactor_router
 from src.masters.juteQuality import router as jute_quality_router
 from src.masters.juteSupplier import router as jute_supplier_router
 from src.masters.juteSupplierMap import router as jute_supplier_map_router
+from src.masters.yarnQuality import router as yarn_quality_router
+from src.masters.machineSpgDetails import router as machine_spg_details_router
 from src.masters.yarnTypeMaster import router as yarn_type_router
 from src.masters.yarnMaster import router as yarn_master_router
 from src.masters.batchPlanMaster import router as batch_plan_master_router
@@ -101,6 +103,9 @@ app.include_router(costFactor_router, prefix="/api/costFactorMaster", tags=["mas
 app.include_router(jute_quality_router, prefix="/api/juteQualityMaster", tags=["masters-jute-quality"])
 app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=["masters-jute-supplier"])
 app.include_router(jute_supplier_map_router, prefix="/api/juteSupplierMap", tags=["masters-jute-supplier-map"])
+app.include_router(yarn_quality_router, prefix="/api/yarnQualityMaster", tags=["masters-yarn-quality"])
+app.include_router(machine_spg_details_router, prefix="/api/machineSpgDetailsMaster", tags=["masters-machine-spg-details"])
+
 app.include_router(yarn_type_router, prefix="/api/yarnTypeMaster", tags=["masters-yarn-type"])
 app.include_router(yarn_master_router, prefix="/api/yarnMaster", tags=["masters-yarn"])
 app.include_router(batch_plan_master_router, prefix="/api/batchPlanMaster", tags=["masters-batch-plan"])

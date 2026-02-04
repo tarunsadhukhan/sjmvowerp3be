@@ -74,7 +74,7 @@ async def compmenuitems(
 
     try:
         with Session(default_engine) as session:
-            print("🔄 Starting database session")
+            print("🔄 Starting database sessionkk")
             
             # Use raw SQL query with user_id from token
             query = text("""
@@ -92,10 +92,10 @@ async def compmenuitems(
                 ORDER BY order_by
             """)
             
-            print(f"🔍 Executing query for user_id: {user_id}")
+            print(f"🔍 Executing query for user_id: {query} {user_id}")
             result = session.execute(query, {"user_id": user_id})
             menu_items = result.fetchall()
-            print(f"📋 Retrieved {len(menu_items)} menu items")
+            print(f"📋 Retrieved {(menu_items)} menu itemjjs")
             
             if not menu_items:
                 print("ℹ️ No menu items found, returning empty data")
