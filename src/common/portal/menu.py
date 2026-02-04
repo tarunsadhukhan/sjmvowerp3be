@@ -147,7 +147,7 @@ async def compmenuitems(
         menu_query = get_portal_user_menus(user_id=user_id)
         menu_rows = tenant_session.execute(menu_query, {"user_id": user_id}).fetchall()
         logger.debug("Found %s menu entries for user %s", len(menu_rows), user_id)
-
+        #print(f"Found menus {menu_rows} menu entries for user {user_id}")
         companies: Dict[int, Dict[str, Dict[int, Dict[str, Dict[int, dict]]]]] = {}
         permissions_map: Dict[str, int] = {}
         parent_lookup = {
@@ -158,6 +158,10 @@ async def compmenuitems(
 
         for row in menu_rows:
             menu_id = row.menu_id
+            if menu_id==724:
+                print("here 724")
+            if menu_id==723:
+                print("here 723")
             if menu_id is None:
                 continue
 
@@ -243,7 +247,6 @@ async def compmenuitems(
                 path="/",
                 domain=cookie_cfg["domain"],
             )
-
         return result
     except HTTPException:
         raise

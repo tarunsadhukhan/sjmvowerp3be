@@ -423,7 +423,7 @@ def dept_master_validate_table(co_id: int = None, branch_ids: int = None):
     branch_filter = "AND dm.branch_id IN :branch_ids"
 
   sql = sql.format(branch_filter=branch_filter)
-  print("Generated SQL:", sql )
+  #print("Generated SQL:", sql )
   query = text(sql)
 
   # if branch_ids will be used, attach an expanding bind so SQLAlchemy expands the Python list
@@ -493,20 +493,25 @@ def get_subdept_master(co_id: int = None, branch_ids: list = None):
 
 
 
-def get_branch_list(branch_ids: list = None):
+def get_branch_list(co_id: int = None, branch_ids: list = None):
     sql = """
     SELECT bm.branch_id, bm.branch_name
     FROM branch_mst bm
     WHERE 1=1
-      {branch_filter}
     """
-    branch_filter = ""
+    filters = []
+    print('branch ids', branch_ids,'co id', co_id)
+    if co_id:
+        filters.append("AND bm.co_id = :co_id")
     if branch_ids:
-        branch_filter = "AND bm.branch_id IN :branch_ids"
-    sql = sql.format(branch_filter=branch_filter)
+        filters.append("AND bm.branch_id IN :branch_ids")
+    
+    sql += "\n  ".join(filters)
     q = text(sql)
+    
     if branch_ids:
         q = q.bindparams(bindparam("branch_ids", expanding=True))
+    
     return q
 
 def get_dept_list( branch_ids: list = None):
@@ -595,6 +600,7 @@ def get_mechine_master(co_id: int = None, branch_ids: list = None):
   )
     {branch_filter}
   """
+ 
   branch_filter = ""
 
   if branch_ids:
@@ -610,7 +616,7 @@ def get_mechine_master(co_id: int = None, branch_ids: list = None):
     query = query.bindparams(bindparam("branch_ids", expanding=True))
 
   return query
-
+  
 
 def get_mechine_master_view(co_id: int = None, mechine_master_id = None):
     sql = """
@@ -906,6 +912,99 @@ left join dept_mst dm on dm.dept_id = cfm.dept_id
 left join branch_mst bm on bm.branch_id = cfm.branch_id
 where cfm.cost_factor_id = :cost_factor_id;
 """
+    query = text(sql)
+    return query
+
+
+# =============================================================================
+# YARN QUALITY MASTER QUERIES
+# =============================================================================
+
+def get_yarn_type_list(co_id: int = None):
+    """Get list of yarn types from jute_yarn_type_mst."""
+    sql = """
+    SELECT 
+      jyt.jute_yarn_type_id,
+      jyt.jute_yarn_type_name
+    FROM jute_yarn_type_mst jyt
+    WHERE jyt.co_id = :co_id
+    ORDER BY jyt.jute_yarn_type_name
+    """
+    query = text(sql)
+    return query
+
+
+def get_yarn_quality_list(co_id: int = None, branch_id: int = None):
+    """Get list of yarn qualities with related information."""
+    sql = """
+       SELECT
+      yq.yarn_quality_id,
+      yq.quality_code,
+      yq.yarn_type_id,
+      jyt.jute_yarn_type_name as yarn_type_name,
+      yq.twist_per_inch,
+      yq.std_count,
+      yq.std_doff,
+      yq.std_wt_doff,
+      yq.target_eff,
+      yq.is_active,
+      yq.branch_id,
+      bm.branch_name
+    FROM yarn_quality_master yq
+    LEFT JOIN jute_yarn_type_mst jyt ON yq.yarn_type_id = jyt.jute_yarn_type_id
+    LEFT JOIN branch_mst bm ON yq.branch_id = bm.branch_id
+    WHERE (:search IS NULL
+        OR yq.quality_code LIKE :search
+        OR jyt.jute_yarn_type_name LIKE :search)
+    {branch_filter}
+    ORDER BY yq.quality_code
+    """
+    branch_filter = ""
+    if branch_id:
+        branch_filter = "AND yq.branch_id = :branch_id"
+    
+    sql = sql.format(branch_filter=branch_filter)
+    query = text(sql)
+    #print(query)
+    return query
+
+
+def get_yarn_quality_by_id(yarn_quality_id: int):
+    """Get yarn quality details by ID."""
+    sql = """
+    SELECT 
+      yq.yarn_quality_id,
+      yq.quality_code,
+      yq.yarn_type_id,
+      jyt.jute_yarn_type_name as yarn_type_name,
+      yq.twist_per_inch,
+      yq.std_count,
+      yq.std_doff,
+      yq.std_wt_doff,
+      yq.target_eff,
+      yq.is_active,
+      yq.branch_id,
+      bm.branch_name,
+      yq.updated_by,
+      yq.updated_date_time
+    FROM yarn_quality_master yq
+    LEFT JOIN jute_yarn_type_mst jyt ON yq.yarn_type_id = jyt.jute_yarn_type_id
+    LEFT JOIN branch_mst bm ON yq.branch_id = bm.branch_id
+    WHERE yq.yarn_quality_id = :yarn_quality_id    """
+    query = text(sql)
+    return query
+
+
+def check_yarn_quality_code_exists(branch_id: int, quality_code: str, exclude_id: int = None):
+    """Check if yarn quality code already exists for a company."""
+    sql = """
+    SELECT COUNT(*) as count
+    FROM yarn_quality_master
+    WHERE branch_id = :branch_id AND quality_code = :quality_code
+    """
+    if exclude_id:
+        sql += " AND yarn_quality_id != :exclude_id"
+    
     query = text(sql)
     return query
 
