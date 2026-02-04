@@ -1,4 +1,3 @@
-from common.companyAdmin import branch
 from fastapi import Depends, Request, HTTPException, APIRouter, Response, Cookie
 import os
 from sqlalchemy.orm import Session
