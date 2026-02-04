@@ -28,23 +28,6 @@ class Base(DeclarativeBase):
 
 
 # =============================================================================
-# JUTE YARN TYPE MASTER
-# =============================================================================
-
-class JuteYarnTypeMst(Base):
-    """Jute yarn type master table - stores yarn type information."""
-    __tablename__ = "jute_yarn_type_mst"
-
-    jute_yarn_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    jute_yarn_type_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    updated_date_time: Mapped[datetime] = mapped_column(
-        DateTime, nullable=True, server_default=func.current_timestamp()
-    )
-
-
-# =============================================================================
 # JUTE QUALITY MASTER
 # =============================================================================
 
