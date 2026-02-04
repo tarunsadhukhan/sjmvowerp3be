@@ -1246,6 +1246,7 @@ def get_jute_mr_line_items_query():
             jqm.jute_quality AS actual_quality_name,
             jmli.actual_qty,
             jmli.actual_weight,
+            jmli.actual_rate,
             jmli.allowable_moisture,
             jmli.actual_moisture,
             jmli.claim_dust,
@@ -1382,6 +1383,7 @@ def get_jute_bill_pass_table_query(co_id: int, search: str = None):
             jm.jute_mr_id,
             jm.bill_pass_no,
             jm.bill_pass_date,
+            jm.bill_pass_complete,
             jm.branch_mr_no AS mr_no,
             jm.jute_mr_date AS mr_date,
             jm.branch_id,
@@ -1455,8 +1457,11 @@ def get_jute_bill_pass_by_id_query():
             jm.jute_mr_id,
             jm.bill_pass_no,
             jm.bill_pass_date,
+            jm.bill_pass_complete,
             jm.branch_mr_no AS mr_no,
             jm.jute_mr_date AS mr_date,
+            jm.jute_gate_entry_no AS gate_entry_no,
+            jm.jute_gate_entry_date AS gate_entry_date,
             jm.branch_id,
             bm.branch_name,
             jm.jute_supplier_id,
@@ -1467,12 +1472,14 @@ def get_jute_bill_pass_by_id_query():
             pb.branch_name AS party_branch_name,
             jm.po_id,
             jp.po_no,
+            jp.po_date,
             jm.challan_no,
             jm.challan_date,
             jm.mukam_id,
             jmm.mukam_name AS mukam,
             jm.vehicle_no,
             jm.mr_weight,
+            jm.frieght_paid AS freight_charges,
             jm.invoice_no,
             jm.invoice_date,
             jm.invoice_amount,
@@ -1501,5 +1508,229 @@ def get_jute_bill_pass_by_id_query():
         WHERE jm.jute_mr_id = :jute_mr_id 
         AND jm.status_id = 3
         AND bm.co_id = :co_id
+    """
+    return text(sql)
+
+
+# =============================================================================
+# JUTE ISSUE QUERIES
+# =============================================================================
+
+def get_jute_issue_table_query(co_id: int, search: str = None):
+    """
+    Query to get jute issue list aggregated by date and branch with pagination support.
+    Groups by issue_date and branch_id, sums weights, and determines aggregated status:
+    - 'Approved' if all items for that date/branch are approved (status_id = 3)
+    - 'Partial Approved' if some items are approved
+    - 'Draft' if no items are approved
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(ji.issue_date AS CHAR) LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT 
+            ji.issue_date,
+            ji.branch_id,
+            bm.branch_name,
+            SUM(COALESCE(ji.weight, 0)) AS total_weight,
+            COUNT(*) AS total_entries,
+            SUM(CASE WHEN ji.status_id = 3 THEN 1 ELSE 0 END) AS approved_count,
+            CASE 
+                WHEN COUNT(*) = SUM(CASE WHEN ji.status_id = 3 THEN 1 ELSE 0 END) AND COUNT(*) > 0 THEN 'Approved'
+                WHEN SUM(CASE WHEN ji.status_id = 3 THEN 1 ELSE 0 END) > 0 THEN 'Partial Approved'
+                ELSE 'Draft'
+            END AS status
+        FROM jute_issue ji
+        INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+        WHERE bm.co_id = :co_id
+        {search_clause}
+        GROUP BY ji.issue_date, ji.branch_id, bm.branch_name
+        ORDER BY ji.issue_date DESC, bm.branch_name
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_jute_issue_table_count_query(co_id: int, search: str = None):
+    """
+    Query to get total count of unique issue date+branch combinations for pagination.
+    Uses branch_mst to filter by co_id since jute_issue doesn't have co_id column directly.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(ji.issue_date AS CHAR) LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(*) AS total FROM (
+            SELECT ji.issue_date, ji.branch_id
+            FROM jute_issue ji
+            INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+            WHERE bm.co_id = :co_id
+            {search_clause}
+            GROUP BY ji.issue_date, ji.branch_id
+        ) sub
+    """
+    return text(sql)
+
+
+# =============================================================================
+# JUTE ISSUE CREATE/EDIT QUERIES
+# =============================================================================
+
+def get_jute_issue_create_setup_query():
+    """
+    Query to get jute items (items where item_grp_id = 2 or 3) for issue dropdown.
+    """
+    sql = """
+        SELECT 
+            im.item_id,
+            im.item_code,
+            im.item_name,
+            im.item_grp_id,
+            ig.item_grp_name
+        FROM item_mst im
+        INNER JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        WHERE ig.item_type_id IN (2, 3)
+        AND ig.co_id = :co_id
+        AND (im.active = 1 OR im.active IS NULL)
+        ORDER BY im.item_name
+    """
+    return text(sql)
+
+
+def get_jute_stock_outstanding_query():
+    """
+    Query to get available stock from vw_jute_stock_outstanding view.
+    Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
+    Filters by branch_id and returns only records with positive balance quantity.
+    """
+    sql = """
+        SELECT 
+            vso.jute_mr_li_id,
+            vso.branch_id,
+            vso.branch_mr_no,
+            jml.jute_mr_id,
+            jml.actual_item_id AS item_id,
+            im.item_name,
+            vso.actual_quality,
+            jqm.jute_quality AS quality_name,
+            vso.actual_qty,
+            vso.actual_weight,
+            vso.actual_rate,
+            vso.unit_conversion,
+            vso.bal_qty AS balqty,
+            vso.bal_weight AS balweight
+        FROM vw_jute_stock_outstanding vso
+        INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
+        WHERE vso.branch_id = :branch_id
+        AND vso.bal_qty > 0
+        ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
+    """
+    return text(sql)
+
+
+def get_jute_stock_outstanding_by_item_query():
+    """
+    Query to get available stock filtered by branch and item.
+    Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
+    """
+    sql = """
+        SELECT 
+            vso.jute_mr_li_id,
+            vso.branch_id,
+            vso.branch_mr_no,
+            jml.jute_mr_id,
+            jml.actual_item_id AS item_id,
+            im.item_name,
+            vso.actual_quality,
+            jqm.jute_quality AS quality_name,
+            vso.actual_qty,
+            vso.actual_weight,
+            vso.actual_rate,
+            vso.unit_conversion,
+            vso.bal_qty AS balqty,
+            vso.bal_weight AS balweight
+        FROM vw_jute_stock_outstanding vso
+        INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
+        WHERE vso.branch_id = :branch_id
+        AND jml.actual_item_id = :item_id
+        AND vso.bal_qty > 0
+        ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
+    """
+    return text(sql)
+
+
+def get_jute_issues_by_date_query():
+    """
+    Query to get all jute issue line items for a specific branch and date.
+    Used for the issue detail/edit page.
+    """
+    sql = """
+        SELECT 
+            ji.jute_issue_id,
+            ji.branch_id,
+            bm.branch_name,
+            ji.issue_date,
+            ji.status_id,
+            COALESCE(sm.status_name, 'Draft') AS status,
+            ji.jute_mr_li_id,
+            mrli.jute_mr_id,
+            jm.branch_mr_no,
+            mrli.actual_item_id AS item_id,
+            im.item_name AS jute_type,
+            ji.jute_quality_id,
+            jqm.jute_quality,
+            ji.yarn_type_id,
+            jym.jute_yarn_name AS yarn_type_name,
+            ji.quantity,
+            ji.weight,
+            ji.unit_conversion,
+            mrli.actual_rate,
+            ji.issue_value,
+            ji.updated_by,
+            ji.update_date_time
+        FROM jute_issue ji
+        INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+        LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
+        LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
+        LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
+        LEFT JOIN item_mst im ON im.item_id = mrli.actual_item_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ji.jute_quality_id
+        LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
+        WHERE ji.branch_id = :branch_id
+        AND ji.issue_date = :issue_date
+        AND bm.co_id = :co_id
+        ORDER BY ji.jute_issue_id
+    """
+    return text(sql)
+
+
+def get_yarn_types_query():
+    """
+    Query to get yarn options from jute_yarn_mst for issue dropdown.
+    Uses jute_yarn_mst which contains specific yarn products (e.g., "10-SKWP-Gold").
+    """
+    sql = """
+        SELECT 
+            jute_yarn_id AS jute_yarn_type_id,
+            jute_yarn_name AS jute_yarn_type_name
+        FROM jute_yarn_mst
+        WHERE co_id = :co_id
+        ORDER BY jute_yarn_name
     """
     return text(sql)

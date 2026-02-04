@@ -21,6 +21,7 @@ from src.juteProcurement.query import (
     get_agent_map_options_query,
     get_warehouse_options_query,
 )
+from src.juteProcurement.formatters import get_financial_year_sql_expression
 
 logger = logging.getLogger(__name__)
 
@@ -394,12 +395,14 @@ async def update_jute_mr(
                 total_accepted_weight += accepted_weight
             
             # Update line item
+            # Note: actual_rate is set to the same value as rate automatically
             update_query = text("""
                 UPDATE jute_mr_li
                 SET actual_item_id = :actual_item_id,
                     actual_quality = :actual_quality,
                     actual_qty = :actual_qty,
                     actual_weight = :actual_weight,
+                    actual_rate = :rate,
                     allowable_moisture = :allowable_moisture,
                     actual_moisture = :actual_moisture,
                     claim_dust = :claim_dust,
@@ -476,4 +479,835 @@ async def update_jute_mr(
     except Exception as e:
         db.rollback()
         logger.exception("Error updating jute MR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# STATUS CHANGE SCHEMA
+# =============================================================================
+
+class MRStatusChangeRequest(BaseModel):
+    """Request model for changing MR status."""
+    new_status_id: int
+    remarks: Optional[str] = None
+
+
+# =============================================================================
+# STATUS CHANGE ENDPOINT
+# =============================================================================
+
+@router.put("/change_status/{mr_id}")
+async def change_mr_status(
+    mr_id: int,
+    request: Request,
+    body: MRStatusChangeRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Change the status of a jute MR.
+    
+    Validates that party_branch_id is set before allowing status changes from draft.
+    Status IDs:
+    - 21: Draft
+    - 1: Open
+    - 3: Approved
+    - 4: Rejected
+    - 5: Closed
+    """
+    try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        
+        try:
+            co_id = int(q_co_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        user_id = token_data.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id, party_id, party_branch_id
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+        
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status_id = mr.get("status_id")
+        party_id = mr.get("party_id")
+        party_branch_id = mr.get("party_branch_id")
+
+        # Validate party_branch_id before allowing status change from draft
+        # Draft status_id is typically 21
+        if current_status_id == 21 and body.new_status_id != 21:
+            if party_id and not party_branch_id:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot change status: The selected party does not have a branch configured. Please add a branch for this party in Party Master before approving this MR."
+                )
+
+        now = datetime.now()
+
+        # Update the status
+        update_query = text("""
+            UPDATE jute_mr
+            SET status_id = :new_status_id,
+                updated_by = :updated_by,
+                updated_date_time = :updated_date_time
+            WHERE jute_mr_id = :mr_id
+        """)
+        
+        db.execute(update_query, {
+            "mr_id": mr_id,
+            "new_status_id": body.new_status_id,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+
+        db.commit()
+
+        # Get status name
+        status_query = text("SELECT status_name FROM status_mst WHERE status_id = :status_id")
+        status_row = db.execute(status_query, {"status_id": body.new_status_id}).fetchone()
+        status_name = status_row[0] if status_row else str(body.new_status_id)
+
+        return {
+            "success": True,
+            "message": f"MR status changed to {status_name}",
+            "mr_id": mr_id,
+            "status_id": body.new_status_id,
+            "status_name": status_name,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error changing MR status")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# APPROVAL WORKFLOW SCHEMAS
+# =============================================================================
+
+class MRApprovalRequest(BaseModel):
+    """Request model for MR approval actions."""
+    mr_id: str
+    branch_id: str
+    reason: Optional[str] = None  # For reject action
+    party_branch_id: Optional[int] = None  # For approve action - use if provided
+    mr_date: Optional[str] = None  # For approve action - YYYY-MM-DD format, mandatory for final approval
+
+
+# =============================================================================
+# MR STATUS CONSTANTS
+# =============================================================================
+
+MR_STATUS_DRAFT = 21
+MR_STATUS_OPEN = 1
+MR_STATUS_PENDING = 13
+MR_STATUS_PENDING_APPROVAL = 20
+MR_STATUS_APPROVED = 3
+MR_STATUS_REJECTED = 4
+MR_STATUS_CANCELLED = 6
+
+
+# =============================================================================
+# APPROVAL WORKFLOW ENDPOINTS
+# =============================================================================
+
+def get_next_branch_mr_no(db: Session, branch_id: int) -> int:
+    """Get the next branch_mr_no for the given branch (simple increment, no FY)."""
+    query = text("""
+        SELECT COALESCE(MAX(branch_mr_no), 0) + 1 AS next_no
+        FROM jute_mr
+        WHERE branch_id = :branch_id
+    """)
+    result = db.execute(query, {"branch_id": branch_id}).fetchone()
+    return result[0] if result else 1
+
+
+def get_next_mr_no_for_fy(db: Session, branch_id: int, mr_date: date) -> int:
+    """
+    Get the next MR number for the given branch and financial year.
+    
+    MR numbering is per branch per financial year.
+    Financial year: April 1 to March 31.
+    
+    Args:
+        db: Database session
+        branch_id: Branch ID
+        mr_date: MR date to determine the financial year
+    
+    Returns:
+        Next MR number (1-based)
+    """
+    # Build the financial year SQL expression for jute_mr_date
+    fy_expr = get_financial_year_sql_expression("jute_mr_date")
+    
+    # Determine the current financial year from mr_date
+    if mr_date.month >= 4:  # April onwards
+        fy_start_year = mr_date.year
+    else:  # January to March
+        fy_start_year = mr_date.year - 1
+    
+    fy_string = f"{fy_start_year % 100:02d}-{(fy_start_year + 1) % 100:02d}"
+    
+    query = text(f"""
+        SELECT COALESCE(MAX(branch_mr_no), 0) + 1 AS next_no
+        FROM jute_mr
+        WHERE branch_id = :branch_id
+          AND jute_mr_date IS NOT NULL
+          AND {fy_expr} = :fy_string
+    """)
+    
+    result = db.execute(query, {"branch_id": branch_id, "fy_string": fy_string}).fetchone()
+    return result[0] if result else 1
+
+
+def get_next_bill_pass_no_for_fy(db: Session, branch_id: int, bill_pass_date: date) -> int:
+    """
+    Get the next Bill Pass number for the given branch and financial year.
+    
+    Bill Pass numbering is per branch per financial year.
+    Financial year: April 1 to March 31.
+    
+    Args:
+        db: Database session
+        branch_id: Branch ID
+        bill_pass_date: Bill Pass date to determine the financial year
+    
+    Returns:
+        Next Bill Pass number (1-based)
+    """
+    # Build the financial year SQL expression for bill_pass_date
+    fy_expr = get_financial_year_sql_expression("bill_pass_date")
+    
+    # Determine the current financial year from bill_pass_date
+    if bill_pass_date.month >= 4:  # April onwards
+        fy_start_year = bill_pass_date.year
+    else:  # January to March
+        fy_start_year = bill_pass_date.year - 1
+    
+    fy_string = f"{fy_start_year % 100:02d}-{(fy_start_year + 1) % 100:02d}"
+    
+    query = text(f"""
+        SELECT COALESCE(MAX(bill_pass_no), 0) + 1 AS next_no
+        FROM jute_mr
+        WHERE branch_id = :branch_id
+          AND bill_pass_date IS NOT NULL
+          AND {fy_expr} = :fy_string
+    """)
+    
+    result = db.execute(query, {"branch_id": branch_id, "fy_string": fy_string}).fetchone()
+    return result[0] if result else 1
+
+
+# =============================================================================
+# TDS CALCULATION HELPERS
+# =============================================================================
+
+# TDS threshold: Rs. 50 lacs (50,00,000)
+TDS_THRESHOLD = 5000000.0
+
+# TDS rate: 0.1% (0.001)
+TDS_RATE = 0.001
+
+
+def get_cumulative_mr_value_for_party_in_fy(db: Session, party_id: str, mr_date: date, exclude_mr_id: int = None) -> float:
+    """
+    Get the cumulative value of all approved MRs for a party in the given financial year.
+    
+    Args:
+        db: Database session
+        party_id: Party ID
+        mr_date: MR date to determine the financial year
+        exclude_mr_id: MR ID to exclude from the calculation (for current MR)
+    
+    Returns:
+        Total value of approved MRs for the party in the FY (uses total_amount column)
+    """
+    # Build the financial year SQL expression for jute_mr_date
+    fy_expr = get_financial_year_sql_expression("jute_mr_date")
+    
+    # Determine the current financial year from mr_date
+    if mr_date.month >= 4:  # April onwards
+        fy_start_year = mr_date.year
+    else:  # January to March
+        fy_start_year = mr_date.year - 1
+    
+    fy_string = f"{fy_start_year % 100:02d}-{(fy_start_year + 1) % 100:02d}"
+    
+    exclude_clause = ""
+    params = {"party_id": party_id, "fy_string": fy_string, "status_approved": MR_STATUS_APPROVED}
+    
+    if exclude_mr_id:
+        exclude_clause = "AND jute_mr_id != :exclude_mr_id"
+        params["exclude_mr_id"] = exclude_mr_id
+    
+    query = text(f"""
+        SELECT COALESCE(SUM(COALESCE(total_amount, 0)), 0) AS cumulative_value
+        FROM jute_mr
+        WHERE party_id = :party_id
+          AND status_id = :status_approved
+          AND jute_mr_date IS NOT NULL
+          AND {fy_expr} = :fy_string
+          {exclude_clause}
+    """)
+    
+    result = db.execute(query, params).fetchone()
+    return float(result[0]) if result and result[0] else 0.0
+
+
+def calculate_mr_amounts(db: Session, mr_id: int) -> dict:
+    """
+    Calculate total_amount, claim_amount for an MR from its line items.
+    
+    Formulas:
+    - total_amount = sum of (accepted_weight / 100) * rate  [weight in KG, rate per quintal]
+    - claim_amount = sum of (accepted_weight / 100) * claim_rate
+    
+    Returns:
+        dict with total_amount and claim_amount
+    """
+    query = text("""
+        SELECT 
+            COALESCE(SUM((COALESCE(accepted_weight, actual_weight, 0) / 100) * COALESCE(rate, 0)), 0) AS total_amount,
+            COALESCE(SUM((COALESCE(accepted_weight, actual_weight, 0) / 100) * COALESCE(claim_rate, 0)), 0) AS claim_amount
+        FROM jute_mr_li
+        WHERE jute_mr_id = :mr_id
+          AND (active = 1 OR active IS NULL)
+    """)
+    
+    result = db.execute(query, {"mr_id": mr_id}).fetchone()
+    
+    if result:
+        return {
+            "total_amount": float(result[0]) if result[0] else 0.0,
+            "claim_amount": float(result[1]) if result[1] else 0.0,
+        }
+    return {"total_amount": 0.0, "claim_amount": 0.0}
+
+
+def calculate_tds_amount(cumulative_previous: float, current_total: float) -> tuple:
+    """
+    Calculate TDS amount based on cumulative MR value and threshold.
+    
+    TDS Logic:
+    - TDS is 0.1% of the net total
+    - TDS applies only if cumulative MR value for the party in FY exceeds Rs. 50 lacs
+    - If crossing threshold with current bill, TDS applies only on amount exceeding threshold
+    
+    Args:
+        cumulative_previous: Sum of all previous approved MRs for the party in FY
+        current_total: Total amount of the current MR
+    
+    Returns:
+        tuple: (tds_amount, tds_applicable_amount, is_tds_applicable)
+    """
+    cumulative_after = cumulative_previous + current_total
+    
+    # If cumulative (including current) is below threshold, no TDS
+    if cumulative_after <= TDS_THRESHOLD:
+        return (0.0, 0.0, False)
+    
+    # Calculate the amount on which TDS applies
+    if cumulative_previous >= TDS_THRESHOLD:
+        # Already crossed threshold - TDS on full current amount
+        tds_applicable_amount = current_total
+    else:
+        # Crossing threshold with this MR - TDS only on amount exceeding threshold
+        tds_applicable_amount = cumulative_after - TDS_THRESHOLD
+    
+    tds_amount = round(tds_applicable_amount * TDS_RATE, 2)
+    
+    return (tds_amount, tds_applicable_amount, True)
+
+
+def calculate_roundoff(amount: float) -> float:
+    """
+    Calculate roundoff to nearest rupee.
+    
+    Returns the roundoff adjustment (can be positive or negative).
+    """
+    rounded = round(amount)
+    return round(rounded - amount, 2)
+
+
+# NOTE: open_mr endpoint is commented out because MR already arrives in Open status
+# from the weighbridge system. There is no Draft → Open transition in this workflow.
+# The endpoint is preserved for reference in case the workflow changes in the future.
+#
+# @router.post("/open_mr")
+# async def open_mr(
+#     request: Request,
+#     body: MRApprovalRequest,
+#     db: Session = Depends(get_tenant_db),
+#     token_data: dict = Depends(get_current_user_with_refresh),
+# ):
+#     """
+#     Open MR - Changes status from Draft (21) to Open (1).
+#     Generates branch_mr_no on first open.
+#     Validates that party_branch_id is set.
+#     """
+#     # ... implementation commented out ...
+
+
+@router.post("/pending_mr")
+async def pending_mr(
+    request: Request,
+    body: MRApprovalRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Set MR to Pending status (13).
+    This is a terminal state on this screen - handled by external system.
+    Can only be done from Open status.
+    """
+    try:
+        mr_id = int(body.mr_id)
+        user_id = token_data.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+        
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status = mr.get("status_id")
+
+        # Validate current status - can only set to Pending from Open
+        if current_status != MR_STATUS_OPEN:
+            raise HTTPException(status_code=400, detail="MR can only be set to Pending from Open status")
+
+        now = datetime.now()
+
+        # Update status to Pending
+        update_query = text("""
+            UPDATE jute_mr
+            SET status_id = :new_status,
+                updated_by = :updated_by,
+                updated_date_time = :updated_date_time
+            WHERE jute_mr_id = :mr_id
+        """)
+        
+        db.execute(update_query, {
+            "mr_id": mr_id,
+            "new_status": MR_STATUS_PENDING,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "MR set to Pending",
+            "mr_id": mr_id,
+            "status_id": MR_STATUS_PENDING,
+            "status_name": "Pending",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error setting MR to pending")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/approve_mr")
+async def approve_mr(
+    request: Request,
+    body: MRApprovalRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Approve MR - Changes status to Approved (3) or advances approval level.
+    Can only be done from Open (1) or Pending Approval (20) status.
+    
+    If party_branch_id is provided in the request, it will be used to update the MR
+    before approval (handles case where branch was selected but not saved).
+    
+    For final approval:
+    - mr_date is MANDATORY (YYYY-MM-DD format)
+    - branch_mr_no will be auto-generated based on branch + financial year
+    
+    TODO: Implement multi-level approval logic when needed.
+    """
+    try:
+        mr_id = int(body.mr_id)
+        branch_id = int(body.branch_id)
+        user_id = token_data.get("user_id")
+        request_party_branch_id = body.party_branch_id  # May be None
+        request_mr_date = body.mr_date  # May be None - YYYY-MM-DD format
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id, party_id, party_branch_id, branch_id, branch_mr_no, jute_mr_date
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+        
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status = mr.get("status_id")
+        party_id = mr.get("party_id")
+        db_party_branch_id = mr.get("party_branch_id")
+        db_branch_id = mr.get("branch_id")
+        db_branch_mr_no = mr.get("branch_mr_no")
+        db_mr_date = mr.get("jute_mr_date")
+        
+        # Use request party_branch_id if provided, otherwise use database value
+        effective_party_branch_id = request_party_branch_id if request_party_branch_id is not None else db_party_branch_id
+
+        # Validate current status
+        if current_status not in [MR_STATUS_OPEN, MR_STATUS_PENDING_APPROVAL]:
+            raise HTTPException(status_code=400, detail="MR can only be approved from Open or Pending Approval status")
+
+        # Validate party_branch_id (using effective value)
+        if party_id and not effective_party_branch_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot approve MR: Please select a party branch before approving."
+            )
+
+        now = datetime.now()
+
+        # TODO: Implement multi-level approval logic here
+        # For now, directly approve (final approval)
+        is_final_approval = True  # Will be based on approval levels later
+        new_status = MR_STATUS_APPROVED
+
+        # For final approval, mr_date is MANDATORY
+        if is_final_approval:
+            if not request_mr_date:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MR Date is required for final approval. Please enter the MR date."
+                )
+            
+            # Parse and validate mr_date
+            try:
+                parsed_mr_date = datetime.strptime(request_mr_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid MR date format. Please use YYYY-MM-DD format."
+                )
+            
+            # Generate MR number based on branch + financial year if not already set
+            if not db_branch_mr_no:
+                new_branch_mr_no = get_next_mr_no_for_fy(db, db_branch_id, parsed_mr_date)
+            else:
+                new_branch_mr_no = db_branch_mr_no
+        else:
+            # Not final approval - mr_date is optional
+            parsed_mr_date = None
+            new_branch_mr_no = db_branch_mr_no
+            if request_mr_date:
+                try:
+                    parsed_mr_date = datetime.strptime(request_mr_date, "%Y-%m-%d").date()
+                except ValueError:
+                    pass  # Ignore invalid date for non-final approval
+
+        # Build update query with all fields
+        update_fields = ["status_id = :new_status", "updated_by = :updated_by", "updated_date_time = :updated_date_time"]
+        update_params = {
+            "mr_id": mr_id,
+            "new_status": new_status,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        }
+
+        # Add party_branch_id if changed
+        if request_party_branch_id is not None and request_party_branch_id != db_party_branch_id:
+            update_fields.append("party_branch_id = :party_branch_id")
+            update_params["party_branch_id"] = request_party_branch_id
+
+        # Add mr_date if provided for final approval
+        if is_final_approval and parsed_mr_date:
+            update_fields.append("jute_mr_date = :jute_mr_date")
+            update_params["jute_mr_date"] = parsed_mr_date
+
+        # Add branch_mr_no if generated
+        if is_final_approval and new_branch_mr_no and new_branch_mr_no != db_branch_mr_no:
+            update_fields.append("branch_mr_no = :branch_mr_no")
+            update_params["branch_mr_no"] = new_branch_mr_no
+
+        # For final approval, also set bill_pass_date = mr_date and generate bill_pass_no
+        new_bill_pass_no = None
+        calculated_amounts = {}
+        if is_final_approval and parsed_mr_date:
+            # bill_pass_date = jute_mr_date (same date)
+            update_fields.append("bill_pass_date = :bill_pass_date")
+            update_params["bill_pass_date"] = parsed_mr_date
+            
+            # Generate bill_pass_no based on branch + financial year
+            new_bill_pass_no = get_next_bill_pass_no_for_fy(db, db_branch_id, parsed_mr_date)
+            update_fields.append("bill_pass_no = :bill_pass_no")
+            update_params["bill_pass_no"] = new_bill_pass_no
+            
+            # Calculate amounts from line items
+            mr_amounts = calculate_mr_amounts(db, mr_id)
+            total_amount = mr_amounts["total_amount"]
+            claim_amount = mr_amounts["claim_amount"]
+            
+            # Calculate TDS based on cumulative party MR value in FY
+            tds_amount = 0.0
+            tds_applicable_amount = 0.0
+            is_tds_applicable = False
+            cumulative_previous = 0.0
+            
+            if party_id:
+                cumulative_previous = get_cumulative_mr_value_for_party_in_fy(
+                    db, party_id, parsed_mr_date, exclude_mr_id=mr_id
+                )
+                tds_amount, tds_applicable_amount, is_tds_applicable = calculate_tds_amount(
+                    cumulative_previous, total_amount
+                )
+            
+            # Calculate net total: total_amount - claim_amount
+            net_before_roundoff = total_amount - claim_amount
+            
+            # Calculate roundoff
+            roundoff = calculate_roundoff(net_before_roundoff)
+            
+            # Net total (amount column) = net_before_roundoff + roundoff
+            net_total = net_before_roundoff + roundoff
+            
+            # Store all calculated amounts
+            update_fields.append("total_amount = :total_amount")
+            update_params["total_amount"] = total_amount
+            
+            update_fields.append("claim_amount = :claim_amount")
+            update_params["claim_amount"] = claim_amount
+            
+            update_fields.append("roundoff = :roundoff")
+            update_params["roundoff"] = roundoff
+            
+            update_fields.append("net_total = :net_total")
+            update_params["net_total"] = net_total
+            
+            update_fields.append("tds_amount = :tds_amount")
+            update_params["tds_amount"] = tds_amount
+            
+            calculated_amounts = {
+                "total_amount": total_amount,
+                "claim_amount": claim_amount,
+                "roundoff": roundoff,
+                "net_total": net_total,
+                "tds_amount": tds_amount,
+                "tds_applicable_amount": tds_applicable_amount,
+                "is_tds_applicable": is_tds_applicable,
+                "cumulative_previous": cumulative_previous,
+                "cumulative_after": cumulative_previous + total_amount,
+                "tds_threshold": TDS_THRESHOLD,
+            }
+
+        update_query = text(f"""
+            UPDATE jute_mr
+            SET {', '.join(update_fields)}
+            WHERE jute_mr_id = :mr_id
+        """)
+        
+        db.execute(update_query, update_params)
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "MR approved successfully",
+            "mr_id": mr_id,
+            "status_id": new_status,
+            "status_name": "Approved",
+            "branch_mr_no": new_branch_mr_no,
+            "jute_mr_date": str(parsed_mr_date) if parsed_mr_date else None,
+            "bill_pass_no": new_bill_pass_no,
+            "bill_pass_date": str(parsed_mr_date) if parsed_mr_date else None,
+            "calculated_amounts": calculated_amounts,
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error approving MR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reject_mr")
+async def reject_mr(
+    request: Request,
+    body: MRApprovalRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Reject MR - Changes status to Rejected (4).
+    Can only be done from Open (1) or Pending Approval (20) status.
+    """
+    try:
+        mr_id = int(body.mr_id)
+        user_id = token_data.get("user_id")
+        reason = body.reason or ""
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+        
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status = mr.get("status_id")
+
+        # Validate current status
+        if current_status not in [MR_STATUS_OPEN, MR_STATUS_PENDING_APPROVAL]:
+            raise HTTPException(status_code=400, detail="MR can only be rejected from Open or Pending Approval status")
+
+        now = datetime.now()
+
+        # Update status to Rejected
+        update_query = text("""
+            UPDATE jute_mr
+            SET status_id = :new_status,
+                remarks = CONCAT(COALESCE(remarks, ''), ' [Rejected: ', :reason, ']'),
+                updated_by = :updated_by,
+                updated_date_time = :updated_date_time
+            WHERE jute_mr_id = :mr_id
+        """)
+        
+        db.execute(update_query, {
+            "mr_id": mr_id,
+            "new_status": MR_STATUS_REJECTED,
+            "reason": reason,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "MR rejected",
+            "mr_id": mr_id,
+            "status_id": MR_STATUS_REJECTED,
+            "status_name": "Rejected",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error rejecting MR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cancel_mr")
+async def cancel_mr(
+    request: Request,
+    body: MRApprovalRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Cancel MR - Changes status to Cancelled (6).
+    Can only be done from Open (1) status.
+    """
+    try:
+        mr_id = int(body.mr_id)
+        user_id = token_data.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+        
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status = mr.get("status_id")
+
+        # Validate current status - can only cancel from Open
+        if current_status != MR_STATUS_OPEN:
+            raise HTTPException(status_code=400, detail="Only Open MRs can be cancelled")
+
+        now = datetime.now()
+
+        # Update status to Cancelled
+        update_query = text("""
+            UPDATE jute_mr
+            SET status_id = :new_status,
+                updated_by = :updated_by,
+                updated_date_time = :updated_date_time
+            WHERE jute_mr_id = :mr_id
+        """)
+        
+        db.execute(update_query, {
+            "mr_id": mr_id,
+            "new_status": MR_STATUS_CANCELLED,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "MR cancelled",
+            "mr_id": mr_id,
+            "status_id": MR_STATUS_CANCELLED,
+            "status_name": "Cancelled",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error cancelling MR")
         raise HTTPException(status_code=500, detail=str(e))
