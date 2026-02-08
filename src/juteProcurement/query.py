@@ -1618,6 +1618,8 @@ def get_jute_stock_outstanding_query():
     sql = """
         SELECT 
             vso.jute_mr_li_id,
+            vso.jute_gate_entry_no,
+            vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
@@ -1650,6 +1652,8 @@ def get_jute_stock_outstanding_by_item_query():
     sql = """
         SELECT 
             vso.jute_mr_li_id,
+            vso.jute_gate_entry_no,
+            vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
