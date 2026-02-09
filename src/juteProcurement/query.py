@@ -1614,10 +1614,13 @@ def get_jute_stock_outstanding_query():
     Query to get available stock from vw_jute_stock_outstanding view.
     Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
     Filters by branch_id and returns only records with positive balance quantity.
+    Optionally filters by issue_date to exclude stock received after the issue date.
     """
     sql = """
         SELECT 
             vso.jute_mr_li_id,
+            vso.jute_gate_entry_no,
+            vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
@@ -1633,10 +1636,12 @@ def get_jute_stock_outstanding_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
         LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
         WHERE vso.branch_id = :branch_id
         AND vso.bal_qty > 0
+        AND ( jm.out_date <= :issue_date)
         ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
     """
     return text(sql)
@@ -1646,10 +1651,13 @@ def get_jute_stock_outstanding_by_item_query():
     """
     Query to get available stock filtered by branch and item.
     Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
+    Optionally filters by issue_date to exclude stock received after the issue date.
     """
     sql = """
         SELECT 
             vso.jute_mr_li_id,
+            vso.jute_gate_entry_no,
+            vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
@@ -1665,11 +1673,13 @@ def get_jute_stock_outstanding_by_item_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
         LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
         WHERE vso.branch_id = :branch_id
         AND jml.actual_item_id = :item_id
         AND vso.bal_qty > 0
+        and  jm.out_date <= :issue_date
         ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
     """
     return text(sql)

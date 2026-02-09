@@ -723,6 +723,8 @@ class VwJuteStockOutstanding(Base):
     Actual View Definition (from database):
     SELECT
         jml.jute_mr_li_id,
+        jm.jute_gate_entry_no,
+        COALESCE(wm.warehouse_name, 'Unknown') AS warehouse_name,
         jm.branch_id,
         jm.branch_mr_no,
         jml.actual_quality,
@@ -737,6 +739,7 @@ class VwJuteStockOutstanding(Base):
         jml.actual_rate
     FROM jute_mr jm
     JOIN jute_mr_li jml ON jm.jute_mr_id = jml.jute_mr_id
+    LEFT JOIN warehouse_mst wm ON wm.warehouse_id = jml.warehouse_id
     LEFT JOIN (
         SELECT ji.jute_mr_li_id, SUM(ji.quantity) AS issqty, SUM(ji.weight) AS isswt
         FROM jute_issue ji
@@ -747,6 +750,10 @@ class VwJuteStockOutstanding(Base):
 
     # Primary key for ORM (view doesn't have PK, but ORM needs one)
     jute_mr_li_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Gate entry and warehouse info
+    jute_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    warehouse_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Branch and MR info
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

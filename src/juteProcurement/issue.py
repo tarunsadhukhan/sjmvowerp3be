@@ -276,13 +276,14 @@ async def get_stock_outstanding(
 ):
     """
     Get available stock from vw_jute_stock_outstanding view.
-    Filters by branch_id (required) and optionally by item_id.
+    Filters by branch_id (required) and optionally by item_id and issue_date.
     Returns MR-wise available stock for issue.
     """
     try:
         q_co_id = request.query_params.get("co_id")
         q_branch_id = request.query_params.get("branch_id")
         q_item_id = request.query_params.get("item_id")
+        q_issue_date = request.query_params.get("issue_date")
 
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
@@ -294,10 +295,15 @@ async def get_stock_outstanding(
         if q_item_id:
             item_id = int(q_item_id)
             query = get_jute_stock_outstanding_by_item_query()
-            rows = db.execute(query, {"branch_id": branch_id, "item_id": item_id}).fetchall()
+            params = {"branch_id": branch_id, "item_id": item_id}
         else:
             query = get_jute_stock_outstanding_query()
-            rows = db.execute(query, {"branch_id": branch_id}).fetchall()
+            params = {"branch_id": branch_id}
+        
+        # Add issue_date if provided, otherwise use empty string to disable date filtering
+        params["issue_date"] = q_issue_date if q_issue_date else ""
+        
+        rows = db.execute(query, params).fetchall()
 
         data = [dict(r._mapping) for r in rows]
         return {"data": data}
