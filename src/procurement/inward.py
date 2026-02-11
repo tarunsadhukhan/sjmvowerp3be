@@ -12,7 +12,6 @@ from src.procurement.query import (
     get_inward_by_id_query,
     get_inward_detail_by_id_query,
     get_suppliers_with_party_type_1,
-    get_supplier_branches,
     get_item_by_group_id_purchaseable,
     get_item_make_by_group_id,
     get_item_uom_by_group_id,
@@ -181,17 +180,10 @@ async def get_inward_setup_1(
         supplier_result = db.execute(supplier_query, {"co_id": co_id}).fetchall()
         suppliers = [dict(r._mapping) for r in supplier_result]
 
-        # Add branches to each supplier
-        for supplier in suppliers:
-            supplier_id = supplier.get("party_id")
-            if supplier_id:
-                try:
-                    supplier_branch_query = get_supplier_branches(party_id=supplier_id)
-                    supplier_branch_result = db.execute(supplier_branch_query, {"party_id": supplier_id}).fetchall()
-                    supplier["branches"] = [dict(r._mapping) for r in supplier_branch_result]
-                except Exception as e:
-                    logger.exception(f"Error fetching branches for supplier {supplier_id}")
-                    supplier["branches"] = []
+        # NOTE: Supplier branches are NOT fetched here — the inward frontend
+        # does not use them. If a supplier-branch dropdown is needed in the
+        # future, add a lazy endpoint (e.g. /get_supplier_branches?supplier_id=X)
+        # instead of pre-loading branches for all 874+ suppliers.
 
         # Item groups
         itemgrp_query = get_item_group_drodown(co_id=co_id)
