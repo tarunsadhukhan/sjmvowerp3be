@@ -1,6 +1,11 @@
 """
 Jute Quality Master API endpoints.
 Provides CRUD operations for jute quality data.
+
+DEPRECATED: This module is deprecated. The jute quality concept has been replaced
+by the item_mst hierarchy (Jute Group → Subgroup via item_grp_mst → Item via item_mst).
+New code should use item_mst directly. These endpoints are retained only for backward
+compatibility and should not be used in new features.
 """
 
 from fastapi import Depends, Request, HTTPException, APIRouter, Response
@@ -61,7 +66,7 @@ def get_jute_quality_list_with_search_query():
     """)
 
 
-@router.get("/get_jute_quality_table")
+@router.get("/get_jute_quality_table", deprecated=True)
 async def get_jute_quality_table(
     request: Request,
     response: Response,
@@ -112,7 +117,7 @@ async def get_jute_quality_table(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_jute_quality_by_id/{jute_qlty_id}")
+@router.get("/get_jute_quality_by_id/{jute_qlty_id}", deprecated=True)
 async def get_jute_quality_by_id(
     jute_qlty_id: int,
     request: Request,
@@ -156,7 +161,7 @@ async def get_jute_quality_by_id(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/jute_quality_create_setup")
+@router.get("/jute_quality_create_setup", deprecated=True)
 async def jute_quality_create_setup(
     request: Request,
     response: Response,
@@ -197,7 +202,7 @@ async def jute_quality_create_setup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/jute_quality_edit_setup/{jute_qlty_id}")
+@router.get("/jute_quality_edit_setup/{jute_qlty_id}", deprecated=True)
 async def jute_quality_edit_setup(
     jute_qlty_id: int,
     request: Request,
@@ -262,7 +267,7 @@ async def jute_quality_edit_setup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/jute_quality_create")
+@router.post("/jute_quality_create", deprecated=True)
 async def jute_quality_create(
     request: Request,
     response: Response,
@@ -324,7 +329,7 @@ async def jute_quality_create(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/jute_quality_edit/{jute_qlty_id}")
+@router.put("/jute_quality_edit/{jute_qlty_id}", deprecated=True)
 async def jute_quality_edit(
     jute_qlty_id: int,
     request: Request,

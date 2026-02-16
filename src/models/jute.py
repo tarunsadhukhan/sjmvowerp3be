@@ -32,7 +32,12 @@ class Base(DeclarativeBase):
 # =============================================================================
 
 class JuteQualityMst(Base):
-    """Jute quality master table - stores quality information for jute items."""
+    """DEPRECATED: Jute quality master table.
+    
+    Quality is now managed via item_mst hierarchy:
+    item_grp_mst (Jute parent) → item_grp_mst (subgroups) → item_mst (items = old qualities).
+    This model is kept for backward compatibility / data migration only.
+    """
     __tablename__ = "jute_quality_mst"
 
     jute_qlty_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -208,15 +213,13 @@ class JuteMrLi(Base):
     )
     jute_po_li_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
-    # Challan details
+    # Challan details — challan_item_id references item_mst; group is derived via item_mst.item_grp_id
     challan_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    challan_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     challan_quantity: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     challan_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
 
-    # Actual (received) details
+    # Actual (received) details — actual_item_id references item_mst; group is derived via item_mst.item_grp_id
     actual_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    actual_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     actual_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     actual_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
@@ -298,9 +301,9 @@ class JuteIssue(Base):
     issue_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     issue_value: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
 
-    # Jute details
+    # Jute details — item_id is the item (was jute_quality), jute_type is the subgroup name
     jute_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    jute_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Quantity and stock
     quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -342,9 +345,9 @@ class JuteIssuePrimary(Base):
     # Issue details
     issue_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    # Jute details
+    # Jute details — item_id is the item (was jute_quality), jute_type is the subgroup name
     jute_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    jute_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Quantity and weight
     no_of_bales: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -536,9 +539,8 @@ class JutePoLi(Base):
         Integer, ForeignKey("jute_po.jute_po_id"), nullable=True, index=True
     )
 
-    # Item details
+    # Item details — item_id references item_mst; group is derived via item_mst.item_grp_id
     item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     # Quantity and pricing
     quantity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -655,7 +657,7 @@ class JuteBatchPlanLi(Base):
     batch_plan_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("jute_batch_plan.batch_plan_id"), nullable=True, index=True
     )
-    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     updated_date_time: Mapped[datetime] = mapped_column(
@@ -692,8 +694,8 @@ class JuteIssueDev3(Base):
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     issue_value: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
 
-    # References
-    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # References — item_id is the item (was jute_quality_id)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     jute_mr_li_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     yarn_type_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
 
@@ -759,8 +761,8 @@ class VwJuteStockOutstanding(Base):
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     branch_mr_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Quality
-    actual_quality: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Item (was quality) — actual_item_id is the item from item_mst
+    actual_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Original quantities from MR
     actual_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

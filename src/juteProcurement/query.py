@@ -6,6 +6,42 @@ from src.juteProcurement.formatters import (
 )
 
 
+def _group_path_cte():
+    """
+    Returns a recursive CTE that builds full hierarchical group paths.
+    Creates a temp table `full_group_paths` with columns: item_grp_id, item_grp_name_path.
+    Usage: prepend to any query, then JOIN full_group_paths fgp ON fgp.item_grp_id = ...
+    and use COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name.
+    """
+    return """
+        WITH RECURSIVE group_path AS (
+            SELECT
+                igm.item_grp_id AS target_id,
+                igm.item_grp_id,
+                igm.item_grp_name,
+                igm.parent_grp_id,
+                CAST(igm.item_grp_name AS CHAR(500)) AS item_grp_name_path
+            FROM item_grp_mst igm
+
+            UNION ALL
+
+            SELECT
+                child.target_id,
+                p.item_grp_id,
+                p.item_grp_name,
+                p.parent_grp_id,
+                CAST(CONCAT(p.item_grp_name, ' > ', child.item_grp_name_path) AS CHAR(500))
+            FROM item_grp_mst p
+            JOIN group_path child ON child.parent_grp_id = p.item_grp_id
+        ),
+        full_group_paths AS (
+            SELECT target_id AS item_grp_id, item_grp_name_path
+            FROM group_path
+            WHERE parent_grp_id IS NULL
+        )
+    """
+
+
 def get_jute_po_table_query(co_id: int, search: str = None):
     """
     Query to get jute PO list with pagination support.
@@ -169,16 +205,17 @@ def get_jute_po_by_id_query():
 def get_jute_po_line_items_query():
     """
     Query to get line items for a jute PO.
-    Uses item_id and jute_quality_id for lookups.
+    Uses item_grp_id for jute group and item_id for item (was quality).
+    Uses recursive CTE for full group path names.
     """
-    sql = """
+    sql = _group_path_cte() + """
         SELECT 
             jpli.jute_po_li_id,
             jpli.jute_po_id,
+            im.item_grp_id,
+            COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
             jpli.item_id,
-            im.item_name AS item_name,
-            jpli.jute_quality_id,
-            jqm.jute_quality AS quality_name,
+            im.item_name AS quality_name,
             jpli.crop_year,
             jpli.marka,
             jpli.quantity,
@@ -190,7 +227,8 @@ def get_jute_po_line_items_query():
             sm.status_name AS status
         FROM jute_po_li jpli
         LEFT JOIN item_mst im ON im.item_id = jpli.item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.jute_quality_id
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         LEFT JOIN status_mst sm ON sm.status_id = jpli.status_id
         WHERE jpli.jute_po_id = :jute_po_id
         ORDER BY jpli.jute_po_li_id
@@ -228,46 +266,84 @@ def get_vehicle_types_query():
     return text(sql)
 
 
-def get_jute_items_query():
+def get_jute_groups_query():
     """
-    Query to get jute items (items where item group has item_type_id = 2).
-    Joins item_mst -> item_grp_mst to filter by item_type_id.
+    Query to get jute subgroups (item groups whose parent is the top-level 'Jute' group).
+    Returns subgroups from item_grp_mst where parent_grp_id points to a Jute parent group
+    (identified by item_type_id = 2).
+    Uses a recursive CTE to build the full group path (e.g. "Jute > Raw Jute").
+    """
+    sql = """
+        WITH RECURSIVE group_path AS (
+            -- Anchor: start from the jute subgroups themselves
+            SELECT
+                ig.item_grp_id AS target_id,
+                ig.item_grp_id,
+                ig.item_grp_code,
+                ig.item_grp_name,
+                ig.parent_grp_id,
+                CAST(ig.item_grp_code AS CHAR(500)) AS item_grp_code_path,
+                CAST(ig.item_grp_name AS CHAR(500)) AS item_grp_name_path
+            FROM item_grp_mst ig
+            INNER JOIN item_grp_mst parent ON parent.item_grp_id = ig.parent_grp_id
+            WHERE parent.item_type_id = 2
+              AND ig.co_id = :co_id
+              AND (ig.active = '1' OR ig.active IS NULL)
+
+            UNION ALL
+
+            -- Walk up to parent, prepend parent name/code
+            SELECT
+                child.target_id,
+                p.item_grp_id,
+                p.item_grp_code,
+                p.item_grp_name,
+                p.parent_grp_id,
+                CAST(CONCAT(p.item_grp_code, ' > ', child.item_grp_code_path) AS CHAR(500)),
+                CAST(CONCAT(p.item_grp_name, ' > ', child.item_grp_name_path) AS CHAR(500))
+            FROM item_grp_mst p
+            JOIN group_path child ON child.parent_grp_id = p.item_grp_id
+        )
+        SELECT
+            gp.target_id AS item_grp_id,
+            gp.item_grp_code_path AS item_grp_code,
+            gp.item_grp_name_path AS item_grp_name
+        FROM group_path gp
+        WHERE gp.parent_grp_id IS NULL
+        ORDER BY gp.item_grp_name_path
+    """
+    return text(sql)
+
+
+# Keep old name as alias for backward compatibility
+def get_jute_items_query():
+    """DEPRECATED: Use get_jute_groups_query() instead."""
+    return get_jute_groups_query()
+
+
+def get_items_by_jute_group_query():
+    """
+    Query to get items (formerly qualities) belonging to a specific jute subgroup.
+    Items are now stored in item_mst with item_grp_id pointing to the subgroup.
+    Returns item_id aliased as quality_id and item_name as quality_name for backward compatibility.
     """
     sql = """
         SELECT 
-            im.item_id,
-            im.item_code,
-            im.item_name,
-            im.item_grp_id,
-            ig.item_grp_name,
-            im.uom_id AS default_uom_id,
-            um.uom_name AS default_uom
+            im.item_id AS quality_id,
+            im.item_name AS quality_name,
+            im.item_grp_id
         FROM item_mst im
-        INNER JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
-        LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
-        WHERE ig.item_type_id = 2
-        AND ig.co_id = :co_id
+        WHERE im.item_grp_id = :item_grp_id
         AND (im.active = 1 OR im.active IS NULL)
         ORDER BY im.item_name
     """
     return text(sql)
 
 
+# Keep old name as alias for backward compatibility
 def get_jute_qualities_by_item_query():
-    """
-    Query to get jute qualities for a specific item.
-    """
-    sql = """
-        SELECT 
-            jute_qlty_id AS quality_id,
-            jute_quality AS quality_name,
-            item_id
-        FROM jute_quality_mst
-        WHERE item_id = :item_id
-        AND (co_id = :co_id OR co_id IS NULL)
-        ORDER BY jute_quality
-    """
-    return text(sql)
+    """DEPRECATED: Use get_items_by_jute_group_query() instead."""
+    return get_items_by_jute_group_query()
 
 
 def get_suppliers_by_mukam_query():
@@ -543,27 +619,24 @@ def get_jute_gate_entry_line_items_query():
     """
     Query to get line items for a jute gate entry.
     
-    Updated 2026-01-16: Fixed column names to match actual jute_mr_li table schema.
-    - challan_quality_id (not challan_jute_quality_id)
-    - actual_quality (not actual_jute_quality_id)
-    - actual_qty (not actual_quantity)
-    - unit_conversion from jute_mr header (not jute_uom)
+    Updated: Uses item_mst for quality lookup instead of jute_quality_mst.
+    challan_item_id and actual_item_id now reference item_mst directly.
     """
     sql = """
         SELECT 
             jmli.jute_mr_li_id,
             jmli.jute_mr_id,
             jmli.jute_po_li_id,
+            im_ch.item_grp_id AS challan_item_grp_id,
+            ig_ch.item_grp_name AS challan_group_name,
             jmli.challan_item_id,
-            im_ch.item_name AS challan_item_name,
-            jmli.challan_quality_id,
-            jqm_ch.jute_quality AS challan_quality_name,
+            im_ch.item_name AS challan_quality_name,
             jmli.challan_quantity,
             jmli.challan_weight,
-            jmli.actual_item_id,
-            im_act.item_name AS actual_item_name,
-            jmli.actual_quality AS actual_quality_id,
-            jqm_act.jute_quality AS actual_quality_name,
+            im_act.item_grp_id AS actual_item_grp_id,
+            ig_act.item_grp_name AS actual_group_name,
+            jmli.actual_item_id AS actual_quality_id,
+            im_act.item_name AS actual_quality_name,
             jmli.actual_qty,
             jmli.actual_weight,
             jmli.allowable_moisture,
@@ -573,9 +646,9 @@ def get_jute_gate_entry_line_items_query():
         FROM jute_mr_li jmli
         INNER JOIN jute_mr jm ON jm.jute_mr_id = jmli.jute_mr_id
         LEFT JOIN item_mst im_ch ON im_ch.item_id = jmli.challan_item_id
-        LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jmli.challan_quality_id
+        LEFT JOIN item_grp_mst ig_ch ON ig_ch.item_grp_id = im_ch.item_grp_id
         LEFT JOIN item_mst im_act ON im_act.item_id = jmli.actual_item_id
-        LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jmli.actual_quality
+        LEFT JOIN item_grp_mst ig_act ON ig_act.item_grp_id = im_act.item_grp_id
         WHERE jmli.jute_mr_id = :jute_mr_id
         AND (jmli.active = 1 OR jmli.active IS NULL)
         ORDER BY jmli.jute_mr_li_id
@@ -614,21 +687,23 @@ def get_jute_po_for_gate_entry_query():
 def get_jute_po_line_items_for_gate_entry_query():
     """
     Query to get PO line items for gate entry auto-fill.
-    Uses new columns: item_id, jute_quality_id.
+    Uses item_grp_id for jute group and item_id for item (was quality).
+    Uses recursive CTE for full group path names.
     """
-    sql = """
+    sql = _group_path_cte() + """
         SELECT 
             jpli.jute_po_li_id,
-            jpli.item_id,
-            im.item_name AS item_name,
-            jpli.jute_quality_id AS quality_id,
-            jqm.jute_quality AS quality_name,
+            im.item_grp_id,
+            COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
+            jpli.item_id AS quality_id,
+            im.item_name AS quality_name,
             jpli.quantity,
             jpli.value AS amount,
             jpli.allowable_moisture
         FROM jute_po_li jpli
         LEFT JOIN item_mst im ON im.item_id = jpli.item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jpli.jute_quality_id
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         WHERE jpli.jute_po_id = :po_id AND (jpli.active = 1 OR jpli.active IS NULL)
         ORDER BY jpli.jute_po_li_id
     """
@@ -864,7 +939,7 @@ def get_material_inspection_line_items_query():
     """
     Query to get line items for quality check/material inspection.
     
-    Updated 2026-01-16: Now uses jute_mr_li table.
+    Updated: Uses item_mst for quality lookup instead of jute_quality_mst.
     """
     sql = """
         SELECT 
@@ -872,20 +947,20 @@ def get_material_inspection_line_items_query():
             jmli.jute_mr_id,
             jmli.jute_po_li_id,
             
-            -- Challan details
+            -- Challan details (group derived from item_mst)
+            im_ch.item_grp_id AS challan_item_grp_id,
+            ig_ch.item_grp_name AS challan_group_name,
             jmli.challan_item_id,
-            im_ch.item_name AS challan_item_name,
-            jmli.challan_jute_quality_id,
-            jqm_ch.jute_quality AS challan_quality_name,
+            im_ch.item_name AS challan_quality_name,
             jmli.challan_quantity,
             jmli.challan_weight,
             
-            -- Actual (received) details
+            -- Actual (received) details (group derived from item_mst)
+            im_act.item_grp_id AS actual_item_grp_id,
+            ig_act.item_grp_name AS actual_group_name,
             jmli.actual_item_id,
-            im_act.item_name AS actual_item_name,
-            jmli.actual_jute_quality_id,
-            jqm_act.jute_quality AS actual_quality_name,
-            jmli.actual_quantity,
+            im_act.item_name AS actual_quality_name,
+            jmli.actual_qty,
             jmli.actual_weight,
             
             -- QC fields
@@ -897,14 +972,14 @@ def get_material_inspection_line_items_query():
             jmli.marka,
             jmli.crop_year,
             
-            jmli.jute_uom,
+            jmli.unit_conversion,
             jmli.remarks,
             jmli.active
         FROM jute_mr_li jmli
         LEFT JOIN item_mst im_ch ON im_ch.item_id = jmli.challan_item_id
-        LEFT JOIN jute_quality_mst jqm_ch ON jqm_ch.jute_qlty_id = jmli.challan_jute_quality_id
+        LEFT JOIN item_grp_mst ig_ch ON ig_ch.item_grp_id = im_ch.item_grp_id
         LEFT JOIN item_mst im_act ON im_act.item_id = jmli.actual_item_id
-        LEFT JOIN jute_quality_mst jqm_act ON jqm_act.jute_qlty_id = jmli.actual_jute_quality_id
+        LEFT JOIN item_grp_mst ig_act ON ig_act.item_grp_id = im_act.item_grp_id
         WHERE jmli.jute_mr_id = :jute_mr_id
         AND (jmli.active = 1 OR jmli.active IS NULL)
         ORDER BY jmli.jute_mr_li_id
@@ -1240,10 +1315,10 @@ def get_jute_mr_line_items_query():
             jmli.jute_mr_li_id,
             jmli.jute_mr_id,
             jmli.jute_po_li_id,
+            im.item_grp_id AS actual_item_grp_id,
+            ig.item_grp_name AS actual_group_name,
             jmli.actual_item_id,
-            im.item_name AS actual_item_name,
-            jmli.actual_quality,
-            jqm.jute_quality AS actual_quality_name,
+            im.item_name AS actual_quality_name,
             jmli.actual_qty,
             jmli.actual_weight,
             jmli.actual_rate,
@@ -1265,7 +1340,7 @@ def get_jute_mr_line_items_query():
             jmli.active
         FROM jute_mr_li jmli
         LEFT JOIN item_mst im ON im.item_id = jmli.actual_item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = jmli.actual_quality
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN warehouse_hierarchy wh ON wh.warehouse_id = jmli.warehouse_id
         LEFT JOIN jute_po_li jpli ON jpli.jute_po_li_id = jmli.jute_po_li_id
         WHERE jmli.jute_mr_id = :mr_id
@@ -1590,21 +1665,20 @@ def get_jute_issue_table_count_query(co_id: int, search: str = None):
 
 def get_jute_issue_create_setup_query():
     """
-    Query to get jute items (items where item_grp_id = 2 or 3) for issue dropdown.
+    Query to get jute subgroups for issue dropdown.
+    Returns subgroups from item_grp_mst where parent has item_type_id IN (2, 3).
     """
     sql = """
         SELECT 
-            im.item_id,
-            im.item_code,
-            im.item_name,
-            im.item_grp_id,
+            ig.item_grp_id,
+            ig.item_grp_code,
             ig.item_grp_name
-        FROM item_mst im
-        INNER JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
-        WHERE ig.item_type_id IN (2, 3)
+        FROM item_grp_mst ig
+        INNER JOIN item_grp_mst parent ON parent.item_grp_id = ig.parent_grp_id
+        WHERE parent.item_type_id IN (2, 3)
         AND ig.co_id = :co_id
-        AND (im.active = 1 OR im.active IS NULL)
-        ORDER BY im.item_name
+        AND (ig.active = '1' OR ig.active IS NULL)
+        ORDER BY ig.item_grp_name
     """
     return text(sql)
 
@@ -1616,7 +1690,7 @@ def get_jute_stock_outstanding_query():
     Filters by branch_id and returns only records with positive balance quantity.
     Optionally filters by issue_date to exclude stock received after the issue date.
     """
-    sql = """
+    sql = _group_path_cte() + """
         SELECT 
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
@@ -1624,10 +1698,10 @@ def get_jute_stock_outstanding_query():
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
+            im.item_grp_id AS item_grp_id,
+            COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
             jml.actual_item_id AS item_id,
-            im.item_name,
-            vso.actual_quality,
-            jqm.jute_quality AS quality_name,
+            im.item_name AS quality_name,
             vso.actual_qty,
             vso.actual_weight,
             vso.actual_rate,
@@ -1638,7 +1712,8 @@ def get_jute_stock_outstanding_query():
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
         INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         WHERE vso.branch_id = :branch_id
         AND vso.bal_qty > 0
         AND ( jm.out_date <= :issue_date)
@@ -1652,8 +1727,9 @@ def get_jute_stock_outstanding_by_item_query():
     Query to get available stock filtered by branch and item.
     Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
     Optionally filters by issue_date to exclude stock received after the issue date.
+    Uses recursive CTE for full group path names.
     """
-    sql = """
+    sql = _group_path_cte() + """
         SELECT 
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
@@ -1661,10 +1737,10 @@ def get_jute_stock_outstanding_by_item_query():
             vso.branch_id,
             vso.branch_mr_no,
             jml.jute_mr_id,
+            im.item_grp_id AS item_grp_id,
+            COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
             jml.actual_item_id AS item_id,
-            im.item_name,
-            vso.actual_quality,
-            jqm.jute_quality AS quality_name,
+            im.item_name AS quality_name,
             vso.actual_qty,
             vso.actual_weight,
             vso.actual_rate,
@@ -1675,7 +1751,8 @@ def get_jute_stock_outstanding_by_item_query():
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
         INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = vso.actual_quality
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         WHERE vso.branch_id = :branch_id
         AND jml.actual_item_id = :item_id
         AND vso.bal_qty > 0
@@ -1690,7 +1767,7 @@ def get_jute_issues_by_date_query():
     Query to get all jute issue line items for a specific branch and date.
     Used for the issue detail/edit page.
     """
-    sql = """
+    sql = _group_path_cte() + """
         SELECT 
             ji.jute_issue_id,
             ji.branch_id,
@@ -1701,10 +1778,12 @@ def get_jute_issues_by_date_query():
             ji.jute_mr_li_id,
             mrli.jute_mr_id,
             jm.branch_mr_no,
+            im.item_grp_id AS item_grp_id,
+            COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
             mrli.actual_item_id AS item_id,
             im.item_name AS jute_type,
-            ji.jute_quality_id,
-            jqm.jute_quality,
+            ji.item_id AS jute_quality_id,
+            im_q.item_name AS jute_quality,
             ji.yarn_type_id,
             jym.jute_yarn_name AS yarn_type_name,
             ji.quantity,
@@ -1720,7 +1799,9 @@ def get_jute_issues_by_date_query():
         LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
         LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = mrli.actual_item_id
-        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ji.jute_quality_id
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
+        LEFT JOIN item_mst im_q ON im_q.item_id = ji.item_id
         LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
         WHERE ji.branch_id = :branch_id
         AND ji.issue_date = :issue_date

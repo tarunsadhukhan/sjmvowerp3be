@@ -55,12 +55,10 @@ class MRLineItemCreate(BaseModel):
     jute_po_li_id: Optional[int] = None  # Reference to PO line item
     # Challan data (from supplier)
     challan_item_id: Optional[int] = None
-    challan_quality_id: Optional[int] = None
     challan_quantity: Optional[float] = None
     challan_weight: Optional[float] = None
     # Actual data (received/QC verified)
     actual_item_id: Optional[int] = None
-    actual_quality_id: Optional[int] = None
     actual_qty: Optional[float] = None
     actual_weight: Optional[float] = None
     # Moisture
@@ -322,10 +320,10 @@ async def get_material_inspection_setup(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid co_id")
 
-        # Get jute items
+        # Get jute groups (subgroups)
         items_query = get_jute_items_query()
         items_result = db.execute(items_query, {"co_id": co_id}).fetchall()
-        items = [dict(r._mapping) for r in items_result]
+        jute_groups = [dict(r._mapping) for r in items_result]
 
         # Get mukams
         mukam_query = get_mukam_list_query()
@@ -343,7 +341,7 @@ async def get_material_inspection_setup(
         warehouses = [dict(r._mapping) for r in warehouse_result]
 
         return {
-            "jute_items": items,
+            "jute_groups": jute_groups,
             "mukams": mukams,
             "warehouses": warehouses,
         }
@@ -394,11 +392,9 @@ async def get_mr_line_item(
             "jute_mr_id": mr_li.jute_mr_id,
             "jute_po_li_id": mr_li.jute_po_li_id,
             "challan_item_id": mr_li.challan_item_id,
-            "challan_quality_id": mr_li.challan_quality_id,
             "challan_quantity": mr_li.challan_quantity,
             "challan_weight": mr_li.challan_weight,
             "actual_item_id": mr_li.actual_item_id,
-            "actual_quality": mr_li.actual_quality,
             "actual_qty": mr_li.actual_qty,
             "actual_weight": mr_li.actual_weight,
             "allowable_moisture": mr_li.allowable_moisture,
@@ -701,15 +697,15 @@ async def complete_material_inspection(
                 insert_li_sql = text("""
                     INSERT INTO jute_mr_li (
                         jute_mr_id, jute_po_li_id,
-                        challan_item_id, challan_quality_id, challan_quantity, challan_weight,
-                        actual_item_id, actual_quality, actual_qty, actual_weight,
+                        challan_item_id, challan_quantity, challan_weight,
+                        actual_item_id, actual_qty, actual_weight,
                         allowable_moisture, actual_moisture, accepted_weight,
                         rate, warehouse_id, marka, crop_year, remarks,
                         active, updated_date_time
                     ) VALUES (
                         :jute_mr_id, :jute_po_li_id,
-                        :challan_item_id, :challan_quality_id, :challan_quantity, :challan_weight,
-                        :actual_item_id, :actual_quality_id, :actual_qty, :actual_weight,
+                        :challan_item_id, :challan_quantity, :challan_weight,
+                        :actual_item_id, :actual_qty, :actual_weight,
                         :allowable_moisture, :actual_moisture, :accepted_weight,
                         :rate, :warehouse_id, :marka, :crop_year, :remarks,
                         1, :updated_date_time
@@ -720,11 +716,9 @@ async def complete_material_inspection(
                     "jute_mr_id": jute_mr_id,
                     "jute_po_li_id": item.jute_po_li_id,
                     "challan_item_id": item.challan_item_id,
-                    "challan_quality_id": item.challan_quality_id,
                     "challan_quantity": item.challan_quantity,
                     "challan_weight": item.challan_weight,
                     "actual_item_id": item.actual_item_id,
-                    "actual_quality_id": item.actual_quality_id,
                     "actual_qty": item.actual_qty,
                     "actual_weight": item.actual_weight,
                     "allowable_moisture": item.allowable_moisture,
@@ -750,16 +744,13 @@ async def complete_material_inspection(
                         })
             else:
                 # UPDATE existing line item (including challan fields)
-                # Note: actual_quality column stores the quality ID (not actual_jute_quality_id)
                 update_li_sql = text("""
                     UPDATE jute_mr_li
                     SET jute_po_li_id = COALESCE(:jute_po_li_id, jute_po_li_id),
                         challan_item_id = COALESCE(:challan_item_id, challan_item_id),
-                        challan_quality_id = COALESCE(:challan_quality_id, challan_quality_id),
                         challan_quantity = COALESCE(:challan_quantity, challan_quantity),
                         challan_weight = COALESCE(:challan_weight, challan_weight),
                         actual_item_id = COALESCE(:actual_item_id, actual_item_id),
-                        actual_quality = COALESCE(:actual_quality_id, actual_quality),
                         actual_qty = COALESCE(:actual_qty, actual_qty),
                         actual_weight = COALESCE(:actual_weight, actual_weight),
                         allowable_moisture = COALESCE(:allowable_moisture, allowable_moisture),
@@ -778,11 +769,9 @@ async def complete_material_inspection(
                     "jute_mr_li_id": item.jute_mr_li_id,
                     "jute_po_li_id": item.jute_po_li_id,
                     "challan_item_id": item.challan_item_id,
-                    "challan_quality_id": item.challan_quality_id,
                     "challan_quantity": item.challan_quantity,
                     "challan_weight": item.challan_weight,
                     "actual_item_id": item.actual_item_id,
-                    "actual_quality_id": item.actual_quality_id,
                     "actual_qty": item.actual_qty,
                     "actual_weight": item.actual_weight,
                     "allowable_moisture": item.allowable_moisture,
