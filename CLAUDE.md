@@ -2,56 +2,162 @@
 
 ## Project Overview
 
-VoWERP3 Backend is a **multi-tenant ERP system** built with **FastAPI** and **SQLAlchemy**. This backend serves a Next.js frontend (vowerp3ui) and handles complex business operations including procurement, inventory, sales, and jute/yarn management.
+VoWERP3 Backend is a **multi-tenant ERP system** built with **FastAPI** and **SQLAlchemy**. It serves a Next.js frontend (vowerp3ui) and handles procurement, inventory, sales, and jute/yarn management.
 
-**Tech Stack:**
-- Python 3.12+
-- FastAPI 0.115.11
-- SQLAlchemy 2.0.38 / SQLModel
-- MySQL with PyMySQL
-- JWT authentication with refresh tokens
-- Docker containerization
-- Pytest for testing
+**Tech Stack:** Python 3.12+ | FastAPI 0.115.11 | SQLAlchemy 2.0.38 | MySQL/PyMySQL | JWT auth | Docker | Pytest
 
 **Current Branch:** `ssbe1.2` | **Main Branch:** `main`
 
 ---
 
-## Critical Architecture Principles
+## Three-Persona Architecture (MOST IMPORTANT)
 
-### 1. Multi-Tenancy (MOST IMPORTANT)
+The system has **three distinct login types**, each with different databases, endpoints, and access scopes. Understanding this is critical before writing any code.
 
-**Single Source of Truth:** `src/config/db.py`
+### Persona 1: VOW Admin (Control Desk) — `dashboardctrldesk`
 
-Every request must be isolated to its tenant's database. The system automatically routes requests based on headers:
+**Purpose:** System-wide super admin managing all organizations/tenants.
 
-**Tenant Resolution Priority:**
-1. `x-forwarded-host` header (from proxy)
-2. `host` header
-3. `referer` header
-4. Explicit `subdomain` header
-5. Default fallback
+| Aspect | Details |
+|--------|---------|
+| **Login endpoint** | `POST /api/authRoutes/loginconsole` |
+| **Login function** | `login_user_console()` in `src/authorization/auth.py` |
+| **Database** | `vowconsole3` (default engine — the central/system database) |
+| **User table** | `vowconsole3.con_user_master` |
+| **Key filter** | `con_user_type = 0` AND `con_org_id IS NULL` |
+| **Token payload** | `{"user_id": <id>}` |
+| **Refresh token stored in** | `vowconsole3.con_user_master.refresh_token` |
+| **Router prefix** | `/api/ctrldskAdmin` |
+| **Code location** | `src/common/ctrldskAdmin/` (users, orgs, roles, menuportal) |
+| **DB dependency** | Uses `default_engine` directly (`SessionLocal`) — **NOT** `get_tenant_db` |
 
-**Database Naming Convention:**
-- Main DB: `{subdomain}` (e.g., `demo`, `client1`)
-- Secondary DBs: `{subdomain}_c`, `{subdomain}_c_1`, `{subdomain}_c_2`, `{subdomain}_c_3`
+**What Control Desk can do:** Manage all organizations, create tenants, system-wide role/user management, menu configuration.
 
-**ALWAYS use the dependency:**
-```python
-@router.get("/endpoint")
-async def endpoint(
-    request: Request,
-    db: Session = Depends(get_tenant_db),
-    token_data: dict = Depends(get_current_user_with_refresh)
-):
-    co_id = request.query_params.get("co_id")
-    # db is automatically bound to correct tenant
+### Persona 2: Tenant Admin — `dashboardadmin`
+
+**Purpose:** Organization-level admin for a single tenant.
+
+| Aspect | Details |
+|--------|---------|
+| **Login endpoint** | `POST /api/authRoutes/loginconsole` (same endpoint as Control Desk) |
+| **Login function** | `login_user_console()` in `src/authorization/auth.py` |
+| **Database** | `vowconsole3` (default engine) — same DB, but **scoped by org_id** |
+| **User table** | `vowconsole3.con_user_master` |
+| **Key filter** | `con_user_type = 1` AND `con_org_id = <specific_org_id>` |
+| **Token payload** | `{"user_id": <id>}` |
+| **Refresh token stored in** | `vowconsole3.con_user_master.refresh_token` |
+| **Router prefix** | `/api/companyAdmin` |
+| **Code location** | `src/common/companyAdmin/` (users, company, roles, branch, dept_subdept) |
+| **DB dependency** | Uses `get_tenant_db` (resolves subdomain → queries `vowconsole3` scoped by org) |
+| **Subdomain mapping** | `extract_subdomain_from_request()` → `con_org_master.con_org_shortname` → `con_org_id` |
+
+**What Tenant Admin can do:** Manage companies, branches, departments, roles, and users within their organization.
+
+### Persona 3: Tenant Portal — `dashboardportal`
+
+**Purpose:** Day-to-day operational users (procurement, inventory, sales, etc.)
+
+| Aspect | Details |
+|--------|---------|
+| **Login endpoint** | `POST /api/authRoutes/login` (DIFFERENT endpoint) |
+| **Login function** | `login_user()` in `src/authorization/auth.py` |
+| **Database** | **Tenant-specific DB** (e.g., `org1`, `dev3`, `sls`) — NOT vowconsole3 |
+| **User table** | `{tenant_db}.user_mst` |
+| **Key filter** | `email_id = :email` AND `active = TRUE` |
+| **Token payload** | `{"user_id": <id>, "type": "portal"}` ← note `type` field |
+| **Refresh token stored in** | `{tenant_db}.user_mst.refresh_token` |
+| **Router prefix** | `/api/admin/PortalData` (admin functions) + all business routes |
+| **Code location** | `src/common/portal/` (users, roles, menu, approval) + `src/masters/`, `src/procurement/`, etc. |
+| **DB dependency** | Uses `get_tenant_db` → creates engine for `{subdomain}` database |
+| **Access scope** | Filtered by `co_id`, `branch_id`, and `role_id` via `user_role_map` table |
+
+**What Portal users can do:** All business operations — procurement (indent, PO, inward), inventory, masters, sales, jute purchase/production.
+
+### Database Selection Flow Diagram
+
 ```
+Request arrives → extract_subdomain_from_request(request)
+                  ↓
+                  Extracts subdomain from headers (priority: x-forwarded-host > host > referer > subdomain header)
+                  ↓
+    ┌─────────────┼─────────────────┐
+    ↓             ↓                 ↓
+  Control Desk  Tenant Admin     Portal
+    ↓             ↓                 ↓
+  vowconsole3   vowconsole3      {subdomain} DB
+  (no org       (filtered by     (e.g., dev3, sls)
+   filter)       con_org_id)      ↓
+                  ↓              Also has secondary DBs:
+                 get_org_id_     {subdomain}_c
+                 from_subdomain  {subdomain}_c_1
+                 ()              {subdomain}_c_2
+                                 {subdomain}_c_3
+```
+
+### Key Database Functions (`src/config/db.py`)
+
+| Function | Purpose | Used By |
+|----------|---------|---------|
+| `extract_subdomain_from_request(request)` | Extracts subdomain from headers | All personas |
+| `get_db_names(request)` | Sets `db`, `db1`..`db4` from subdomain | Portal (multi-DB queries) |
+| `get_tenant_db(request)` | Creates SQLAlchemy session for `{subdomain}` DB | Tenant Admin + Portal |
+| `get_db(request)` | Returns dict with DB engines and names | Portal routes |
+| `get_org_id_from_subdomain(subdomain, db)` | Maps subdomain → `con_org_id` | Tenant Admin |
+
+### Token Verification & Refresh (`src/authorization/utils.py`)
+
+```python
+def get_current_user_with_refresh(request, response, access_token=None):
+    # 1. Decode access token
+    # 2. If expired, check token type:
+    #    - If type != "portal" → fetch refresh_token from vowconsole3.con_user_master
+    #    - If type == "portal" → fetch refresh_token from {tenant_db}.user_mst
+    # 3. Generate new access token if refresh is valid
+```
+
+### Router Organization in `src/main.py`
+
+**Control Desk routes** (`/api/ctrldskAdmin`):
+```python
+app.include_router(co_ctrldsk_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-roles"])
+app.include_router(co_ctrldsk_users_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-users"])
+app.include_router(co_ctrldsk_orgs_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-orgs"])
+app.include_router(co_ctrldsk_menu_router, prefix="/api/ctrldskAdmin", tags=["ctrldsk-admin-menu"])
+```
+
+**Tenant Admin routes** (`/api/companyAdmin`):
+```python
+app.include_router(co_console_router, prefix="/api/companyAdmin", tags=["company-admin-menu"])
+app.include_router(co_roles_router, prefix="/api/companyAdmin", tags=["company-admin-roles"])
+app.include_router(co_users_router, prefix="/api/companyAdmin", tags=["company-admin-users"])
+app.include_router(co_company_router, prefix="/api/companyAdmin", tags=["company-admin-company"])
+app.include_router(co_branch_router, prefix="/api/companyAdmin", tags=["company-admin-branch"])
+app.include_router(co_dept_subdept_router, prefix="/api/companyAdmin", tags=["company-admin-dept-subdept"])
+```
+
+**Portal routes** (`/api/admin/PortalData` + business routes):
+```python
+app.include_router(co_portal_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+app.include_router(co_portal_users_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+app.include_router(co_portal_menu_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+app.include_router(co_portal_approval_router, prefix="/api/admin/PortalData", tags=["PortalDataInAdmin"])
+# Plus all business routers: /api/procurementIndent, /api/itemMaster, etc.
+```
+
+### Choosing the Right DB Dependency
+
+| Writing code for... | Use this dependency | Connects to |
+|---------------------|-------------------|-------------|
+| Control Desk routes | `Session(default_engine)` directly | `vowconsole3` |
+| Tenant Admin routes | `Depends(get_tenant_db)` | `vowconsole3` (org-scoped) |
+| Portal routes | `Depends(get_tenant_db)` | `{subdomain}` tenant DB |
+| Portal multi-DB queries | `Depends(get_db)` | Returns dict with multiple engines |
 
 **❌ NEVER:**
 - Hardcode database names
-- Skip `get_tenant_db` dependency
-- Share database connections between tenants
+- Skip the correct DB dependency for the persona
+- Use `default_engine` directly in Portal routes
+- Use `get_tenant_db` in Control Desk routes (it's not needed)
 
 ### 2. Database Access Patterns
 
@@ -124,16 +230,29 @@ return {"data": [{"id": 1}]}  # CORRECT
 
 ### 4. Authentication & Authorization
 
-**Standard Dependency:**
+**Standard Dependency (works for all three personas):**
 ```python
 token_data: dict = Depends(get_current_user_with_refresh)
 ```
 
 **What it does:**
-- Validates JWT access token
-- Auto-refreshes using refresh token from default DB
+- Decodes JWT access token from `access_token` cookie
+- If expired, checks token `type` field:
+  - `type` absent or not "portal" → refreshes from `vowconsole3.con_user_master`
+  - `type == "portal"` → refreshes from `{tenant_db}.user_mst`
 - Returns user dict with `user_id` field
 - Raises `HTTPException(401)` if invalid
+
+**Key Database Schema Differences:**
+
+| Field | Console Users (`con_user_master`) | Portal Users (`user_mst`) |
+|-------|-----------------------------------|---------------------------|
+| Primary key | `con_user_id` | `user_id` |
+| Email | `con_user_login_email_id` | `email_id` |
+| Password | `con_user_login_password` | `password` |
+| User type | `con_user_type` (0=ctrldesk, 1=tenant admin) | N/A |
+| Org scope | `con_org_id` (NULL=ctrldesk) | N/A (entire tenant DB) |
+| Access scope | N/A | `user_role_map` (co_id, branch_id, role_id) |
 
 **Dev Mode Bypass:**
 ```python
@@ -141,9 +260,7 @@ ENV=development  # Auto-bypass in .env
 BYPASS_AUTH=1    # Explicit bypass flag
 ```
 
-**Cookie Storage:**
-- Cookie name: `access_token`
-- Production domain: `.vowerp.co.in`
+**Cookie:** `access_token` | Production domain: `.vowerp.co.in`
 
 ### 5. Error Handling Standards
 
@@ -350,15 +467,31 @@ return items  # Returns list directly
 return {"data": items}
 ```
 
-### 4. Multi-Tenant Isolation
-❌ **Wrong:**
+### 4. Wrong DB Dependency for Persona
+❌ **Wrong:** Using `get_tenant_db` in Control Desk routes
 ```python
-db = SessionLocal()  # Direct session creation
+# Control Desk route — WRONG
+@router.get("/get_org_data_all")
+async def get_orgs(db: Session = Depends(get_tenant_db)):  # WRONG!
 ```
 
-✅ **Correct:**
+✅ **Correct:** Use `default_engine` directly for Control Desk
 ```python
-db: Session = Depends(get_tenant_db)  # Use dependency
+# Control Desk route — CORRECT
+@router.get("/get_org_data_all")
+async def get_orgs(request: Request, token_data: dict = Depends(verify_access_token)):
+    with Session(default_engine) as session:
+        # Query vowconsole3 directly, no org filter
+```
+
+❌ **Wrong:** Using `SessionLocal()` directly in Portal routes
+```python
+db = SessionLocal()  # WRONG — this connects to vowconsole3, not tenant DB
+```
+
+✅ **Correct:** Use `get_tenant_db` for Portal and Tenant Admin routes
+```python
+db: Session = Depends(get_tenant_db)  # Correctly routes to tenant DB
 ```
 
 ### 5. Parameter Binding Mismatch
@@ -376,6 +509,167 @@ db.execute(text(sql), {"co_id": 1})  # Names match
 
 ---
 
+## Database Schema Conventions
+
+### Table Naming Patterns
+
+| Pattern | Meaning | Examples |
+|---------|---------|---------|
+| `{entity}_mst` | Master/reference table | `item_mst`, `branch_mst`, `party_mst` |
+| `{module}_{entity}` | Transaction header | `proc_indent`, `proc_po`, `jute_mr` |
+| `{module}_{entity}_dtl` | Transaction detail/line items | `proc_indent_dtl`, `proc_po_dtl` |
+| `{module}_{entity}_dtl_cancel` | Cancellation records | `proc_indent_dtl_cancel` |
+| `{entity}_additional` | Additional charges | `proc_po_additional` |
+| `{entity}_gst` | GST tax breakup | `po_gst`, `proc_gst` |
+| `{entity}_map` | Mapping/junction tables | `role_menu_map`, `uom_item_map_mst` |
+| `vw_{name}` | Database views | `vw_approved_inward_qty` |
+| `con_{entity}` | Console/vowconsole3 tables | `con_user_master`, `con_org_master` |
+
+### Module Prefixes
+
+| Module | Prefix | Examples |
+|--------|--------|----------|
+| Procurement | `proc_` | `proc_indent`, `proc_po`, `proc_inward` |
+| Jute | `jute_` | `jute_mr`, `jute_quality_mst` |
+| Sales | `sales_` / `invoice_` | `sales_invoice`, `invoice_line_items` |
+| Inventory | `issue_` | `issue_hdr`, `issue_li` |
+
+### Column Naming
+
+| Pattern | Usage | Examples |
+|---------|-------|---------|
+| `{entity}_id` | Primary key | `item_id`, `branch_id`, `po_id` |
+| `{entity}_dtl_id` | Detail line PK | `indent_dtl_id`, `po_dtl_id` |
+| `co_id` | Company/tenant reference | On all tenant-scoped tables |
+| `branch_id` | Branch scope | On most transactional tables |
+| `status_id` | Workflow state | On transaction headers |
+| `active` | Soft-delete flag (1/0) | Use `Integer` type, not Boolean |
+| `qty` / `rate` / `amount` | Financial amounts | Use `Double` type |
+
+**Abbreviation Reference:**
+```
+mst=master, dtl=detail, li=line item, hdr=header, grp=group
+dept=department, co=company, org=organisation, con=console
+proc=procurement, po=purchase order, mr=material receipt
+uom=unit of measure, gst=goods & services tax, tds=tax deducted at source
+```
+
+### Structural Database Patterns
+
+**Header → Detail (1:N):** Every transaction has both tables:
+```
+proc_indent (header)           proc_indent_dtl (detail/line items)
+├── indent_id PK         ───►  ├── indent_dtl_id PK
+├── indent_date                ├── indent_id FK
+├── branch_id                  ├── item_id, qty, uom_id
+├── status_id                  └── ...
+└── ...
+```
+
+**Cross-Entity Traceability (Procurement Chain):**
+```
+proc_indent_dtl.indent_dtl_id
+    ← proc_po_dtl.indent_dtl_id          (PO traces to indent)
+        ← proc_inward_dtl.po_dtl_id      (Inward traces to PO)
+            ← issue_li.inward_dtl_id      (Issue traces to inward)
+```
+
+Always maintain this traceability when adding downstream tables.
+
+**GST Parallel Tables:** GST breakup stored in separate tables linked to detail rows:
+```
+proc_po_dtl  ──►  po_gst (cgst_amount, sgst_amount, igst_amount, tax_pct)
+```
+
+**Cancellation per-line:** Tracked in `{entity}_dtl_cancel` tables (not header-level).
+
+### ORM Model Style (SQLAlchemy 2.0)
+
+```python
+from sqlalchemy import Integer, String, ForeignKey, Double, Date
+from sqlalchemy.orm import Mapped, mapped_column, relationship, DeclarativeBase
+
+class Base(DeclarativeBase):
+    pass
+
+class ProcIndent(Base):
+    __tablename__ = "proc_indent"
+    indent_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    indent_date: Mapped[str] = mapped_column(Date, nullable=True)
+    branch_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("branch_mst.branch_id"))
+    status_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("status_mst.status_id"))
+    active: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    details: Mapped[list["ProcIndentDtl"]] = relationship(back_populates="indent")
+```
+
+**Do NOT use legacy `Column(Integer, ...)` with `declarative_base()` style.**
+
+### Known Production Typos (NEVER FIX)
+
+These typos exist in production tables. **Do NOT rename them** — it would break the app:
+
+| Actual name | Should be | Table |
+|-------------|-----------|-------|
+| `mechine_spg_details` | `machine_spg_details` | Jute spindle |
+| `frieght_paid` | `freight_paid` | `jute_mr` |
+| `brokrage_rate` | `brokerage_rate` | `jute_mr` |
+| `fatory_address` | `factory_address` | `party_branch_mst` |
+
+Spell new tables and columns correctly.
+
+---
+
+## Three-Level Menu System
+
+Access control uses a hierarchical menu architecture:
+
+| Level | Table | Database | Used By |
+|-------|-------|----------|---------|
+| 1. Control Desk Menus | `control_desk_menu` | `vowconsole3` | Super admin sidebar |
+| 2. Company Admin Menus | `con_menu_master` | `vowconsole3` | Tenant admin sidebar (via `con_role_menu_map`) |
+| 3. Portal Menu Template | `portal_menu_mst` | `vowconsole3` | Master template for portal menus |
+| 4. Tenant Portal Menus | `menu_mst` | `{tenant_db}` | Actual portal menus (via `role_menu_map`) |
+
+**When adding a new feature/page:**
+1. Add menu entry to `portal_menu_mst` (vowconsole3) as template
+2. Ensure corresponding `menu_mst` entry in tenant DB
+3. Map it to correct `module_mst` / `con_module_masters`
+4. Set up `role_menu_map` entries for role-based access
+
+---
+
+## Approval Workflow (Backend APIs Required)
+
+Each transaction type must implement these endpoints:
+
+| Endpoint | Action | Status Change |
+|----------|--------|---------------|
+| `POST /api/{menu}/open` | Open document, generate doc number | 21 → 1 |
+| `POST /api/{menu}/cancel` | Cancel draft | 21 → 6 |
+| `POST /api/{menu}/send-for-approval` | Send for approval | 1 → 20 (level=1) |
+| `POST /api/{menu}/approve` | Approve (increment level or finalize) | 20 → 20 (next level) or 20 → 3 |
+| `POST /api/{menu}/reject` | Reject (accepts `reason`) | 20 → 4 |
+| `POST /api/{menu}/reopen` | Reopen cancelled/rejected | 6 or 4 → 1 or 21 |
+
+**Approval level logic:**
+- `approval_level` tracks current level within status 20
+- On approve: if not final level → increment level (stay 20); if final → move to 3
+
+---
+
+## Schema Changes / Migrations
+
+**No Alembic** — schema changes via manual SQL scripts:
+
+1. Write DDL in `dbqueries/migrations/` with descriptive name
+2. Include rollback SQL as comment
+3. Update ORM model in `src/models/`
+4. Execute against target database
+
+**Audit logging:** Handled via database triggers, NOT inline columns. Do not add `created_by`, `created_date` columns unless explicitly asked.
+
+---
+
 ## Key Documentation Files
 
 **Read these files for deep understanding:**
@@ -384,6 +678,7 @@ db.execute(text(sql), {"co_id": 1})  # Names match
 |------|---------|----------|
 | `.github/copilot-instructions.md` | AI agent guide with patterns | ⭐⭐⭐ ESSENTIAL |
 | `.github/WORKSPACE-INSTRUCTIONS.md` | Repo structure, legacy vs current | ⭐⭐⭐ ESSENTIAL |
+| `.github/agents/dbmanager.agent.md` | Database schema & conventions | ⭐⭐⭐ ESSENTIAL |
 | `DOCUMENTATION_INDEX.md` | Navigation guide to all docs | ⭐⭐ Important |
 | `src/config/db.py` | Multi-tenant database config | ⭐⭐⭐ ESSENTIAL |
 | `src/authorization/utils.py` | JWT, password hashing | ⭐⭐ Important |
@@ -394,7 +689,14 @@ db.execute(text(sql), {"co_id": 1})  # Names match
 
 ## Quick Reference: Adding a New Endpoint
 
-**Step-by-step guide:**
+**Step 0: Identify the persona.** This determines your DB dependency and code location.
+
+| Persona | Code location | DB dependency | Router prefix |
+|---------|--------------|---------------|---------------|
+| Control Desk | `src/common/ctrldskAdmin/` | `Session(default_engine)` | `/api/ctrldskAdmin` |
+| Tenant Admin | `src/common/companyAdmin/` | `Depends(get_tenant_db)` | `/api/companyAdmin` |
+| Portal (admin) | `src/common/portal/` | `Depends(get_tenant_db)` | `/api/admin/PortalData` |
+| Portal (business) | `src/{module}/` | `Depends(get_tenant_db)` | `/api/{moduleName}` |
 
 ### 1. Create Query Function (if needed)
 **File:** `src/{module}/query.py`
@@ -408,7 +710,7 @@ def get_my_data(co_id: int):
     return text(sql)
 ```
 
-### 2. Create Endpoint
+### 2. Create Endpoint (Portal business route example)
 **File:** `src/{module}/{feature}.py`
 ```python
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -422,29 +724,22 @@ router = APIRouter()
 @router.get("/my_endpoint")
 async def my_endpoint(
     request: Request,
-    db: Session = Depends(get_tenant_db),
+    db: Session = Depends(get_tenant_db),       # ← Portal: connects to tenant DB
     token_data: dict = Depends(get_current_user_with_refresh)
 ):
     try:
-        # 1. Validate required parameters
         co_id = request.query_params.get("co_id")
         if not co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
 
         search = request.query_params.get("search")
-
-        # 2. Execute query
         query = get_my_data(int(co_id))
         result = db.execute(
             query,
             {"co_id": int(co_id), "search": search if search else None}
         ).fetchall()
 
-        # 3. Format response
-        data = [dict(r._mapping) for r in result]
-
-        # 4. Return standardized format
-        return {"data": data}
+        return {"data": [dict(r._mapping) for r in result]}
 
     except HTTPException:
         raise
@@ -571,7 +866,8 @@ pytest src/test/ -v
 ## Best Practices Summary
 
 ### DO ✅
-- Use `get_tenant_db` dependency for all database access
+- **Identify which persona** you're writing code for FIRST (Control Desk / Tenant Admin / Portal)
+- Use the **correct DB dependency** for the persona (see table above)
 - Validate all required parameters before processing
 - Return responses in `{"data": [...]}` format
 - Use `None` for SQL NULL values
@@ -583,7 +879,8 @@ pytest src/test/ -v
 - Handle exceptions with appropriate HTTP status codes
 
 ### DON'T ❌
-- Hardcode database names
+- Use the wrong DB dependency for the persona
+- Hardcode database names or `con_org_id` values
 - Skip parameter validation
 - Return raw lists from endpoints
 - Use string "null" in SQL parameters

@@ -103,6 +103,8 @@ class MaterialInspectionCompleteRequest(BaseModel):
     remarks: Optional[str] = None
     # Line items with QC data
     line_items: List[MRLineItemCreate] = []
+    # Save without marking QC complete
+    save_only: Optional[bool] = False
 
 
 class MoistureReadingsRequest(BaseModel):
@@ -797,19 +799,21 @@ async def complete_material_inspection(
                             "moisture_percentage": reading.moisture_percentage,
                         })
 
-        # Mark jute_mr as QC complete
-        complete_query = update_material_inspection_qc_complete()
-        db.execute(complete_query, {
-            "jute_mr_id": jute_mr_id,
-            "updated_by": user_id,
-            "updated_date_time": now,
-        })
+        # Mark jute_mr as QC complete (unless save_only mode)
+        if not body.save_only:
+            complete_query = update_material_inspection_qc_complete()
+            db.execute(complete_query, {
+                "jute_mr_id": jute_mr_id,
+                "updated_by": user_id,
+                "updated_date_time": now,
+            })
 
         db.commit()
 
+        message = "Quality check data saved successfully" if body.save_only else "Quality check completed successfully"
         return {
             "success": True,
-            "message": "Quality check completed successfully",
+            "message": message,
             "jute_mr_id": jute_mr_id,
         }
 

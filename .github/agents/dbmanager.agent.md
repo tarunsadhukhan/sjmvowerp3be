@@ -89,7 +89,7 @@ You have **DDL + safe DML** privileges:
 |--------|--------|---------|
 | Procurement | `proc_` | `proc_indent`, `proc_po` |
 | Jute/Production-Jute | `jute_` | `jute_mr`, `jute_quality_mst` |
-| Sales | `sales_` / `invoice_` | `sales_invoice`, `invoice_line_items` |
+| Sales | `sales_` / `invoice_` | `sales_quotation`, `sales_order`, `sales_delivery_order`, `sales_invoice` |
 | Inventory | `issue_` | `issue_hdr`, `issue_li` |
 | HRMS | `hrms_` | `hrms_employee_mst`, `hrms_attendance` |
 | Accounting | `acc_` | `acc_ledger_mst`, `acc_voucher` |
@@ -236,6 +236,61 @@ proc_indent_dtl.indent_dtl_id
 
 Always maintain this traceability when adding new downstream tables.
 
+### 5.6 Normalization Rules
+
+These rules govern how new tables should be designed. **Existing tables are legacy and should not be changed.**
+
+#### Rule 1: Store IDs only — never denormalized display data
+
+Tables must store only `_id` foreign keys. **Never** copy `_name`, `_code`, or `_desc` columns from a referenced table into the referencing table. Display data must always be JOINed at query time.
+
+```
+❌ WRONG — storing display data alongside the FK:
+proc_po_dtl: item_id, item_name, item_code, uom_id, uom_name
+
+✅ CORRECT — store only the FK, JOIN for display:
+proc_po_dtl: item_id, uom_id
+→ JOIN item_mst ON item_id to get item_name, item_code
+→ JOIN uom_mst ON uom_id to get uom_name
+```
+
+**Exception:** Computed/formatted fields generated from the record's own data (like `indent_no_display` built from `indent_no` + prefixes) are fine — they don't duplicate another table's data.
+
+#### Rule 2: ID Derivation Chain — no redundant parent IDs
+
+If a child ID already implies a parent ID through its FK chain, do **NOT** store the parent ID separately in the same table. Derive it via JOIN when needed.
+
+**The Derivation Chain Map:**
+
+```
+branch_id       → implies co_id          (via branch_mst.co_id)
+dept_id         → implies branch_id      → implies co_id
+sub_dept_id     → implies dept_id        → implies branch_id → co_id
+warehouse_id    → implies branch_id      → implies co_id
+item_id         → implies item_grp_id    → implies item_type_id
+item_grp_id     → implies item_type_id   (via item_grp_mst.item_type_id)
+party_branch_id → implies party_id       (via party_branch_mst.party_id)
+city_id         → implies state_id       → implies country_id
+state_id        → implies country_id     (via state_mst.country_id)
+```
+
+**Practical implications for new tables:**
+
+| If the table has... | Do NOT also add... | Derive via... |
+|---------------------|--------------------|---------------|
+| `branch_id` | `co_id` | `JOIN branch_mst` |
+| `item_id` | `item_grp_id`, `item_type_id` | `JOIN item_mst → item_grp_mst` |
+| `dept_id` | `branch_id`, `co_id` | `JOIN dept_mst → branch_mst` |
+| `warehouse_id` | `branch_id`, `co_id` | `JOIN warehouse_mst → branch_mst` |
+| `sub_dept_id` | `dept_id`, `branch_id`, `co_id` | `JOIN sub_dept_mst → dept_mst → branch_mst` |
+| `party_branch_id` | `party_id` | `JOIN party_branch_mst` |
+| `city_id` | `state_id`, `country_id` | `JOIN city_mst → state_mst` |
+
+**When a parent ID IS still needed (exceptions):**
+- **Company-scoped masters without a branch:** Tables like `item_grp_mst` and `party_mst` belong to a company but not a specific branch — they need `co_id` directly.
+- **Nullable child ID:** If `branch_id` is optional/nullable but `co_id` is always required, keep `co_id`.
+- **Performance-critical filtering:** If a table is queried millions of times by `co_id` and the JOIN to `branch_mst` would be prohibitive, keep `co_id` — but document the reason.
+
 ---
 
 ## 6. ORM Model Conventions
@@ -317,7 +372,274 @@ The actual menus in each tenant DB. Access controlled via `role_menu_map` → `r
 
 ---
 
-## 8. Audit Logging
+## 8. Status Workflow State Machine
+
+Every transaction document (indent, PO, inward, invoice, jute PO, jute MR, etc.) follows the same status lifecycle. When creating new transaction tables, always include `status_id` (FK → `status_mst`) and `approval_level` (Integer) columns.
+
+### 8.1 Status ID Reference
+
+| Status ID | Name | Description |
+|-----------|------|-------------|
+| **21** | Draft | Initial state when document is first created. Fully editable. |
+| **1** | Open | Finalized draft. Document number is generated at this point. Editable. |
+| **20** | Pending Approval | In the approval chain. `approval_level` column tracks the current level. Not editable. |
+| **3** | Approved | Final approved state. Document is **locked/read-only**. Terminal for most workflows. |
+| **4** | Rejected | Rejected by an approver. Can be reopened back to Open. |
+| **5** | Closed | Completed/fulfilled. Terminal state (rarely used currently). |
+| **6** | Cancelled | Cancelled by user. Can be reopened back to Draft. |
+| **13** | Pending | Jute MR intermediate state (module-specific). |
+
+**Constants location:** `src/procurement/constants.py` — `INDENT_STATUS_IDS`, `INDENT_STATUS_LABELS`
+
+### 8.2 State Transition Diagram
+
+```
+CREATE → 21 (Draft)
+  ├→ OPEN → 1 (Open)             [generates document number]
+  │   ├→ SEND FOR APPROVAL → 20 (Pending Approval, level=1)
+  │   │   ├→ APPROVE (not final level) → 20 (level++)
+  │   │   ├→ APPROVE (final level) → 3 (Approved) ← LOCKED
+  │   │   ├→ REJECT → 4 (Rejected)
+  │   │   │   └→ REOPEN → 1 (Open)
+  │   │   └→ REOPEN → 1 (Open)
+  │   └→ CANCEL → 6 (Cancelled)
+  │       └→ REOPEN → 21 (Draft)
+  └→ CANCEL → 6 (Cancelled)
+      └→ REOPEN → 21 (Draft)
+```
+
+### 8.3 Status Lock Rules
+
+| Status | Editable | Can Approve | Can Reject | Can Reopen | Can Cancel |
+|--------|----------|-------------|------------|------------|------------|
+| 21 (Draft) | ✅ | ❌ | ❌ | ❌ | ✅ |
+| 1 (Open) | ✅ | ❌ | ❌ | ❌ | ✅ |
+| 20 (Pending) | ❌ | ✅ | ✅ | ✅ | ❌ |
+| 3 (Approved) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 4 (Rejected) | ❌ | ❌ | ❌ | ✅ | ❌ |
+| 6 (Cancelled) | ❌ | ❌ | ❌ | ✅ | ❌ |
+
+### 8.4 Required Endpoints for New Transaction Modules
+
+Every new transaction module must implement these workflow endpoints:
+
+| Endpoint | Action | Status Transition |
+|----------|--------|-------------------|
+| `POST /{menu}/create` | Create draft document | → 21 |
+| `POST /{menu}/open` | Finalize draft, generate doc number | 21 → 1 |
+| `POST /{menu}/send-for-approval` | Start approval chain | 1 → 20 (level=1) |
+| `POST /{menu}/approve` | Approve (level++ or finalize) | 20 → 20 (level++) or 20 → 3 |
+| `POST /{menu}/reject` | Reject (requires `reason` field) | 20 → 4 |
+| `POST /{menu}/reopen` | Reopen rejected/cancelled | 4 → 1 or 6 → 21 |
+| `POST /{menu}/cancel` | Cancel draft or open doc | 21 → 6 or 1 → 6 |
+
+**Reference implementations:**
+- Indent: `src/procurement/indent.py`
+- PO: `src/procurement/po.py`
+- Jute PO: `src/juteProcurement/jutePO.py`
+- Jute MR: `src/juteProcurement/mr.py`
+
+---
+
+## 9. Approval Matrix
+
+The approval system uses the `approval_mst` table to define who can approve what, at which level, and up to what amount.
+
+### 9.1 Table: `approval_mst`
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `approval_mst_id` | INT PK | Auto-increment primary key |
+| `menu_id` | INT FK → `menu_mst` | Which document type (indent, PO, invoice, etc.) |
+| `user_id` | INT FK → `user_mst` | Which user can approve |
+| `branch_id` | INT FK → `branch_mst` | Which branch they can approve for |
+| `approval_level` | INT | Level in the chain (1, 2, 3, ...) |
+| `max_amount_single` | DOUBLE | Max single transaction amount this user can approve |
+| `day_max_amount` | DOUBLE | Max cumulative daily approval amount |
+| `month_max_amount` | DOUBLE | Max cumulative monthly approval amount |
+
+### 9.2 How Approval Works
+
+1. Each `menu_id` + `branch_id` combination has **N approval levels** configured
+2. Each level maps to one or more users with individual amount limits
+3. When a user approves:
+   - System checks `user.approval_level == document.current_approval_level` → 403 if mismatch
+   - System checks amount limits: `max_amount_single`, `day_max_amount`, `month_max_amount`
+   - If `user.approval_level >= max_configured_level` → set `status_id = 3` (Approved, final)
+   - Otherwise → keep `status_id = 20`, increment `document.approval_level += 1`
+
+### 9.3 Approval Queries
+
+Three key queries in `src/procurement/query.py`:
+
+| Query Function | Purpose |
+|----------------|---------|
+| `get_approval_flow_by_menu_branch()` | Get all levels/users configured for a menu + branch |
+| `get_user_approval_level()` | Get a specific user's level and amount limits |
+| `get_max_approval_level()` | Get the highest configured level for a menu + branch |
+
+**Config API:** `src/common/portal/approval.py` — `POST /approval_level_data_setup_submit`
+
+---
+
+## 10. Document Number Generation
+
+All transaction documents get a formatted number when they are "opened" (status 21 → 1). Numbers are sequential per branch per financial year.
+
+### 10.1 Financial Year
+
+- **Period:** April 1 → March 31
+- **Format:** `YY-YY` (e.g., `25-26` for FY 2025-2026)
+- **Calculation:** If month >= 4 → `current_year-next_year`; if month < 4 → `prev_year-current_year`
+- **Helper:** `calculate_financial_year()` in `src/procurement/indent.py`
+
+### 10.2 Universal Format
+
+```
+{co_prefix}/{branch_prefix}/{DOC_TYPE}/{FY}/{sequence}
+```
+
+| Document | DOC_TYPE | Sequence | Example | When Generated |
+|----------|----------|----------|---------|----------------|
+| Procurement Indent | `INDENT` | `{n}` | `ABC/MAIN/INDENT/25-26/1` | On open (21→1) |
+| Purchase Order | `PO` | `{n}` | `ABC/MAIN/PO/25-26/5` | On open (21→1) |
+| Goods Receipt (Inward) | `GRN` | `{n}` | `ABC/MAIN/GRN/25-26/3` | On open (21→1) |
+| Jute PO | `JPO` | `{n:05d}` | `ABC/FAC/JPO/25-26/00001` | On open (21→1) |
+| Jute Gate Entry | `JGE` | `{n:05d}` | `ABC/FAC/JGE/25-26/00001` | On open (21→1) |
+| Jute MR | — | `{branch_id}-{FY}-{n}` | `2-25-26-1` | On approval (20→3) |
+| DR/CR Note | `DN`/`CN` | `{prefix}-{YYYY}-{n:05d}` | `DN-2026-00001` | On open |
+| Inventory Issue | — | Simple integer | `1, 2, 3...` | Per branch, no FY reset |
+
+### 10.3 Sequence Query Pattern
+
+All modules use the same pattern to get the next sequence number:
+
+```sql
+SELECT COALESCE(MAX(doc_no), 0) + 1 AS next_no
+FROM {table}
+WHERE branch_id = :branch_id
+  AND doc_date >= :fy_start_date
+  AND doc_date <= :fy_end_date
+  AND doc_no IS NOT NULL;
+```
+
+**Reference files:**
+- Formatters: `src/procurement/indent.py`, `src/procurement/po.py`, `src/juteProcurement/formatters.py`
+- Max queries: `src/procurement/query.py`, `src/juteProcurement/query.py`
+
+When creating a new transaction module, follow this pattern: add a `format_{doc}_no()` formatter and a `get_max_{doc}_no_for_branch_fy()` query.
+
+---
+
+## 11. Entity Relationship Map
+
+### 11.1 Core Master Hierarchy
+
+```
+co_mst (co_id)
+├── branch_mst (branch_id → co_id)
+│   ├── dept_mst (dept_id → branch_id)
+│   │   └── sub_dept_mst (sub_dept_id → dept_id)
+│   ├── warehouse_mst (warehouse_id → branch_id, parent_warehouse_id → self)
+│   ├── cost_factor_mst (→ branch_id)
+│   ├── item_minmax_mst (→ branch_id, → item_id)
+│   ├── approval_mst (→ branch_id, → menu_id, → user_id)
+│   └── project_mst (→ branch_id)
+│
+├── item_type_master (item_type_id)
+│   └── item_grp_mst (item_grp_id → item_type_id, parent_grp_id → self, co_id)
+│       ├── item_mst (item_id → item_grp_id)
+│       │   └── uom_item_map_mst (→ item_id, → uom_id)
+│       └── item_make (→ item_grp_id)
+│
+├── party_mst (party_id → co_id)
+│   └── party_branch_mst (→ party_id)
+│
+├── uom_mst (uom_id)           ← standalone reference
+├── tax_mst (→ tax_type_mst)   ← standalone reference
+├── status_mst (status_id)     ← standalone reference
+├── currency_mst               ← standalone reference
+│
+├── country_mst (country_id)
+│   └── state_mst (state_id → country_id)
+│       └── city_mst (city_id → state_id)
+│
+└── user_mst (user_id)
+    └── user_role_map (→ user_id, → roles_mst.role_id, → co_id, → branch_id)
+        └── role_menu_map (→ role_id, → menu_mst.menu_id)
+```
+
+### 11.2 Procurement Transaction Chain
+
+This chain provides **full traceability** from indent to issue. Every downstream table references the upstream detail line via FK:
+
+```
+proc_indent (header: branch_id, status_id, indent_no, indent_date)
+  └── proc_indent_dtl (indent_dtl_id PK, item_id, qty, uom_id)
+      │   └── proc_indent_dtl_cancel (→ indent_dtl_id)
+      ↓
+proc_po (header: branch_id, party_id, status_id, po_no, po_date)
+  └── proc_po_dtl (po_dtl_id PK, indent_dtl_id FK ←, item_id, qty, rate)
+      │   ├── proc_po_dtl_cancel (→ po_dtl_id)
+      │   └── po_gst (→ po_dtl_id, cgst/sgst/igst amounts)
+      ↓
+proc_inward (header: branch_id, party_id, status_id, inward_no, inward_date)
+  └── proc_inward_dtl (inward_dtl_id PK, po_dtl_id FK ←, item_id, qty, rate)
+      │   └── proc_gst (→ inward_dtl_id)
+      ↓
+issue_hdr (header: branch_id, status_id, issue_date)
+  └── issue_li (inward_dtl_id FK ←, item_id, qty)
+```
+
+**Additional charges:** `proc_po_additional` (→ po_id), `proc_inward_additional` (→ inward_id)
+**TDS:** `proc_tds` (→ inward_id)
+**DR/CR Notes:** `drcr_note` → `drcr_note_dtl` → `drcr_note_dtl_gst`
+
+### 11.3 Jute Transaction Chain
+
+```
+jute_po (header: branch_id, party_id, status_id)
+  └── jute_po_li (→ jute_po_id, quality, qty, rate)
+
+jute_mr (header: branch_id, party_id, gate_entry info, status_id)
+  └── jute_mr_li (→ jute_mr_id, quality, weight, bags)
+      └── jute_moisture_rdg (→ jute_mr_li_id, reading values)
+
+jute_issue (header: branch_id, issue_date)
+  └── references jute_mr_li_id (balance via vw_jute_stock_outstanding)
+
+jute_batch_plan (header: branch_id)
+  └── jute_batch_plan_li (→ jute_batch_plan_id)
+```
+
+**Jute Masters:** `jute_quality_mst`, `yarn_quality_master`, `jute_yarn_type_mst`, `jute_yarn_mst`, `jute_supplier_mst`, `jute_supp_party_map`, `jute_mukam_mst`, `jute_lorry_mst`, `jute_agent_map`, `mechine_spg_details`
+
+### 11.4 Sales Transaction Chain
+
+This chain provides **full traceability** from quotation to invoice. Every downstream table references the upstream detail line via FK:
+
+```
+sales_quotation (header: branch_id, party_id, status_id, quotation_no, quotation_date)
+  └── sales_quotation_dtl (quotation_lineitem_id PK, item_id, qty, uom_id, rate)
+      │   └── sales_quotation_dtl_gst (→ quotation_lineitem_id, cgst/sgst/igst)
+      ↓
+sales_order (header: branch_id, party_id, quotation_id FK ←, status_id, sales_no)
+  └── sales_order_dtl (sales_order_dtl_id PK, quotation_lineitem_id FK ←, item_id, qty, rate)
+      │   └── sales_order_dtl_gst (→ sales_order_dtl_id, cgst/sgst/igst)
+      ↓
+sales_delivery_order (header: branch_id, party_id, sales_order_id FK ←, status_id, delivery_order_no)
+  └── sales_delivery_order_dtl (sales_delivery_order_dtl_id PK, sales_order_dtl_id FK ←, item_id, qty, rate)
+      │   └── sales_delivery_order_dtl_gst (→ sales_delivery_order_dtl_id, cgst/sgst/igst)
+      ↓
+sales_invoice (header: co_id, branch_id, party_id, quote_id, status — LEGACY)
+  └── invoice_line_items (delivery_line_id FK ←, sale_line_id FK ←, item_id, qty, rate — LEGACY)
+```
+
+**Note:** `sales_invoice` and `invoice_line_items` are legacy tables with denormalized data (e.g., `item_name`, `uom` as VARCHAR). New quotation/order/delivery tables follow normalization rules (§5.6).
+
+---
+
+## 12. Audit Logging
 
 Audit logging is handled via **database triggers** writing to a separate log table — NOT via inline audit columns.
 
@@ -327,7 +649,7 @@ Audit logging is handled via **database triggers** writing to a separate log tab
 
 ---
 
-## 9. Existing Views
+## 13. Existing Views
 
 Views are prefixed with `vw_` and modeled with `__table_args__ = {"extend_existing": True}` in ORM:
 
@@ -341,7 +663,7 @@ When creating new views, save the SQL in `dbqueries/migrations/` as well.
 
 ---
 
-## 10. Existing Known Typos (Do Not "Fix")
+## 14. Existing Known Typos (Do Not "Fix")
 
 These typos exist in production table/column names. **Do NOT rename them** — it would break the app:
 
@@ -357,9 +679,9 @@ For **new** tables and columns, spell everything correctly.
 
 ---
 
-## 11. Query Conventions
+## 15. Query Conventions
 
-### 11.1 Raw text queries
+### 15.1 Raw text queries
 
 Most complex queries use `sqlalchemy.text()` with named bind params:
 
@@ -386,7 +708,7 @@ data = [dict(r._mapping) for r in rows]
 - Keep parameter names consistent: `:co_id`, `:item_id`, `:branch_id`, `:search`, `:status_id`
 - Place query functions in `src/{module}/query.py`
 
-### 11.2 When to use ORM vs raw SQL
+### 15.2 When to use ORM vs raw SQL
 
 | Scenario | Use |
 |----------|-----|
@@ -396,9 +718,41 @@ data = [dict(r._mapping) for r in rows]
 | Reports and aggregations | Raw SQL |
 | New model creation | ORM model + optional raw queries for complex reads |
 
+### 15.3 JOIN patterns for deriving parent IDs
+
+When a new table follows the normalization rules (§5.6) and omits redundant parent IDs, use these standard JOIN patterns to derive them in queries:
+
+```sql
+-- Deriving co_id from branch_id
+SELECT t.*, bm.co_id
+FROM new_table t
+JOIN branch_mst bm ON bm.branch_id = t.branch_id
+WHERE bm.co_id = :co_id;
+
+-- Deriving item_grp_id and item_type_id from item_id
+SELECT t.*, im.item_grp_id, igm.item_type_id
+FROM new_table t
+JOIN item_mst im ON im.item_id = t.item_id
+JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id;
+
+-- Deriving co_id from dept_id (2 levels deep)
+SELECT t.*, bm.co_id
+FROM new_table t
+JOIN dept_mst dm ON dm.dept_id = t.dept_id
+JOIN branch_mst bm ON bm.branch_id = dm.branch_id
+WHERE bm.co_id = :co_id;
+
+-- Deriving party_id from party_branch_id
+SELECT t.*, pbm.party_id
+FROM new_table t
+JOIN party_branch_mst pbm ON pbm.party_branch_id = t.party_branch_id;
+```
+
+Always place these JOIN queries in the appropriate `src/{module}/query.py` file.
+
 ---
 
-## 12. Migration Workflow
+## 16. Migration Workflow
 
 There is **no Alembic** — schema changes are managed via manual SQL scripts.
 
@@ -413,19 +767,20 @@ Example migration file:
 -- Migration: add_hrms_employee_mst.sql
 -- Date: 2026-02-13
 -- Description: Create employee master table for HRMS module
+-- Note: co_id omitted — derived via branch_id → branch_mst.co_id (§5.6)
+--       branch_id omitted — derived via dept_id → dept_mst.branch_id (§5.6)
 
 CREATE TABLE IF NOT EXISTS hrms_employee_mst (
     employee_id INT AUTO_INCREMENT PRIMARY KEY,
-    co_id INT NOT NULL,
-    branch_id INT,
+    dept_id INT NOT NULL,
     employee_code VARCHAR(30),
     employee_name VARCHAR(255) NOT NULL,
-    dept_id INT,
     designation VARCHAR(100),
+    status_id INT DEFAULT 21,
+    approval_level INT DEFAULT 0,
     active INT DEFAULT 1,
-    FOREIGN KEY (co_id) REFERENCES co_mst(co_id),
-    FOREIGN KEY (branch_id) REFERENCES branch_mst(branch_id),
-    FOREIGN KEY (dept_id) REFERENCES dept_mst(dept_id)
+    FOREIGN KEY (dept_id) REFERENCES dept_mst(dept_id),
+    FOREIGN KEY (status_id) REFERENCES status_mst(status_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Rollback:
@@ -434,19 +789,19 @@ CREATE TABLE IF NOT EXISTS hrms_employee_mst (
 
 ---
 
-## 13. Safety Rules
+## 17. Safety Rules
 
 1. **Never DROP a table** without explicitly asking the user for confirmation.
 2. **Never modify `con_org_master`** unless explicitly instructed — it controls which org connects to which DB.
 3. **Always back up data** before running DELETE or UPDATE on production-like tables — run a SELECT first to show what will be affected.
 4. **Test ALTER statements** on `dev3` before suggesting them for other environments.
-5. **Preserve existing column names** even if they contain typos (see §10).
+5. **Preserve existing column names** even if they contain typos (see §14).
 6. **When in doubt, SELECT first** — always show the current state before proposing changes.
 7. **Keep trigger awareness** — some tables have existing triggers for audit logging. Before ALTERing a table, check for triggers with `SHOW TRIGGERS LIKE '{table_name}'`.
 
 ---
 
-## 14. Workflow Checklist
+## 18. Workflow Checklist
 
 When the user asks you to create a new table or modify schema:
 
@@ -454,22 +809,27 @@ When the user asks you to create a new table or modify schema:
 - [ ] Follow the naming conventions (§3)
 - [ ] Use correct data types (§4)
 - [ ] Follow structural patterns (§5) — header/detail, GST parallel, etc.
+- [ ] **Check the ID Derivation Chain (§5.6)** — does this table store any redundant parent IDs? If a child FK already implies the parent, omit the parent column.
+- [ ] **Verify no denormalized display data (§5.6)** — no `_name`/`_code`/`_desc` columns copied from referenced tables.
+- [ ] If a transaction table: include `status_id` and `approval_level` columns (§8)
 - [ ] Create the ORM model in the correct file under `src/models/` using modern style (§6)
-- [ ] Write a migration SQL file in `dbqueries/migrations/` (§12)
-- [ ] If it's a query function, place it in `src/{module}/query.py` using named binds (§11)
+- [ ] Write a migration SQL file in `dbqueries/migrations/` (§16)
+- [ ] If it's a query function, place it in `src/{module}/query.py` using named binds (§15)
+- [ ] If parent IDs were omitted per normalization rules, add the JOIN derivation query to `query.py` (§15.3)
 - [ ] Check for existing triggers before ALTERing (`SHOW TRIGGERS LIKE '{table}'`)
-- [ ] Confirm DROP operations with the user (§13)
+- [ ] Confirm DROP operations with the user (§17)
 
 When the user asks you to write a query:
 
 - [ ] Use `sqlalchemy.text()` with named bind params
 - [ ] Place it in the appropriate `query.py` file
 - [ ] Validate param names match what callers will pass
+- [ ] Use JOINs to derive parent IDs rather than expecting them as columns (§15.3)
 - [ ] Test with a SELECT to verify expected output shape
 
 ---
 
-## 15. Quick Reference — Complete Table Inventory
+## 19. Quick Reference — Complete Table Inventory
 
 ### `vowconsole3` tables
 
@@ -553,7 +913,10 @@ When the user asks you to write a query:
 
 | Table | Category |
 |-------|----------|
-| `sales_invoice` / `invoice_line_items` | Sales invoices |
+| `sales_quotation` / `sales_quotation_dtl` / `sales_quotation_dtl_gst` | Sales quotations |
+| `sales_order` / `sales_order_dtl` / `sales_order_dtl_gst` | Sales orders |
+| `sales_delivery_order` / `sales_delivery_order_dtl` / `sales_delivery_order_dtl_gst` | Delivery orders |
+| `sales_invoice` / `invoice_line_items` | Sales invoices (legacy) |
 
 ### `dev3` tables (tenant) — Jute
 

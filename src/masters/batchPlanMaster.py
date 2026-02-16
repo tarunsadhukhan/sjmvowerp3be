@@ -214,9 +214,9 @@ def get_quality_for_item_query():
     """
     return text("""
         SELECT 
-            im.item_id AS jute_quality_id,
+            im.item_id,
             im.item_name AS jute_quality,
-            im.item_grp_id AS item_id
+            im.item_grp_id
         FROM item_mst im
         WHERE im.item_grp_id = :item_grp_id
           AND (im.active = 1 OR im.active IS NULL)
