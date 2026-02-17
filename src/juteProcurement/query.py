@@ -1766,7 +1766,12 @@ def get_jute_issues_by_date_query():
     """
     Query to get all jute issue line items for a specific branch and date.
     Used for the issue detail/edit page.
-    ji.item_id now stores the actual item (same as mrli.actual_item_id).
+
+    Uses COALESCE to resolve item_id:
+      1. ji.item_id  (new records store this directly)
+      2. mrli.actual_item_id  (fallback from the MR line item)
+    This ensures old records that only had jute_quality_id (now deprecated)
+    still resolve to the correct item via the MR's actual_item_id.
     """
     sql = _group_path_cte() + """
         SELECT
@@ -1779,10 +1784,11 @@ def get_jute_issues_by_date_query():
             ji.jute_mr_li_id,
             mrli.jute_mr_id,
             jm.branch_mr_no,
-            im.item_grp_id AS item_grp_id,
+            jm.jute_gate_entry_no,
+            COALESCE(im.item_grp_id, im2.item_grp_id) AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
-            ji.item_id,
-            im.item_name AS item_name,
+            COALESCE(ji.item_id, mrli.actual_item_id) AS item_id,
+            COALESCE(im.item_name, im2.item_name) AS item_name,
             ji.yarn_type_id,
             jym.jute_yarn_name AS yarn_type_name,
             ji.quantity,
@@ -1798,8 +1804,9 @@ def get_jute_issues_by_date_query():
         LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
         LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
         LEFT JOIN item_mst im ON im.item_id = ji.item_id
-        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
-        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
+        LEFT JOIN item_mst im2 ON im2.item_id = mrli.actual_item_id
+        LEFT JOIN item_grp_mst ig ON ig.item_grp_id = COALESCE(im.item_grp_id, im2.item_grp_id)
+        LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = COALESCE(im.item_grp_id, im2.item_grp_id)
         LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
         WHERE ji.branch_id = :branch_id
         AND ji.issue_date = :issue_date

@@ -116,7 +116,7 @@ async def get_jute_issue_table(
         offset = (page - 1) * limit
         search_param = f"%{q_search}%" if q_search else None
 
-        # Get total count
+        # Get total countget_stock_outstandingz
         count_query = get_jute_issue_table_count_query(co_id, q_search)
         count_result = db.execute(
             count_query,
@@ -182,10 +182,11 @@ async def get_jute_issue_by_id(
                 ji.status_id,
                 COALESCE(sm.status_name, 'Draft') AS status,
                 ji.issue_value,
-                ji.item_id,
-                im.item_name AS item_name,
+                COALESCE(ji.item_id, mrli.actual_item_id) AS item_id,
+                COALESCE(im.item_name, im2.item_name) AS item_name,
                 ji.jute_mr_li_id,
                 mrli.jute_mr_id,
+                jm.jute_gate_entry_no,
                 ji.yarn_type_id,
                 jytm.jute_yarn_type_name AS yarn_type_name,
                 ji.quantity,
@@ -196,8 +197,10 @@ async def get_jute_issue_by_id(
             FROM jute_issue ji
             INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
             LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
-            LEFT JOIN item_mst im ON im.item_id = ji.item_id
             LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
+            LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
+            LEFT JOIN item_mst im ON im.item_id = ji.item_id
+            LEFT JOIN item_mst im2 ON im2.item_id = mrli.actual_item_id
             LEFT JOIN jute_yarn_type_mst jytm ON jytm.jute_yarn_type_id = ji.yarn_type_id
             WHERE ji.jute_issue_id = :issue_id
             AND bm.co_id = :co_id
