@@ -174,7 +174,7 @@ async def get_jute_issue_by_id(
             raise HTTPException(status_code=400, detail="Invalid co_id")
 
         sql = text("""
-            SELECT 
+            SELECT
                 ji.jute_issue_id,
                 ji.branch_id,
                 bm.branch_name,
@@ -183,7 +183,7 @@ async def get_jute_issue_by_id(
                 COALESCE(sm.status_name, 'Draft') AS status,
                 ji.issue_value,
                 ji.item_id,
-                im.item_name AS jute_quality,
+                im.item_name AS item_name,
                 ji.jute_mr_li_id,
                 mrli.jute_mr_id,
                 ji.yarn_type_id,

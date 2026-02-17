@@ -1686,12 +1686,13 @@ def get_jute_issue_create_setup_query():
 def get_jute_stock_outstanding_query():
     """
     Query to get available stock from vw_jute_stock_outstanding view.
-    Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
+    Uses actual_item_id and inward_date directly from the view.
+    Joins with jute_mr_li only for jute_mr_id (not in view).
     Filters by branch_id and returns only records with positive balance quantity.
     Optionally filters by issue_date to exclude stock received after the issue date.
     """
     sql = _group_path_cte() + """
-        SELECT 
+        SELECT
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
             vso.warehouse_name,
@@ -1700,8 +1701,8 @@ def get_jute_stock_outstanding_query():
             jml.jute_mr_id,
             im.item_grp_id AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
-            jml.actual_item_id AS item_id,
-            im.item_name AS quality_name,
+            vso.actual_item_id AS item_id,
+            im.item_name AS item_name,
             vso.actual_qty,
             vso.actual_weight,
             vso.actual_rate,
@@ -1710,13 +1711,12 @@ def get_jute_stock_outstanding_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
-        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
-        LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
+        LEFT JOIN item_mst im ON im.item_id = vso.actual_item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         WHERE vso.branch_id = :branch_id
         AND vso.bal_qty > 0
-        AND ( jm.out_date <= :issue_date)
+        AND (vso.inward_date <= :issue_date)
         ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
     """
     return text(sql)
@@ -1725,12 +1725,13 @@ def get_jute_stock_outstanding_query():
 def get_jute_stock_outstanding_by_item_query():
     """
     Query to get available stock filtered by branch and item.
-    Joins with jute_mr_li to get item_id and jute_mr_id since the view doesn't include them.
+    Uses actual_item_id and inward_date directly from the view.
+    Joins with jute_mr_li only for jute_mr_id (not in view).
     Optionally filters by issue_date to exclude stock received after the issue date.
     Uses recursive CTE for full group path names.
     """
     sql = _group_path_cte() + """
-        SELECT 
+        SELECT
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
             vso.warehouse_name,
@@ -1739,8 +1740,8 @@ def get_jute_stock_outstanding_by_item_query():
             jml.jute_mr_id,
             im.item_grp_id AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
-            jml.actual_item_id AS item_id,
-            im.item_name AS quality_name,
+            vso.actual_item_id AS item_id,
+            im.item_name AS item_name,
             vso.actual_qty,
             vso.actual_weight,
             vso.actual_rate,
@@ -1749,14 +1750,13 @@ def get_jute_stock_outstanding_by_item_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
-        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
-        LEFT JOIN item_mst im ON im.item_id = jml.actual_item_id
+        LEFT JOIN item_mst im ON im.item_id = vso.actual_item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
         WHERE vso.branch_id = :branch_id
-        AND jml.actual_item_id = :item_id
+        AND vso.actual_item_id = :item_id
         AND vso.bal_qty > 0
-        and  jm.out_date <= :issue_date
+        AND vso.inward_date <= :issue_date
         ORDER BY vso.branch_mr_no DESC, vso.jute_mr_li_id
     """
     return text(sql)
@@ -1766,9 +1766,10 @@ def get_jute_issues_by_date_query():
     """
     Query to get all jute issue line items for a specific branch and date.
     Used for the issue detail/edit page.
+    ji.item_id now stores the actual item (same as mrli.actual_item_id).
     """
     sql = _group_path_cte() + """
-        SELECT 
+        SELECT
             ji.jute_issue_id,
             ji.branch_id,
             bm.branch_name,
@@ -1780,10 +1781,8 @@ def get_jute_issues_by_date_query():
             jm.branch_mr_no,
             im.item_grp_id AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
-            mrli.actual_item_id,
-            im.item_name AS jute_type,
             ji.item_id,
-            im_q.item_name AS jute_quality,
+            im.item_name AS item_name,
             ji.yarn_type_id,
             jym.jute_yarn_name AS yarn_type_name,
             ji.quantity,
@@ -1798,10 +1797,9 @@ def get_jute_issues_by_date_query():
         LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
         LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
         LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
-        LEFT JOIN item_mst im ON im.item_id = mrli.actual_item_id
+        LEFT JOIN item_mst im ON im.item_id = ji.item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
-        LEFT JOIN item_mst im_q ON im_q.item_id = ji.item_id
         LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
         WHERE ji.branch_id = :branch_id
         AND ji.issue_date = :issue_date

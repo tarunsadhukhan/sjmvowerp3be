@@ -719,22 +719,24 @@ class VwJuteStockOutstanding(Base):
     This view calculates balance quantity and weight by subtracting issued amounts
     from the original MR line item amounts.
 
-    Note: The view does NOT include item_id or jute_mr_id columns.
-    To get these, join with jute_mr_li table on jute_mr_li_id.
+    Only includes MRs with status_id IN (3, 13) (approved / finalised).
+    Issued quantity excludes cancelled issues (status_id <> 4).
 
-    Actual View Definition (from database):
+    Actual View Definition (from dev3, 2026-02-17):
     SELECT
         jml.jute_mr_li_id,
-        jm.jute_gate_entry_no,
-        COALESCE(wm.warehouse_name, 'Unknown') AS warehouse_name,
+        jm.out_date            AS inward_date,
         jm.branch_id,
         jm.branch_mr_no,
+        jm.jute_gate_entry_no,
+        wm.warehouse_name,
         jml.actual_quality,
+        jml.actual_item_id,
         jml.actual_qty,
         jml.actual_weight,
         jm.unit_conversion,
-        (jml.actual_qty - IFNULL(iss.issqty, 0)) AS bal_qty,
-        ROUND((jml.actual_weight - IFNULL(iss.isswt, 0)), 3) AS bal_weight,
+        (jml.actual_qty - IFNULL(iss.issqty, 0))                              AS bal_qty,
+        ROUND((jml.actual_weight - IFNULL(iss.isswt, 0)), 3)                  AS bal_weight,
         jml.accepted_weight,
         ROUND((jml.accepted_weight / jml.actual_qty) * IFNULL(iss.issqty, 0), 3) AS bal_accepted_weight,
         jml.rate,
@@ -745,23 +747,31 @@ class VwJuteStockOutstanding(Base):
     LEFT JOIN (
         SELECT ji.jute_mr_li_id, SUM(ji.quantity) AS issqty, SUM(ji.weight) AS isswt
         FROM jute_issue ji
+        WHERE ji.status_id <> 4
         GROUP BY ji.jute_mr_li_id
     ) iss ON iss.jute_mr_li_id = jml.jute_mr_li_id
+    WHERE jm.status_id IN (3, 13)
     """
     __tablename__ = "vw_jute_stock_outstanding"
 
     # Primary key for ORM (view doesn't have PK, but ORM needs one)
     jute_mr_li_id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    # Gate entry and warehouse info
-    jute_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    warehouse_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Inward date (from jm.out_date)
+    inward_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Branch and MR info
     branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     branch_mr_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Item (was quality) — actual_item_id is the item from item_mst
+    # Gate entry and warehouse info
+    jute_gate_entry_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    warehouse_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Quality description (text from jute_mr_li.actual_quality)
+    actual_quality: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Item reference — actual_item_id is the item from item_mst
     actual_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Original quantities from MR
@@ -771,7 +781,7 @@ class VwJuteStockOutstanding(Base):
     # Unit conversion (e.g., "LOOSE", "BALE")
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    # Calculated balance (available for issue) - note: column names use underscore
+    # Calculated balance (available for issue)
     bal_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     bal_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
