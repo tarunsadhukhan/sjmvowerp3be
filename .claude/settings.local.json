@@ -5,7 +5,10 @@
       "Bash(grep:*)",
       "Bash(python -c:*)",
       "Bash(wc:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npx next build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git status:*)"
     ]
   }
 }
