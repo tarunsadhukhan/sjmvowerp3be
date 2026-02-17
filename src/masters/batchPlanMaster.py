@@ -12,7 +12,7 @@ Schema (jute_batch_plan):
 Schema (jute_batch_plan_li):
 - batch_plan_li_id: bigint (PK, auto)
 - batch_plan_id: bigint (FK to jute_batch_plan)
-- jute_quality_id: int (FK to jute_quality_mst)
+- item_id: int (FK to item_mst — the item, formerly quality)
 - percentage: double (nullable)
 - updated_by: bigint
 - updated_date_time: datetime
@@ -36,10 +36,10 @@ router = APIRouter()
 # =============================================================================
 
 class BatchPlanLineItem(BaseModel):
-    """Line item for batch plan - quality and percentage."""
-    jute_quality_id: int
+    """Line item for batch plan - item (was quality) and percentage."""
+    item_id: int
     percentage: float
-    item_id: Optional[int] = None  # For reference, not stored in line item
+    item_grp_id: Optional[int] = None  # For reference, not stored in line item
 
 
 class BatchPlanCreate(BaseModel):
@@ -117,20 +117,47 @@ def get_batch_plan_detail_query():
 
 def get_batch_plan_line_items_query():
     """
-    Get line items for a batch plan with quality and item names.
+    Get line items for a batch plan with item and group names.
+    Uses recursive CTE to build full group path.
     """
     return text("""
+        WITH RECURSIVE group_path AS (
+            SELECT
+                igm.item_grp_id AS target_id,
+                igm.item_grp_id,
+                igm.item_grp_name,
+                igm.parent_grp_id,
+                CAST(igm.item_grp_name AS CHAR(500)) AS item_grp_name_path
+            FROM item_grp_mst igm
+
+            UNION ALL
+
+            SELECT
+                child.target_id,
+                p.item_grp_id,
+                p.item_grp_name,
+                p.parent_grp_id,
+                CAST(CONCAT(p.item_grp_name, ' > ', child.item_grp_name_path) AS CHAR(500))
+            FROM item_grp_mst p
+            JOIN group_path child ON child.parent_grp_id = p.item_grp_id
+        ),
+        full_paths AS (
+            SELECT target_id, item_grp_name_path
+            FROM group_path
+            WHERE parent_grp_id IS NULL
+        )
         SELECT 
             bpli.batch_plan_li_id,
             bpli.batch_plan_id,
-            bpli.jute_quality_id,
+            bpli.item_id,
             bpli.percentage,
-            jqm.jute_quality,
-            jqm.item_id,
-            im.item_name
+            im.item_name AS quality_name,
+            im.item_grp_id,
+            COALESCE(fp.item_grp_name_path, ig.item_grp_name) AS jute_group_name
         FROM jute_batch_plan_li bpli
-        LEFT JOIN jute_quality_mst jqm ON bpli.jute_quality_id = jqm.jute_qlty_id
-        LEFT JOIN item_mst im ON jqm.item_id = im.item_id
+        LEFT JOIN item_mst im ON bpli.item_id = im.item_id
+        LEFT JOIN item_grp_mst ig ON im.item_grp_id = ig.item_grp_id
+        LEFT JOIN full_paths fp ON fp.target_id = ig.item_grp_id
         WHERE bpli.batch_plan_id = :batch_plan_id
         ORDER BY bpli.batch_plan_li_id
     """)
@@ -138,37 +165,62 @@ def get_batch_plan_line_items_query():
 
 def get_jute_items_query():
     """
-    Get all items belonging to item groups with item_type_id = 2 (Jute type) for a company.
-    Filters by co_id through item_grp_mst join.
+    Get jute subgroups for a company with recursive group path names.
+    Returns subgroups from item_grp_mst where parent has item_type_id = 2.
     """
     return text("""
-        SELECT 
-            im.item_id,
-            im.item_name,
-            im.item_code,
-            ig.item_grp_name
-        FROM item_mst im
-        INNER JOIN item_grp_mst ig ON im.item_grp_id = ig.item_grp_id
-        WHERE ig.co_id = :co_id
-          AND ig.item_type_id = 2
-          AND im.active = 1
-        ORDER BY im.item_name
+        WITH RECURSIVE group_path AS (
+            SELECT
+                ig.item_grp_id AS target_id,
+                ig.item_grp_id,
+                ig.item_grp_code,
+                ig.item_grp_name,
+                ig.parent_grp_id,
+                CAST(ig.item_grp_code AS CHAR(500)) AS item_grp_code_path,
+                CAST(ig.item_grp_name AS CHAR(500)) AS item_grp_name_path
+            FROM item_grp_mst ig
+            INNER JOIN item_grp_mst parent ON parent.item_grp_id = ig.parent_grp_id
+            WHERE parent.item_type_id = 2
+              AND ig.co_id = :co_id
+              AND (ig.active = '1' OR ig.active IS NULL)
+
+            UNION ALL
+
+            SELECT
+                child.target_id,
+                p.item_grp_id,
+                p.item_grp_code,
+                p.item_grp_name,
+                p.parent_grp_id,
+                CAST(CONCAT(p.item_grp_code, ' > ', child.item_grp_code_path) AS CHAR(500)),
+                CAST(CONCAT(p.item_grp_name, ' > ', child.item_grp_name_path) AS CHAR(500))
+            FROM item_grp_mst p
+            JOIN group_path child ON child.parent_grp_id = p.item_grp_id
+        )
+        SELECT
+            gp.target_id AS item_grp_id,
+            gp.item_grp_code_path AS item_grp_code,
+            gp.item_grp_name_path AS item_grp_name
+        FROM group_path gp
+        WHERE gp.parent_grp_id IS NULL
+        ORDER BY gp.item_grp_name_path
     """)
 
 
 def get_quality_for_item_query():
     """
-    Get jute qualities for a specific item and company.
+    Get items (formerly qualities) for a specific jute subgroup.
+    Items are now in item_mst filtered by item_grp_id.
     """
     return text("""
         SELECT 
-            jqm.jute_qlty_id AS jute_quality_id,
-            jqm.jute_quality,
-            jqm.item_id
-        FROM jute_quality_mst jqm
-        WHERE jqm.item_id = :item_id
-          AND jqm.co_id = :co_id
-        ORDER BY jqm.jute_quality
+            im.item_id,
+            im.item_name AS jute_quality,
+            im.item_grp_id
+        FROM item_mst im
+        WHERE im.item_grp_id = :item_grp_id
+          AND (im.active = 1 OR im.active IS NULL)
+        ORDER BY im.item_name
     """)
 
 
@@ -364,17 +416,17 @@ async def batch_plan_edit_setup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_qualities_for_item/{item_id}")
+@router.get("/get_qualities_for_item/{item_grp_id}")
 async def get_qualities_for_item(
-    item_id: int,
+    item_grp_id: int,
     request: Request,
     response: Response,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
     """
-    Get jute qualities for a specific item and company.
-    Called when user selects an item in the line item grid.
+    Get items (formerly qualities) for a specific jute subgroup.
+    Called when user selects a group in the line item grid.
     """
     try:
         co_id = request.query_params.get("co_id")
@@ -382,7 +434,7 @@ async def get_qualities_for_item(
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
         query = get_quality_for_item_query()
-        result = db.execute(query, {"item_id": item_id, "co_id": int(co_id)}).fetchall()
+        result = db.execute(query, {"item_grp_id": item_grp_id}).fetchall()
         qualities = [dict(row._mapping) for row in result]
 
         return {"qualities": qualities}
@@ -450,7 +502,7 @@ async def batch_plan_create(
         for li in payload.line_items:
             line_item = JuteBatchPlanLi(
                 batch_plan_id=batch_plan.batch_plan_id,
-                jute_quality_id=li.jute_quality_id,
+                item_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
                 updated_date_time=datetime.now(),
@@ -539,7 +591,7 @@ async def batch_plan_edit(
         for li in payload.line_items:
             line_item = JuteBatchPlanLi(
                 batch_plan_id=batch_plan_id,
-                jute_quality_id=li.jute_quality_id,
+                item_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
                 updated_date_time=datetime.now(),

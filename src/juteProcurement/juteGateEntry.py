@@ -238,9 +238,9 @@ async def jute_gate_entry_create_setup(
         suppliers_result = db.execute(get_all_suppliers_query(), {"co_id": co_id}).fetchall()
         suppliers = [dict(r._mapping) for r in suppliers_result]
 
-        # Get jute items (where item_type_id = 2)
-        jute_items_result = db.execute(get_jute_items_query(), {"co_id": co_id}).fetchall()
-        jute_items = [dict(r._mapping) for r in jute_items_result]
+        # Get jute groups (subgroups with parent item_type_id = 2)
+        jute_groups_result = db.execute(get_jute_items_query(), {"co_id": co_id}).fetchall()
+        jute_groups = [dict(r._mapping) for r in jute_groups_result]
 
         # Get open Jute POs for selection
         open_pos_result = db.execute(get_open_jute_pos_query(), {"co_id": co_id}).fetchall()
@@ -265,7 +265,7 @@ async def jute_gate_entry_create_setup(
             "branches": branches,
             "mukams": mukams,
             "suppliers": suppliers,
-            "jute_items": jute_items,
+            "jute_groups": jute_groups,
             "open_pos": open_pos,
             "uom_options": uom_options,
             "vehicle_types": vehicle_types,
@@ -300,14 +300,14 @@ async def get_parties_by_supplier(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_qualities_by_item/{item_id}")
+@router.get("/get_qualities_by_item/{item_grp_id}")
 async def get_qualities_by_item(
-    item_id: int,
+    item_grp_id: int,
     request: Request,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get jute qualities for a specific item."""
+    """Get items (formerly qualities) for a specific jute subgroup."""
     try:
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
@@ -316,7 +316,7 @@ async def get_qualities_by_item(
         co_id = int(q_co_id)
         
         query = get_jute_qualities_by_item_query()
-        result = db.execute(query, {"item_id": item_id, "co_id": co_id}).fetchall()
+        result = db.execute(query, {"item_grp_id": item_grp_id}).fetchall()
         qualities = [dict(r._mapping) for r in result]
         
         return {"qualities": qualities}
@@ -384,11 +384,9 @@ class JuteGateEntryLineItemCreate(BaseModel):
     """
     jute_po_li_id: Optional[int] = None
     challan_item_id: Optional[int] = None
-    challan_jute_quality_id: Optional[int] = None
     challan_quantity: Optional[float] = None
     challan_weight: Optional[float] = None
     actual_item_id: Optional[int] = None
-    actual_jute_quality_id: Optional[int] = None
     actual_quantity: Optional[float] = None
     actual_weight: Optional[float] = None
     allowable_moisture: Optional[float] = None
@@ -595,12 +593,10 @@ async def jute_gate_entry_create(
                 jute_po_li_id=li.jute_po_li_id,
                 # Challan details
                 challan_item_id=li.challan_item_id,
-                challan_quality_id=li.challan_jute_quality_id,
                 challan_quantity=li.challan_quantity,
                 challan_weight=li.challan_weight,
                 # Actual details
                 actual_item_id=li.actual_item_id,
-                actual_quality=li.actual_jute_quality_id,
                 actual_qty=li.actual_quantity,
                 actual_weight=li.actual_weight,
                 # Moisture
@@ -928,11 +924,9 @@ async def jute_gate_entry_update(
                     jute_mr_id=jute_mr_id,
                     jute_po_li_id=li.jute_po_li_id,
                     challan_item_id=li.challan_item_id,
-                    challan_quality_id=li.challan_jute_quality_id,
                     challan_quantity=li.challan_quantity,
                     challan_weight=li.challan_weight,
                     actual_item_id=li.actual_item_id,
-                    actual_quality=li.actual_jute_quality_id,
                     actual_qty=li.actual_quantity,
                     actual_weight=li.actual_weight,
                     allowable_moisture=li.allowable_moisture,
