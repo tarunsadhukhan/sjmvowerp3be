@@ -41,14 +41,15 @@ def get_customer_branches_bulk(co_id: int = None):
     sql = """SELECT
         pbm.party_mst_branch_id,
         pbm.party_id,
-        pbm.party_branch_name,
-        pbm.fatory_address AS address,
-        pbm.state_id,
+        COALESCE(pbm.address, '') AS party_branch_name,
+        pbm.address,
+        cm.state_id,
         sm.state AS state_name,
         pbm.gst_no
     FROM party_branch_mst pbm
     LEFT JOIN party_mst pm ON pm.party_id = pbm.party_id
-    LEFT JOIN state_mst sm ON sm.state_id = pbm.state_id
+    LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+    LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
     WHERE pbm.active = 1
         AND FIND_IN_SET("2", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         AND (:co_id IS NULL OR pm.co_id = :co_id)
@@ -81,6 +82,37 @@ def get_transporters_for_sales(co_id: int = None):
         AND (:co_id IS NULL OR pm.co_id = :co_id)
         AND pm.active = 1
     ORDER BY pm.supp_name;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES ITEM / GROUP QUERIES (for setup_2)
+# =============================================================================
+
+def get_item_by_group_id_saleable(item_group_id: int):
+    """Get saleable items for a given item group, including tax_percentage and hsn_code."""
+    sql = """SELECT im.item_id, im.item_code, im.item_name,
+        im.uom_id, um.uom_name,
+        im.tax_percentage, im.hsn_code
+    FROM item_mst im
+    LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
+    WHERE im.item_grp_id = :item_group_id
+        AND im.active = 1
+        AND im.saleable = 1;"""
+    return text(sql)
+
+
+def get_item_uom_by_group_id_saleable(item_group_id: int):
+    """Get UOM mappings for saleable items in a given item group."""
+    sql = """SELECT uimm.item_id, uimm.map_to_id, um.uom_name
+    FROM uom_item_map_mst AS uimm
+    JOIN item_mst AS im
+      ON im.item_id = uimm.item_id
+     AND im.item_grp_id = :item_group_id
+     AND im.saleable = 1
+     AND im.active = 1
+    LEFT JOIN uom_mst AS um
+      ON um.uom_id = uimm.map_to_id;"""
     return text(sql)
 
 

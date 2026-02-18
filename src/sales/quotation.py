@@ -13,16 +13,17 @@ from src.procurement.indent import (
     calculate_approval_permissions,
 )
 from src.procurement.query import (
-    get_item_by_group_id_purchaseable,
     get_item_make_by_group_id,
-    get_item_uom_by_group_id,
     get_approval_flow_by_menu_branch,
     get_user_approval_level,
     get_max_approval_level,
     check_approval_mst_exists,
     get_user_edit_access,
+    get_company_branch_addresses,
 )
 from src.sales.query import (
+    get_item_by_group_id_saleable,
+    get_item_uom_by_group_id_saleable,
     get_customers_for_sales,
     get_customer_branches_bulk,
     get_brokers_for_sales,
@@ -41,6 +42,7 @@ from src.sales.query import (
     get_quotation_with_approval_info,
     get_max_quotation_no_for_branch_fy,
 )
+from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.sales.constants import SALES_DOC_TYPES
 
 logger = logging.getLogger(__name__)
@@ -325,11 +327,31 @@ async def get_quotation_setup_1(
         itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
         item_groups = [dict(r._mapping) for r in itemgrp_result]
 
+        # Company branch addresses (for billing and shipping)
+        branch_addresses_query = get_company_branch_addresses(co_id=co_id, branch_id=None)
+        branch_addresses_result = db.execute(branch_addresses_query, {"co_id": co_id, "branch_id": None}).fetchall()
+        branch_addresses = [dict(r._mapping) for r in branch_addresses_result]
+
+        # Company config
+        co_config_query = get_co_config_by_id_query(co_id)
+        co_config_result = db.execute(co_config_query, {"co_id": co_id}).fetchone()
+        co_config = dict(co_config_result._mapping) if co_config_result else {}
+
+        # Build flat customer_branches list for frontend
+        customer_branches = []
+        for cust in customers:
+            for branch in cust.get("branches", []):
+                branch["party_id"] = cust.get("party_id")
+                customer_branches.append(branch)
+
         return {
             "branches": branches,
             "customers": customers,
             "brokers": brokers,
             "item_groups": item_groups,
+            "branch_addresses": branch_addresses,
+            "co_config": co_config,
+            "customer_branches": customer_branches,
         }
     except HTTPException:
         raise
@@ -354,7 +376,7 @@ async def get_quotation_setup_2(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid item_group")
 
-        items_query = get_item_by_group_id_purchaseable(item_group_id=item_group_id)
+        items_query = get_item_by_group_id_saleable(item_group_id=item_group_id)
         items_result = db.execute(items_query, {"item_group_id": item_group_id}).fetchall()
         items = [dict(r._mapping) for r in items_result]
 
@@ -362,7 +384,7 @@ async def get_quotation_setup_2(
         makes_result = db.execute(makes_query, {"item_group_id": item_group_id}).fetchall()
         makes = [dict(r._mapping) for r in makes_result]
 
-        uoms_query = get_item_uom_by_group_id(item_group_id=item_group_id)
+        uoms_query = get_item_uom_by_group_id_saleable(item_group_id=item_group_id)
         uoms_result = db.execute(uoms_query, {"item_group_id": item_group_id}).fetchall()
         uoms = [dict(r._mapping) for r in uoms_result]
 
@@ -608,10 +630,11 @@ async def create_quotation(
 ):
     """Create a sales quotation with detail rows and GST."""
     try:
-        branch_id = to_int(payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party"), "party", required=True)
+        # Accept both short names (branch, party) and suffixed names (branch_id, party_id)
+        branch_id = to_int(payload.get("branch_id") or payload.get("branch"), "branch", required=True)
+        party_id = to_int(payload.get("party_id") or payload.get("party"), "party", required=True)
 
-        date_str = payload.get("date")
+        date_str = payload.get("quotation_date") or payload.get("date")
         if not date_str:
             raise HTTPException(status_code=400, detail="date is required")
         try:
@@ -626,11 +649,11 @@ async def create_quotation(
         updated_by = to_int(token_data.get("user_id"), "updated_by")
         created_at = datetime.utcnow()
 
-        # Optional header fields
-        sales_broker_id = to_int(payload.get("broker"), "broker")
-        billing_address_id = to_int(payload.get("billing_address"), "billing_address")
-        shipping_address_id = to_int(payload.get("shipping_address"), "shipping_address")
-        expiry_str = payload.get("expiry_date")
+        # Optional header fields — accept both short and suffixed names
+        sales_broker_id = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        billing_address_id = to_int(payload.get("billing_address_id") or payload.get("billing_address"), "billing_address")
+        shipping_address_id = to_int(payload.get("shipping_address_id") or payload.get("shipping_address"), "shipping_address")
+        expiry_str = payload.get("quotation_expiry_date") or payload.get("expiry_date")
         quotation_expiry_date = None
         if expiry_str:
             try:
@@ -643,15 +666,15 @@ async def create_quotation(
         round_off_value = to_float(payload.get("round_off_value"), "round_off_value")
         delivery_days = to_int(payload.get("delivery_days"), "delivery_days")
 
-        # Normalize items
+        # Normalize items — accept both short and suffixed field names
         normalized_items = []
         for idx, item in enumerate(raw_items, start=1):
-            item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
+            item_id = to_int(item.get("item_id") or item.get("item"), f"items[{idx}].item", required=True)
             quantity = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
-            uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+            uom_id = to_int(item.get("uom_id") or item.get("uom"), f"items[{idx}].uom", required=True)
             normalized_items.append({
                 "item_id": item_id,
-                "item_make_id": to_int(item.get("item_make"), f"items[{idx}].item_make"),
+                "item_make_id": to_int(item.get("item_make_id") or item.get("item_make"), f"items[{idx}].item_make"),
                 "hsn_code": item.get("hsn_code"),
                 "quantity": quantity,
                 "uom_id": uom_id,
@@ -758,11 +781,11 @@ async def update_quotation(
 ):
     """Update a sales quotation with detail rows and GST."""
     try:
-        sales_quotation_id = to_int(payload.get("id"), "id", required=True)
-        branch_id = to_int(payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party"), "party", required=True)
+        sales_quotation_id = to_int(payload.get("sales_quotation_id") or payload.get("id"), "id", required=True)
+        branch_id = to_int(payload.get("branch_id") or payload.get("branch"), "branch", required=True)
+        party_id = to_int(payload.get("party_id") or payload.get("party"), "party", required=True)
 
-        date_str = payload.get("date")
+        date_str = payload.get("quotation_date") or payload.get("date")
         if not date_str:
             raise HTTPException(status_code=400, detail="date is required")
         try:
@@ -784,11 +807,11 @@ async def update_quotation(
         updated_by = to_int(token_data.get("user_id"), "updated_by")
         updated_at = datetime.utcnow()
 
-        # Optional fields
-        sales_broker_id = to_int(payload.get("broker"), "broker")
-        billing_address_id = to_int(payload.get("billing_address"), "billing_address")
-        shipping_address_id = to_int(payload.get("shipping_address"), "shipping_address")
-        expiry_str = payload.get("expiry_date")
+        # Optional fields — accept both short and suffixed names
+        sales_broker_id = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        billing_address_id = to_int(payload.get("billing_address_id") or payload.get("billing_address"), "billing_address")
+        shipping_address_id = to_int(payload.get("shipping_address_id") or payload.get("shipping_address"), "shipping_address")
+        expiry_str = payload.get("quotation_expiry_date") or payload.get("expiry_date")
         quotation_expiry_date = None
         if expiry_str:
             try:
@@ -801,15 +824,15 @@ async def update_quotation(
         round_off_value = to_float(payload.get("round_off_value"), "round_off_value")
         delivery_days = to_int(payload.get("delivery_days"), "delivery_days")
 
-        # Normalize items
+        # Normalize items — accept both short and suffixed field names
         normalized_items = []
         for idx, item in enumerate(raw_items, start=1):
-            item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
+            item_id = to_int(item.get("item_id") or item.get("item"), f"items[{idx}].item", required=True)
             quantity = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
-            uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+            uom_id = to_int(item.get("uom_id") or item.get("uom"), f"items[{idx}].uom", required=True)
             normalized_items.append({
                 "item_id": item_id,
-                "item_make_id": to_int(item.get("item_make"), f"items[{idx}].item_make"),
+                "item_make_id": to_int(item.get("item_make_id") or item.get("item_make"), f"items[{idx}].item_make"),
                 "hsn_code": item.get("hsn_code"),
                 "quantity": quantity,
                 "uom_id": uom_id,
