@@ -56,7 +56,9 @@ class ItemGrpMst(Base):
     __tablename__ = "item_grp_mst"
 
     item_grp_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    parent_grp_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    parent_grp_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("item_grp_mst.item_grp_id"), nullable=True
+    )
     active: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     updated_by: Mapped[int] = mapped_column(Integer, nullable=False)

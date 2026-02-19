@@ -60,7 +60,7 @@ class YarnQualityMst(Base):
 
     yarn_quality_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     quality_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
-    yarn_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    item_grp_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     twist_per_inch: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     std_count: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     std_doff: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -572,11 +572,14 @@ class JutePoLi(Base):
 # =============================================================================
 
 class JuteYarnTypeMst(Base):
-    """Jute yarn type master table - stores yarn type information.
-
-    Based on dev3 schema (2026-01-29).
+    """DEPRECATED: Jute yarn type master table.
+    
+    Yarn types have been migrated to item_grp_mst with item_type_id=4.
+    This model is kept for backward compatibility / rollback only.
+    Do NOT use in new code — use ItemGrpMst with item_type_id=4 instead.
     """
     __tablename__ = "jute_yarn_type_mst"
+    __table_args__ = {"extend_existing": True}
 
     jute_yarn_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_yarn_type_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -586,40 +589,42 @@ class JuteYarnTypeMst(Base):
     )
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Relationships
-    yarn_items: Mapped[List["JuteYarnMst"]] = relationship(
-        "JuteYarnMst", back_populates="yarn_type"
-    )
-
 
 # =============================================================================
 # JUTE YARN MASTER
 # =============================================================================
 
 class JuteYarnMst(Base):
-    """Jute yarn master table - stores yarn information.
+    """Jute yarn master table - stores yarn-specific details.
 
-    Based on dev3 schema (2026-01-29).
+    Based on dev3 schema (2026-02-19).
+    Each yarn also has a corresponding item_mst record (linked via item_id).
+    - item_grp_id: FK to item_grp_mst (item_type_id=4) — the yarn type group.
+    - item_id: FK to item_mst — the item record created alongside this yarn.
+    - jute_yarn_name / co_id: Deprecated — kept for backward compatibility.
+      The authoritative name comes from item_mst.item_name.
     """
     __tablename__ = "jute_yarn_mst"
 
     jute_yarn_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_yarn_count: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    jute_yarn_type_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("jute_yarn_type_mst.jute_yarn_type_id"), nullable=True, index=True
+    # FK exists in DB but omitted from ORM — item_grp_mst uses a different DeclarativeBase
+    item_grp_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True, index=True
     )
     jute_yarn_remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # Deprecated: name now sourced from item_mst.item_name; kept for backward compat
     jute_yarn_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Deprecated: company scoping now via item_grp_mst.co_id; kept for backward compat
     co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Relationships
-    yarn_type: Mapped[Optional["JuteYarnTypeMst"]] = relationship(
-        "JuteYarnTypeMst", back_populates="yarn_items"
-    )
+    # Note: No ORM relationship to ItemGrpMst or ItemMst because they use
+    # a different DeclarativeBase. Use raw SQL joins for querying.
 
 # =============================================================================
 # JUTE BATCH PLAN MODELS

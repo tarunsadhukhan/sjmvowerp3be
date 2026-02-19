@@ -34,4 +34,5 @@ SALES_DOC_TYPES = {
     "QUOTATION": "SQ",
     "SALES_ORDER": "SO",
     "DELIVERY_ORDER": "DO",
+    "INVOICE": "SI",
 }

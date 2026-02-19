@@ -2,13 +2,18 @@
 Yarn Master API endpoints.
 Provides CRUD operations for jute yarn master data.
 
+Each yarn record in jute_yarn_mst has a corresponding item_mst record.
+On create, item_mst is created first, then jute_yarn_mst references it via item_id.
+On edit, item_mst is updated first, then jute_yarn_mst details.
+
 Schema (jute_yarn_mst):
 - jute_yarn_id: int (PK, auto)
 - jute_yarn_count: float (nullable)
-- jute_yarn_type_id: int (FK to jute_yarn_type_mst)
+- item_grp_id: int (FK to item_grp_mst, yarn type group)
 - jute_yarn_remarks: str (nullable)
-- jute_yarn_name: str (nullable)
-- co_id: int
+- item_id: int (FK to item_mst, the linked item record)
+- jute_yarn_name: str (DEPRECATED - kept for backward compat; name from item_mst)
+- co_id: int (DEPRECATED - kept for backward compat; scoping via item_grp_mst)
 - updated_date_time: datetime
 - updated_by: int
 """
@@ -19,28 +24,58 @@ from sqlalchemy.orm import Session
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteYarnMst
+from src.models.item import ItemMst, ItemGrpMst
 from datetime import datetime
 
 router = APIRouter()
 
+# item_type_id for Yarn in item_type_master
+YARN_ITEM_TYPE_ID = 4
+
+# Default item_mst field values for yarn items
+YARN_ITEM_DEFAULTS = {
+    "active": 1,
+    "tangible": True,
+    "hsn_code": "5304",
+    "tax_percentage": 5.0,
+    "saleable": True,
+    "consumable": True,
+    "purchaseable": True,
+    "manufacturable": True,
+    "assembly": False,
+    "uom_rounding": 0,
+    "rate_rounding": 2,
+    "uom_id": 163,
+}
+
+
+# ============================================================================
+# SQL QUERY FUNCTIONS
+# ============================================================================
 
 def get_yarn_list_query():
     """
-    Get all yarn masters for a company with yarn type name joined.
+    Get all yarn masters for a company with item details joined.
+    Authoritative name comes from item_mst.item_name.
+    Falls back to jute_yarn_mst.jute_yarn_name for un-migrated rows.
     """
     return text("""
         SELECT 
             ym.jute_yarn_id,
-            ym.jute_yarn_name,
+            ym.item_id,
+            COALESCE(im.item_name, ym.jute_yarn_name) AS jute_yarn_name,
+            im.item_code,
             ym.jute_yarn_count,
-            ym.jute_yarn_type_id,
-            yt.jute_yarn_type_name,
+            ym.item_grp_id,
+            ig.item_grp_name,
+            ig.item_grp_code,
             ym.jute_yarn_remarks,
             ym.co_id,
             ym.updated_by,
             ym.updated_date_time
         FROM jute_yarn_mst ym
-        LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+        LEFT JOIN item_mst im ON ym.item_id = im.item_id
+        LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
         WHERE ym.co_id = :co_id
         ORDER BY ym.jute_yarn_id DESC
     """)
@@ -53,21 +88,26 @@ def get_yarn_list_with_search_query():
     return text("""
         SELECT 
             ym.jute_yarn_id,
-            ym.jute_yarn_name,
+            ym.item_id,
+            COALESCE(im.item_name, ym.jute_yarn_name) AS jute_yarn_name,
+            im.item_code,
             ym.jute_yarn_count,
-            ym.jute_yarn_type_id,
-            yt.jute_yarn_type_name,
+            ym.item_grp_id,
+            ig.item_grp_name,
+            ig.item_grp_code,
             ym.jute_yarn_remarks,
             ym.co_id,
             ym.updated_by,
             ym.updated_date_time
         FROM jute_yarn_mst ym
-        LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+        LEFT JOIN item_mst im ON ym.item_id = im.item_id
+        LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
         WHERE ym.co_id = :co_id
           AND (
-              ym.jute_yarn_name LIKE :search
-              OR yt.jute_yarn_type_name LIKE :search
+              COALESCE(im.item_name, ym.jute_yarn_name) LIKE :search
+              OR ig.item_grp_name LIKE :search
               OR ym.jute_yarn_remarks LIKE :search
+              OR im.item_code LIKE :search
           )
         ORDER BY ym.jute_yarn_id DESC
     """)
@@ -75,17 +115,78 @@ def get_yarn_list_with_search_query():
 
 def get_yarn_types_for_company():
     """
-    Get all yarn types for dropdown.
+    Get all yarn types (item groups with item_type_id=4) for dropdown.
     """
     return text("""
         SELECT 
-            jute_yarn_type_id,
-            jute_yarn_type_name
-        FROM jute_yarn_type_mst
+            item_grp_id,
+            item_grp_name,
+            item_grp_code
+        FROM item_grp_mst
         WHERE co_id = :co_id
-        ORDER BY jute_yarn_type_name
+          AND item_type_id = :item_type_id
+          AND parent_grp_id IS NULL
+        ORDER BY item_grp_name
     """)
 
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _generate_item_code(jute_yarn_name: str) -> str:
+    """
+    Generate an item_code from the yarn name.
+    Uses the yarn name directly as the item code (since it is already a
+    composite like "10-SKWP-Gold").
+    """
+    return jute_yarn_name.strip() if jute_yarn_name else ""
+
+
+def _check_item_uniqueness(db: Session, co_id: int, item_grp_id: int | None,
+                           item_code: str, item_name: str,
+                           exclude_item_id: int | None = None):
+    """
+    Check that item_code is unique within the item group and
+    item_name is unique across all company groups.
+    Raises HTTPException on conflict.
+    """
+    # Get all group IDs for this company
+    groups = db.query(ItemGrpMst).filter(ItemGrpMst.co_id == co_id).all()
+    group_ids = [g.item_grp_id for g in groups]
+
+    # Check item_code uniqueness within the same item group
+    if item_grp_id:
+        code_query = db.query(ItemMst).filter(
+            ItemMst.item_grp_id == item_grp_id,
+            ItemMst.item_code == item_code
+        )
+        if exclude_item_id:
+            code_query = code_query.filter(ItemMst.item_id != exclude_item_id)
+        if code_query.first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Item code '{item_code}' already exists in this yarn type group"
+            )
+
+    # Check item_name uniqueness across all company groups
+    if group_ids:
+        name_query = db.query(ItemMst).filter(
+            ItemMst.item_grp_id.in_(group_ids),
+            ItemMst.item_name == item_name
+        )
+        if exclude_item_id:
+            name_query = name_query.filter(ItemMst.item_id != exclude_item_id)
+        if name_query.first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Item with name '{item_name}' already exists"
+            )
+
+
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
 
 @router.get("/get_yarn_table")
 async def get_yarn_table(
@@ -146,7 +247,7 @@ async def get_yarn_by_id(
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
     """
-    Get a single yarn master record by ID.
+    Get a single yarn master record by ID, with item details.
     """
     try:
         co_id = request.query_params.get("co_id")
@@ -156,16 +257,20 @@ async def get_yarn_by_id(
         query = text("""
             SELECT 
                 ym.jute_yarn_id,
-                ym.jute_yarn_name,
+                ym.item_id,
+                COALESCE(im.item_name, ym.jute_yarn_name) AS jute_yarn_name,
+                im.item_code,
                 ym.jute_yarn_count,
-                ym.jute_yarn_type_id,
-                yt.jute_yarn_type_name,
+                ym.item_grp_id,
+                ig.item_grp_name,
+                ig.item_grp_code,
                 ym.jute_yarn_remarks,
                 ym.co_id,
                 ym.updated_by,
                 ym.updated_date_time
             FROM jute_yarn_mst ym
-            LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+            LEFT JOIN item_mst im ON ym.item_id = im.item_id
+            LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
             WHERE ym.jute_yarn_id = :yarn_id
               AND ym.co_id = :co_id
         """)
@@ -198,8 +303,11 @@ async def yarn_create_setup(
         if not co_id:
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
-        # Get yarn types for dropdown
-        yarn_types_result = db.execute(get_yarn_types_for_company(), {"co_id": int(co_id)}).fetchall()
+        # Get yarn types (item groups with item_type_id=4) for dropdown
+        yarn_types_result = db.execute(
+            get_yarn_types_for_company(),
+            {"co_id": int(co_id), "item_type_id": YARN_ITEM_TYPE_ID},
+        ).fetchall()
         yarn_types = [dict(row._mapping) for row in yarn_types_result]
 
         return {
@@ -221,27 +329,31 @@ async def yarn_edit_setup(
 ):
     """
     Get setup data for editing a yarn master record.
-    Returns the existing yarn details and yarn types for dropdown.
+    Returns the existing yarn details (with item info) and yarn types for dropdown.
     """
     try:
         co_id = request.query_params.get("co_id")
         if not co_id:
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
-        # Get the existing yarn record
+        # Get the existing yarn record with item details
         query = text("""
             SELECT 
                 ym.jute_yarn_id,
-                ym.jute_yarn_name,
+                ym.item_id,
+                COALESCE(im.item_name, ym.jute_yarn_name) AS jute_yarn_name,
+                im.item_code,
                 ym.jute_yarn_count,
-                ym.jute_yarn_type_id,
-                yt.jute_yarn_type_name,
+                ym.item_grp_id,
+                ig.item_grp_name,
+                ig.item_grp_code,
                 ym.jute_yarn_remarks,
                 ym.co_id,
                 ym.updated_by,
                 ym.updated_date_time
             FROM jute_yarn_mst ym
-            LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+            LEFT JOIN item_mst im ON ym.item_id = im.item_id
+            LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
             WHERE ym.jute_yarn_id = :yarn_id
               AND ym.co_id = :co_id
         """)
@@ -251,8 +363,11 @@ async def yarn_edit_setup(
         if not result:
             raise HTTPException(status_code=404, detail="Yarn master record not found")
 
-        # Get yarn types for dropdown
-        yarn_types_result = db.execute(get_yarn_types_for_company(), {"co_id": int(co_id)}).fetchall()
+        # Get yarn types (item groups with item_type_id=4) for dropdown
+        yarn_types_result = db.execute(
+            get_yarn_types_for_company(),
+            {"co_id": int(co_id), "item_type_id": YARN_ITEM_TYPE_ID},
+        ).fetchall()
         yarn_types = [dict(row._mapping) for row in yarn_types_result]
 
         return {
@@ -274,6 +389,14 @@ async def yarn_create(
 ):
     """
     Create a new yarn master record.
+    
+    Flow:
+    1. Validate inputs
+    2. Generate item_code from jute_yarn_name
+    3. Check uniqueness for item_code/item_name in item_mst
+    4. Create item_mst record FIRST
+    5. Create jute_yarn_mst record with item_id FK
+    6. Also write jute_yarn_name and co_id for backward compat
     """
     try:
         body = await request.json()
@@ -287,34 +410,63 @@ async def yarn_create(
             raise HTTPException(status_code=400, detail="Yarn name is required")
 
         jute_yarn_count = body.get("jute_yarn_count")
-        jute_yarn_type_id = body.get("jute_yarn_type_id")
+        item_grp_id = body.get("item_grp_id")
         jute_yarn_remarks = body.get("jute_yarn_remarks")
 
-        # Check for duplicate name within same company
-        check_query = text("""
-            SELECT COUNT(*) as cnt FROM jute_yarn_mst 
-            WHERE co_id = :co_id AND jute_yarn_name = :yarn_name
-        """)
-        check_result = db.execute(check_query, {
-            "co_id": int(co_id),
-            "yarn_name": jute_yarn_name
-        }).fetchone()
-        
-        if check_result and check_result.cnt > 0:
-            raise HTTPException(status_code=400, detail="Yarn with this name already exists")
+        # Parse item_grp_id
+        parsed_grp_id = int(item_grp_id) if item_grp_id else None
+
+        # Generate item_code from yarn name
+        item_code = _generate_item_code(jute_yarn_name)
+        if not item_code:
+            raise HTTPException(status_code=400, detail="Could not generate item code from yarn name")
+
+        # Check uniqueness in item_mst
+        _check_item_uniqueness(
+            db=db,
+            co_id=int(co_id),
+            item_grp_id=parsed_grp_id,
+            item_code=item_code,
+            item_name=jute_yarn_name,
+        )
 
         # Get user ID from token
         user_id = token_data.get("user_id") if token_data else None
+        updated_by = int(user_id) if user_id and str(user_id).isdigit() else None
 
-        # Create new yarn master using ORM
+        # --- Step 1: Create item_mst record ---
+        new_item = ItemMst(
+            active=YARN_ITEM_DEFAULTS["active"],
+            updated_by=updated_by or 0,
+            updated_date_time=datetime.now(),
+            item_grp_id=parsed_grp_id,
+            item_code=item_code,
+            tangible=YARN_ITEM_DEFAULTS["tangible"],
+            item_name=jute_yarn_name,
+            hsn_code=YARN_ITEM_DEFAULTS["hsn_code"],
+            uom_id=YARN_ITEM_DEFAULTS["uom_id"],
+            tax_percentage=YARN_ITEM_DEFAULTS["tax_percentage"],
+            saleable=YARN_ITEM_DEFAULTS["saleable"],
+            consumable=YARN_ITEM_DEFAULTS["consumable"],
+            purchaseable=YARN_ITEM_DEFAULTS["purchaseable"],
+            manufacturable=YARN_ITEM_DEFAULTS["manufacturable"],
+            assembly=YARN_ITEM_DEFAULTS["assembly"],
+            uom_rounding=YARN_ITEM_DEFAULTS["uom_rounding"],
+            rate_rounding=YARN_ITEM_DEFAULTS["rate_rounding"],
+        )
+        db.add(new_item)
+        db.flush()  # flush to get item_id without committing
+
+        # --- Step 2: Create jute_yarn_mst record ---
         new_yarn = JuteYarnMst(
-            jute_yarn_name=jute_yarn_name,
+            jute_yarn_name=jute_yarn_name,  # backward compat
             jute_yarn_count=float(jute_yarn_count) if jute_yarn_count else None,
-            jute_yarn_type_id=int(jute_yarn_type_id) if jute_yarn_type_id else None,
+            item_grp_id=parsed_grp_id,
             jute_yarn_remarks=jute_yarn_remarks,
-            co_id=int(co_id),
-            updated_by=user_id,
-            updated_date_time=datetime.now()
+            item_id=new_item.item_id,
+            co_id=int(co_id),  # backward compat
+            updated_by=updated_by,
+            updated_date_time=datetime.now(),
         )
         db.add(new_yarn)
         db.commit()
@@ -322,7 +474,8 @@ async def yarn_create(
 
         return {
             "message": "Yarn master created successfully",
-            "jute_yarn_id": new_yarn.jute_yarn_id
+            "jute_yarn_id": new_yarn.jute_yarn_id,
+            "item_id": new_item.item_id,
         }
     except HTTPException:
         raise
@@ -341,6 +494,13 @@ async def yarn_edit(
 ):
     """
     Update an existing yarn master record.
+    
+    Flow:
+    1. Validate inputs
+    2. Find existing jute_yarn_mst record
+    3. If item_id exists, update item_mst (name, code, group)
+    4. If item_id is missing (pre-migration row), create item_mst first
+    5. Update jute_yarn_mst fields
     """
     try:
         body = await request.json()
@@ -354,8 +514,9 @@ async def yarn_edit(
             raise HTTPException(status_code=400, detail="Yarn name is required")
 
         jute_yarn_count = body.get("jute_yarn_count")
-        jute_yarn_type_id = body.get("jute_yarn_type_id")
+        item_grp_id = body.get("item_grp_id")
         jute_yarn_remarks = body.get("jute_yarn_remarks")
+        parsed_grp_id = int(item_grp_id) if item_grp_id else None
 
         # Check record exists
         existing = db.query(JuteYarnMst).filter(
@@ -366,38 +527,84 @@ async def yarn_edit(
         if not existing:
             raise HTTPException(status_code=404, detail="Yarn master record not found")
 
-        # Check for duplicate name (excluding current record)
-        check_query = text("""
-            SELECT COUNT(*) as cnt FROM jute_yarn_mst 
-            WHERE co_id = :co_id 
-              AND jute_yarn_name = :yarn_name
-              AND jute_yarn_id != :yarn_id
-        """)
-        check_result = db.execute(check_query, {
-            "co_id": int(co_id),
-            "yarn_name": jute_yarn_name,
-            "yarn_id": yarn_id
-        }).fetchone()
-        
-        if check_result and check_result.cnt > 0:
-            raise HTTPException(status_code=400, detail="Yarn with this name already exists")
+        # Generate item_code from yarn name
+        item_code = _generate_item_code(jute_yarn_name)
+        if not item_code:
+            raise HTTPException(status_code=400, detail="Could not generate item code from yarn name")
 
         # Get user ID from token
         user_id = token_data.get("user_id") if token_data else None
+        updated_by = int(user_id) if user_id and str(user_id).isdigit() else None
 
-        # Update the record
-        existing.jute_yarn_name = jute_yarn_name
+        if existing.item_id:
+            # --- Existing item: update item_mst ---
+            item_record = db.query(ItemMst).filter(
+                ItemMst.item_id == existing.item_id
+            ).first()
+
+            if item_record:
+                # Check uniqueness excluding current item
+                _check_item_uniqueness(
+                    db=db,
+                    co_id=int(co_id),
+                    item_grp_id=parsed_grp_id,
+                    item_code=item_code,
+                    item_name=jute_yarn_name,
+                    exclude_item_id=item_record.item_id,
+                )
+
+                item_record.item_name = jute_yarn_name
+                item_record.item_code = item_code
+                item_record.item_grp_id = parsed_grp_id
+                item_record.updated_by = updated_by or item_record.updated_by
+                item_record.updated_date_time = datetime.now()
+        else:
+            # --- Pre-migration row: no item_id yet — create item_mst ---
+            _check_item_uniqueness(
+                db=db,
+                co_id=int(co_id),
+                item_grp_id=parsed_grp_id,
+                item_code=item_code,
+                item_name=jute_yarn_name,
+            )
+
+            new_item = ItemMst(
+                active=YARN_ITEM_DEFAULTS["active"],
+                updated_by=updated_by or 0,
+                updated_date_time=datetime.now(),
+                item_grp_id=parsed_grp_id,
+                item_code=item_code,
+                tangible=YARN_ITEM_DEFAULTS["tangible"],
+                item_name=jute_yarn_name,
+                hsn_code=YARN_ITEM_DEFAULTS["hsn_code"],
+                uom_id=YARN_ITEM_DEFAULTS["uom_id"],
+                tax_percentage=YARN_ITEM_DEFAULTS["tax_percentage"],
+                saleable=YARN_ITEM_DEFAULTS["saleable"],
+                consumable=YARN_ITEM_DEFAULTS["consumable"],
+                purchaseable=YARN_ITEM_DEFAULTS["purchaseable"],
+                manufacturable=YARN_ITEM_DEFAULTS["manufacturable"],
+                assembly=YARN_ITEM_DEFAULTS["assembly"],
+                uom_rounding=YARN_ITEM_DEFAULTS["uom_rounding"],
+                rate_rounding=YARN_ITEM_DEFAULTS["rate_rounding"],
+            )
+            db.add(new_item)
+            db.flush()
+            existing.item_id = new_item.item_id
+
+        # --- Update jute_yarn_mst ---
+        existing.jute_yarn_name = jute_yarn_name  # backward compat
         existing.jute_yarn_count = float(jute_yarn_count) if jute_yarn_count else None
-        existing.jute_yarn_type_id = int(jute_yarn_type_id) if jute_yarn_type_id else None
+        existing.item_grp_id = parsed_grp_id
         existing.jute_yarn_remarks = jute_yarn_remarks
-        existing.updated_by = user_id
+        existing.updated_by = updated_by
         existing.updated_date_time = datetime.now()
         
         db.commit()
 
         return {
             "message": "Yarn master updated successfully",
-            "jute_yarn_id": yarn_id
+            "jute_yarn_id": yarn_id,
+            "item_id": existing.item_id,
         }
     except HTTPException:
         raise

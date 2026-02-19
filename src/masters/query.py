@@ -63,7 +63,7 @@ def get_item_group_drodown(co_id: int = None):
     CAST(igm.item_grp_code AS CHAR) AS item_grp_code_display,
     CAST(igm.item_grp_name AS CHAR) AS item_grp_name_display
   FROM item_grp_mst igm
-  WHERE igm.parent_grp_id IS NULL and igm.co_id =:co_id and igm.active = 1
+  WHERE igm.parent_grp_id IS NULL and igm.co_id =:co_id and (igm.active IN ('Y', '1') OR igm.active IS NULL)
   UNION ALL-- Recursive member: join with children
   SELECT 
     child.item_grp_id,
@@ -74,6 +74,7 @@ def get_item_group_drodown(co_id: int = None):
     CONCAT(parent.item_grp_name_display, '-', child.item_grp_name)
   FROM item_grp_mst child
   JOIN item_hierarchy parent ON child.parent_grp_id = parent.item_grp_id
+  WHERE (child.active IN ('Y', '1') OR child.active IS NULL)
 ) 
 SELECT 
   item_grp_id,
@@ -921,14 +922,17 @@ where cfm.cost_factor_id = :cost_factor_id;
 # =============================================================================
 
 def get_yarn_type_list(co_id: int = None):
-    """Get list of yarn types from jute_yarn_type_mst."""
+    """Get list of yarn types from item_grp_mst where item_type_id=4."""
     sql = """
     SELECT 
-      jyt.jute_yarn_type_id,
-      jyt.jute_yarn_type_name
-    FROM jute_yarn_type_mst jyt
-    WHERE jyt.co_id = :co_id
-    ORDER BY jyt.jute_yarn_type_name
+      ig.item_grp_id,
+      ig.item_grp_name,
+      ig.item_grp_code
+    FROM item_grp_mst ig
+    WHERE ig.co_id = :co_id
+      AND ig.item_type_id = 4
+      AND ig.parent_grp_id IS NULL
+    ORDER BY ig.item_grp_name
     """
     query = text(sql)
     return query
@@ -940,8 +944,8 @@ def get_yarn_quality_list(co_id: int = None, branch_id: int = None):
        SELECT
       yq.yarn_quality_id,
       yq.quality_code,
-      yq.yarn_type_id,
-      jyt.jute_yarn_type_name as yarn_type_name,
+      yq.item_grp_id,
+      ig.item_grp_name as yarn_type_name,
       yq.twist_per_inch,
       yq.std_count,
       yq.std_doff,
@@ -951,11 +955,11 @@ def get_yarn_quality_list(co_id: int = None, branch_id: int = None):
       yq.branch_id,
       bm.branch_name
     FROM yarn_quality_master yq
-    LEFT JOIN jute_yarn_type_mst jyt ON yq.yarn_type_id = jyt.jute_yarn_type_id
+    LEFT JOIN item_grp_mst ig ON yq.item_grp_id = ig.item_grp_id
     LEFT JOIN branch_mst bm ON yq.branch_id = bm.branch_id
     WHERE (:search IS NULL
         OR yq.quality_code LIKE :search
-        OR jyt.jute_yarn_type_name LIKE :search)
+        OR ig.item_grp_name LIKE :search)
     {branch_filter}
     ORDER BY yq.quality_code
     """
@@ -975,8 +979,8 @@ def get_yarn_quality_by_id(yarn_quality_id: int):
     SELECT 
       yq.yarn_quality_id,
       yq.quality_code,
-      yq.yarn_type_id,
-      jyt.jute_yarn_type_name as yarn_type_name,
+      yq.item_grp_id,
+      ig.item_grp_name as yarn_type_name,
       yq.twist_per_inch,
       yq.std_count,
       yq.std_doff,
@@ -988,7 +992,7 @@ def get_yarn_quality_by_id(yarn_quality_id: int):
       yq.updated_by,
       yq.updated_date_time
     FROM yarn_quality_master yq
-    LEFT JOIN jute_yarn_type_mst jyt ON yq.yarn_type_id = jyt.jute_yarn_type_id
+    LEFT JOIN item_grp_mst ig ON yq.item_grp_id = ig.item_grp_id
     LEFT JOIN branch_mst bm ON yq.branch_id = bm.branch_id
     WHERE yq.yarn_quality_id = :yarn_quality_id    """
     query = text(sql)

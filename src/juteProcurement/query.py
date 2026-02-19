@@ -1790,7 +1790,7 @@ def get_jute_issues_by_date_query():
             COALESCE(ji.item_id, mrli.actual_item_id) AS item_id,
             COALESCE(im.item_name, im2.item_name) AS item_name,
             ji.yarn_type_id,
-            jym.jute_yarn_name AS yarn_type_name,
+            COALESCE(yim.item_name, jym.jute_yarn_name) AS yarn_type_name,
             ji.quantity,
             ji.weight,
             ji.unit_conversion,
@@ -1808,6 +1808,7 @@ def get_jute_issues_by_date_query():
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = COALESCE(im.item_grp_id, im2.item_grp_id)
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = COALESCE(im.item_grp_id, im2.item_grp_id)
         LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
+        LEFT JOIN item_mst yim ON yim.item_id = jym.item_id
         WHERE ji.branch_id = :branch_id
         AND ji.issue_date = :issue_date
         AND bm.co_id = :co_id
@@ -1820,13 +1821,15 @@ def get_yarn_types_query():
     """
     Query to get yarn options from jute_yarn_mst for issue dropdown.
     Uses jute_yarn_mst which contains specific yarn products (e.g., "10-SKWP-Gold").
+    Resolves name from item_mst (via item_id) with fallback to jute_yarn_name.
     """
     sql = """
         SELECT 
-            jute_yarn_id AS jute_yarn_type_id,
-            jute_yarn_name AS jute_yarn_type_name
-        FROM jute_yarn_mst
-        WHERE co_id = :co_id
-        ORDER BY jute_yarn_name
+            ym.jute_yarn_id AS jute_yarn_type_id,
+            COALESCE(im.item_name, ym.jute_yarn_name) AS jute_yarn_type_name
+        FROM jute_yarn_mst ym
+        LEFT JOIN item_mst im ON im.item_id = ym.item_id
+        WHERE ym.co_id = :co_id
+        ORDER BY COALESCE(im.item_name, ym.jute_yarn_name)
     """
     return text(sql)
