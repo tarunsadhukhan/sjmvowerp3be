@@ -112,7 +112,6 @@ class InvoiceHdr(Base):
     destination: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     mr_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     sale_order_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    branch_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     round_off: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
     tally_sync: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="N")
@@ -137,7 +136,7 @@ class InvoiceLineItem(Base):
     igst_amt: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     igst_per: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     invoice_id: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("invoice_hdr.invoice_id"), nullable=True, index=True
+        BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=True, index=True
     )
     item_description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     item_group: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
