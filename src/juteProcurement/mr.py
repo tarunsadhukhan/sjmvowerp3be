@@ -375,9 +375,10 @@ async def update_jute_mr(
             
             claim_dust = float(item.claim_dust) if item.claim_dust is not None else 0.0
             
-            # Calculate shortage_kgs first
+            # Calculate shortage_kgs first — all weights rounded to 0 decimals (whole kg)
             shortage_kgs = 0.0
-            accepted_weight = actual_weight
+            rounded_weight = round(actual_weight)
+            accepted_weight = rounded_weight
             
             if actual_weight > 0:
                 moisture_diff = 0.0
@@ -387,10 +388,10 @@ async def update_jute_mr(
                 deduction_percentage = moisture_diff + claim_dust
                 if deduction_percentage > 0:
                     # Formula: shortage_kgs = actual_weight * (moisture diff % + claim_dust%)
-                    shortage_kgs = actual_weight * deduction_percentage / 100.0
-                    # Formula: accepted_weight = actual_weight - shortage_kgs
-                    accepted_weight = actual_weight - shortage_kgs
-                    accepted_weight = max(0.0, accepted_weight)  # Ensure non-negative
+                    # Round to 0 decimals to match Integer column type
+                    shortage_kgs = round(rounded_weight * deduction_percentage / 100.0)
+                    # Formula: accepted_weight = actual_weight - shortage_kgs (both integers)
+                    accepted_weight = max(0, rounded_weight - int(shortage_kgs))
                 
                 total_accepted_weight += accepted_weight
             
@@ -428,8 +429,8 @@ async def update_jute_mr(
                 "allowable_moisture": item.allowable_moisture,
                 "actual_moisture": item.actual_moisture,
                 "claim_dust": item.claim_dust,
-                "shortage_kgs": shortage_kgs,
-                "accepted_weight": accepted_weight,
+                "shortage_kgs": int(round(shortage_kgs)),
+                "accepted_weight": int(round(accepted_weight)),
                 "rate": item.rate,
                 "claim_rate": item.claim_rate,
                 "claim_quality": item.claim_quality,
@@ -441,7 +442,7 @@ async def update_jute_mr(
             })
 
         # Update MR header with calculated weight
-        mr_weight = body.mr_weight if body.mr_weight is not None else total_accepted_weight
+        mr_weight = round(body.mr_weight) if body.mr_weight is not None else round(total_accepted_weight)
         
         update_header_query = text("""
             UPDATE jute_mr

@@ -32,6 +32,10 @@ from src.procurement.query import (
 	get_user_edit_access,
 	get_max_indent_no_for_branch_fy,
 	get_all_approved_indents_query,
+	get_item_validation_data,
+	get_item_fy_indent_check,
+	get_item_regular_bom_outstanding,
+	get_expense_type_name_by_id,
 )
 from src.procurement.constants import (
 	INDENT_TYPES,
@@ -39,12 +43,280 @@ from src.procurement.constants import (
 	normalize_indent_type,
 	is_valid_indent_type,
 )
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
+import math
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# =============================================================================
+# VALIDATION HELPERS
+# =============================================================================
+
+# Mapping: (indent_type, expense_type_name) -> validation logic
+# Logic 1: Max/Min Quantity Validation with Stock Check
+# Logic 2: Open Entry Validation with Financial Year Check
+# Logic 3: No Validation (Capital/Overhaul)
+VALIDATION_LOGIC_MAP = {
+    # Regular indent
+    ("Regular", "General"): 1,
+    ("Regular", "Maintenance"): 1,
+    ("Regular", "Production"): 1,
+    ("Regular", "Overhaul"): 1,
+    ("Regular", "Capital"): 3,
+    # Open indent
+    ("Open", "General"): 2,
+    ("Open", "Maintenance"): 2,
+    ("Open", "Production"): 2,
+    # BOM indent
+    ("BOM", "General"): 1,
+    ("BOM", "Maintenance"): 1,
+    ("BOM", "Production"): 1,
+    ("BOM", "Capital"): 3,
+    ("BOM", "Overhaul"): 3,
+}
+
+
+def determine_validation_logic(indent_type: str, expense_type_name: str) -> int:
+    """Determine which validation logic applies based on indent type + expense type."""
+    return VALIDATION_LOGIC_MAP.get((indent_type, expense_type_name), 3)
+
+
+def get_fy_boundaries(doc_date):
+    """Calculate financial year start/end dates (April 1 → March 31)."""
+    if isinstance(doc_date, str):
+        doc_date = datetime.strptime(doc_date, "%Y-%m-%d").date()
+    elif hasattr(doc_date, "date") and callable(doc_date.date):
+        doc_date = doc_date.date()
+    year = doc_date.year
+    month = doc_date.month
+    if month >= 4:
+        return date(year, 4, 1), date(year + 1, 3, 31)
+    else:
+        return date(year - 1, 4, 1), date(year, 3, 31)
+
+
+def calculate_max_indent_qty(
+    maxqty: float,
+    branch_stock: float,
+    outstanding_indent_qty: float,
+    min_order_qty: float,
+) -> float | None:
+    """
+    Calculate the maximum allowable indent quantity using the formula:
+    available = max_qty - branch_stock - outstanding_indent_qty
+    If available < reorder_qty → reorder_qty
+    Else → ROUNDUP(available / reorder_qty) * reorder_qty
+    Returns None if min_order_qty is 0/None (cannot compute).
+    """
+    if not min_order_qty or min_order_qty <= 0:
+        # No reorder qty defined — cannot apply formula, allow any value
+        return None
+    available = maxqty - branch_stock - outstanding_indent_qty
+    if available <= 0:
+        return None  # No room to indent
+    if available < min_order_qty:
+        return min_order_qty
+    return math.ceil(available / min_order_qty) * min_order_qty
+
+
+@router.get("/validate_item_for_indent")
+async def validate_item_for_indent(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Validate an item for indent creation.
+    Returns validation data including errors, warnings, and allowable qty range
+    based on (indent_type + expense_type) → Logic 1, 2, or 3.
+    """
+    try:
+        branch_id = request.query_params.get("branch_id")
+        item_id = request.query_params.get("item_id")
+        indent_type = request.query_params.get("indent_type")
+        expense_type_id = request.query_params.get("expense_type_id")
+
+        if not branch_id:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+        if not item_id:
+            raise HTTPException(status_code=400, detail="item_id is required")
+        if not indent_type:
+            raise HTTPException(status_code=400, detail="indent_type is required")
+        if not expense_type_id:
+            raise HTTPException(status_code=400, detail="expense_type_id is required")
+
+        try:
+            branch_id = int(branch_id)
+            item_id = int(item_id)
+            expense_type_id = int(expense_type_id)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid parameter format: {e}")
+
+        indent_type = normalize_indent_type(indent_type)
+        if not is_valid_indent_type(indent_type):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid indent_type '{indent_type}'",
+            )
+
+        # Resolve expense type name
+        expense_row = db.execute(
+            get_expense_type_name_by_id(),
+            {"expense_type_id": expense_type_id},
+        ).fetchone()
+        if not expense_row:
+            raise HTTPException(status_code=400, detail=f"Invalid expense_type_id: {expense_type_id}")
+        expense_type_name = dict(expense_row._mapping)["expense_type_name"]
+
+        validation_logic = determine_validation_logic(indent_type, expense_type_name)
+
+        result = {
+            "validation_logic": validation_logic,
+            "indent_type": indent_type,
+            "expense_type_name": expense_type_name,
+            "errors": [],
+            "warnings": [],
+            # Logic 1 fields
+            "branch_stock": None,
+            "outstanding_indent_qty": None,
+            "minqty": None,
+            "maxqty": None,
+            "min_order_qty": None,
+            "has_open_indent": False,
+            "stock_exceeds_max": False,
+            "max_indent_qty": None,
+            "min_indent_qty": None,
+            # Logic 2 fields
+            "fy_indent_exists": False,
+            "fy_indent_no": None,
+            "has_minmax": False,
+            "regular_bom_outstanding": None,
+            "forced_qty": None,
+        }
+
+        if validation_logic == 3:
+            # No validation — free entry
+            return result
+
+        # Fetch common validation data
+        vdata_row = db.execute(
+            get_item_validation_data(),
+            {"branch_id": branch_id, "item_id": item_id},
+        ).fetchone()
+
+        vdata = dict(vdata_row._mapping) if vdata_row else {}
+        branch_stock = float(vdata.get("branch_stock") or 0)
+        outstanding = float(vdata.get("outstanding_indent_qty") or 0)
+        minqty = vdata.get("minqty")
+        maxqty = vdata.get("maxqty")
+        min_order_qty = vdata.get("min_order_qty")
+        has_open = int(vdata.get("has_open_indent") or 0)
+
+        result["branch_stock"] = branch_stock
+        result["outstanding_indent_qty"] = outstanding
+        result["minqty"] = float(minqty) if minqty is not None else None
+        result["maxqty"] = float(maxqty) if maxqty is not None else None
+        result["min_order_qty"] = float(min_order_qty) if min_order_qty is not None else None
+        result["has_open_indent"] = bool(has_open)
+
+        if validation_logic == 1:
+            # --- Logic 1: Max/Min + Stock Check ---
+
+            # Step 1: Check for open indent against the item
+            if has_open:
+                result["errors"].append(
+                    "An open indent already exists for this item at this branch."
+                )
+
+            # Step 2: Check stock + outstanding against max quantity
+            if maxqty is not None and float(maxqty) > 0:
+                result["has_minmax"] = True
+                max_val = float(maxqty)
+                if branch_stock + outstanding > max_val:
+                    result["stock_exceeds_max"] = True
+                    result["errors"].append(
+                        f"Branch stock ({branch_stock}) + outstanding indent qty ({outstanding}) "
+                        f"exceeds max qty ({max_val}). Cannot create indent."
+                    )
+                else:
+                    # Step 3: Calculate allowable indent qty
+                    reorder = float(min_order_qty) if min_order_qty else 0
+                    max_indent = calculate_max_indent_qty(
+                        max_val, branch_stock, outstanding, reorder
+                    )
+                    result["max_indent_qty"] = max_indent
+                    result["min_indent_qty"] = float(minqty) if minqty else None
+            else:
+                # No max qty configured → block indent entry
+                result["has_minmax"] = False
+                result["errors"].append(
+                    "Min/Max stock levels not configured for this item at this branch. "
+                    "Please configure item min/max before raising an indent."
+                )
+
+        elif validation_logic == 2:
+            # --- Logic 2: Open Entry + FY Check ---
+
+            # Step 1: Check for existing open indent in current FY
+            today = date.today()
+            fy_start, fy_end = get_fy_boundaries(today)
+            fy_row = db.execute(
+                get_item_fy_indent_check(),
+                {
+                    "branch_id": branch_id,
+                    "item_id": item_id,
+                    "fy_start": fy_start,
+                    "fy_end": fy_end,
+                },
+            ).fetchone()
+
+            if fy_row:
+                fy_data = dict(fy_row._mapping)
+                result["fy_indent_exists"] = True
+                result["fy_indent_no"] = fy_data.get("indent_no")
+                result["errors"].append(
+                    f"An open indent (#{fy_data.get('indent_no')}) already exists for this item "
+                    f"in the current financial year ({fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')})."
+                )
+
+            # Step 2: Check if max/min exists
+            if maxqty is None and minqty is None:
+                result["has_minmax"] = False
+                result["errors"].append(
+                    "No max/min quantity defined for this item. Cannot create open indent."
+                )
+            else:
+                result["has_minmax"] = True
+
+            # Step 3: Check Regular/BOM outstanding (warning only)
+            rb_row = db.execute(
+                get_item_regular_bom_outstanding(),
+                {"branch_id": branch_id, "item_id": item_id},
+            ).fetchone()
+
+            if rb_row:
+                rb_outstanding = float(dict(rb_row._mapping).get("regular_bom_outstanding") or 0)
+                result["regular_bom_outstanding"] = rb_outstanding
+                if rb_outstanding > 0:
+                    result["warnings"].append(
+                        f"Outstanding indent qty ({rb_outstanding}) exists from Regular/BOM indents for this item."
+                    )
+
+            # Step 4: Force qty to maxqty
+            if maxqty is not None:
+                result["forced_qty"] = float(maxqty)
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error validating item for indent")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/get_indent_setup_1")
@@ -599,6 +871,69 @@ async def create_indent(
 
 		logger.debug("Normalized indent items: %s", normalized_items)
 
+		# ── Server-side line-item validation (safety net) ──────────────
+		expense_name_row = db.execute(
+			get_expense_type_name_by_id(),
+			{"expense_type_id": int(expense_type_id)},
+		).fetchone()
+		resolved_expense_name = (
+			dict(expense_name_row._mapping)["expense_type_name"]
+			if expense_name_row
+			else None
+		)
+		validation_logic = determine_validation_logic(indent_type, resolved_expense_name)
+
+		if validation_logic in (1, 2):
+			fy_start, fy_end = get_fy_boundaries(indent_date)
+			for idx, ni in enumerate(normalized_items, start=1):
+				item_id = ni["item_id"]
+
+				if validation_logic == 1:
+					vdata = db.execute(
+						get_item_validation_data(),
+						{"branch_id": int(branch_id), "item_id": int(item_id)},
+					).fetchone()
+					if vdata:
+						vd = dict(vdata._mapping)
+						max_allowed = calculate_max_indent_qty(
+							vd.get("maxqty"),
+							vd.get("branch_stock", 0),
+							vd.get("outstanding_indent_qty", 0),
+							vd.get("min_order_qty"),
+						)
+						if max_allowed is not None and ni["qty"] > max_allowed:
+							raise HTTPException(
+								status_code=400,
+								detail=(
+									f"Row {idx}: Quantity {ni['qty']} exceeds the "
+									f"maximum allowed indent quantity of {max_allowed:.2f} "
+									f"for this item (maxQty={vd.get('maxqty')}, "
+									f"stock={vd.get('branch_stock', 0)}, "
+									f"outstanding={vd.get('outstanding_indent_qty', 0)})."
+								),
+							)
+
+				elif validation_logic == 2:
+					fy_row = db.execute(
+						get_item_fy_indent_check(),
+						{
+							"item_id": int(item_id),
+							"branch_id": int(branch_id),
+							"fy_start": fy_start,
+							"fy_end": fy_end,
+						},
+					).fetchone()
+					if fy_row:
+						existing = dict(fy_row._mapping)
+						raise HTTPException(
+							status_code=400,
+							detail=(
+								f"Row {idx}: An open indent already exists for this "
+								f"item in the current financial year "
+								f"(Indent No: {existing.get('indent_no')})."
+							),
+						)
+
 		insert_header_query = insert_proc_indent()
 		header_params = {
 			"indent_date": indent_date,
@@ -765,6 +1100,69 @@ async def update_indent(
 			)
 
 		logger.debug("Normalized indent items for update: %s", normalized_items)
+
+		# ── Server-side line-item validation (safety net) ──────────────
+		expense_name_row = db.execute(
+			get_expense_type_name_by_id(),
+			{"expense_type_id": int(expense_type_id)},
+		).fetchone()
+		resolved_expense_name = (
+			dict(expense_name_row._mapping)["expense_type_name"]
+			if expense_name_row
+			else None
+		)
+		validation_logic = determine_validation_logic(indent_type, resolved_expense_name)
+
+		if validation_logic in (1, 2):
+			fy_start, fy_end = get_fy_boundaries(indent_date)
+			for idx, ni in enumerate(normalized_items, start=1):
+				item_id = ni["item_id"]
+
+				if validation_logic == 1:
+					vdata = db.execute(
+						get_item_validation_data(),
+						{"branch_id": int(branch_id), "item_id": int(item_id)},
+					).fetchone()
+					if vdata:
+						vd = dict(vdata._mapping)
+						max_allowed = calculate_max_indent_qty(
+							vd.get("maxqty"),
+							vd.get("branch_stock", 0),
+							vd.get("outstanding_indent_qty", 0),
+							vd.get("min_order_qty"),
+						)
+						if max_allowed is not None and ni["qty"] > max_allowed:
+							raise HTTPException(
+								status_code=400,
+								detail=(
+									f"Row {idx}: Quantity {ni['qty']} exceeds the "
+									f"maximum allowed indent quantity of {max_allowed:.2f} "
+									f"for this item (maxQty={vd.get('maxqty')}, "
+									f"stock={vd.get('branch_stock', 0)}, "
+									f"outstanding={vd.get('outstanding_indent_qty', 0)})."
+								),
+							)
+
+				elif validation_logic == 2:
+					fy_row = db.execute(
+						get_item_fy_indent_check(),
+						{
+							"item_id": int(item_id),
+							"branch_id": int(branch_id),
+							"fy_start": fy_start,
+							"fy_end": fy_end,
+						},
+					).fetchone()
+					if fy_row:
+						existing = dict(fy_row._mapping)
+						raise HTTPException(
+							status_code=400,
+							detail=(
+								f"Row {idx}: An open indent already exists for this "
+								f"item in the current financial year "
+								f"(Indent No: {existing.get('indent_no')})."
+							),
+						)
 
 		# Get existing indent_no, active, and status_id to preserve them
 		# This also helps avoid trigger issues by ensuring all columns are present

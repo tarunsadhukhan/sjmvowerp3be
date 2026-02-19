@@ -632,10 +632,10 @@ sales_delivery_order (header: branch_id, party_id, sales_order_id FK ←, status
       │   └── sales_delivery_order_dtl_gst (→ sales_delivery_order_dtl_id, cgst/sgst/igst)
       ↓
 sales_invoice (header: co_id, branch_id, party_id, quote_id, status — LEGACY)
-  └── invoice_line_items (delivery_line_id FK ←, sale_line_id FK ←, item_id, qty, rate — LEGACY)
+  └── sales_invoice_dtl (delivery_line_id FK ←, sale_line_id FK ←, item_id, qty, rate — LEGACY)
 ```
 
-**Note:** `sales_invoice` and `invoice_line_items` are legacy tables with denormalized data (e.g., `item_name`, `uom` as VARCHAR). New quotation/order/delivery tables follow normalization rules (§5.6).
+**Note:** `sales_invoice` and `sales_invoice_dtl` are legacy tables with denormalized data (e.g., `item_name`, `uom` as VARCHAR). New quotation/order/delivery tables follow normalization rules (§5.6).
 
 ---
 
@@ -916,7 +916,7 @@ When the user asks you to write a query:
 | `sales_quotation` / `sales_quotation_dtl` / `sales_quotation_dtl_gst` | Sales quotations |
 | `sales_order` / `sales_order_dtl` / `sales_order_dtl_gst` | Sales orders |
 | `sales_delivery_order` / `sales_delivery_order_dtl` / `sales_delivery_order_dtl_gst` | Delivery orders |
-| `sales_invoice` / `invoice_line_items` | Sales invoices (legacy) |
+| `sales_invoice` / `sales_invoice_dtl` | Sales invoices (legacy) |
 
 ### `dev3` tables (tenant) — Jute
 
