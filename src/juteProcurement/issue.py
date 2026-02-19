@@ -188,7 +188,7 @@ async def get_jute_issue_by_id(
                 mrli.jute_mr_id,
                 jm.jute_gate_entry_no,
                 ji.yarn_type_id,
-                jytm.jute_yarn_type_name AS yarn_type_name,
+                jym.jute_yarn_name AS yarn_type_name,
                 ji.quantity,
                 ji.weight,
                 ji.unit_conversion,
@@ -201,7 +201,7 @@ async def get_jute_issue_by_id(
             LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
             LEFT JOIN item_mst im ON im.item_id = ji.item_id
             LEFT JOIN item_mst im2 ON im2.item_id = mrli.actual_item_id
-            LEFT JOIN jute_yarn_type_mst jytm ON jytm.jute_yarn_type_id = ji.yarn_type_id
+            LEFT JOIN jute_yarn_mst jym ON jym.jute_yarn_id = ji.yarn_type_id
             WHERE ji.jute_issue_id = :issue_id
             AND bm.co_id = :co_id
         """)

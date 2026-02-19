@@ -60,7 +60,7 @@ class YarnQualityMst(Base):
 
     yarn_quality_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     quality_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
-    yarn_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    item_grp_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     twist_per_inch: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     std_count: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     std_doff: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -572,11 +572,14 @@ class JutePoLi(Base):
 # =============================================================================
 
 class JuteYarnTypeMst(Base):
-    """Jute yarn type master table - stores yarn type information.
-
-    Based on dev3 schema (2026-01-29).
+    """DEPRECATED: Jute yarn type master table.
+    
+    Yarn types have been migrated to item_grp_mst with item_type_id=4.
+    This model is kept for backward compatibility / rollback only.
+    Do NOT use in new code — use ItemGrpMst with item_type_id=4 instead.
     """
     __tablename__ = "jute_yarn_type_mst"
+    __table_args__ = {"extend_existing": True}
 
     jute_yarn_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_yarn_type_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -585,11 +588,6 @@ class JuteYarnTypeMst(Base):
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
-    # Relationships
-    yarn_items: Mapped[List["JuteYarnMst"]] = relationship(
-        "JuteYarnMst", back_populates="yarn_type"
-    )
 
 
 # =============================================================================
@@ -600,13 +598,15 @@ class JuteYarnMst(Base):
     """Jute yarn master table - stores yarn information.
 
     Based on dev3 schema (2026-01-29).
+    After migration: jute_yarn_type_id renamed to item_grp_id,
+    now references item_grp_mst (item_type_id=4) instead of jute_yarn_type_mst.
     """
     __tablename__ = "jute_yarn_mst"
 
     jute_yarn_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_yarn_count: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    jute_yarn_type_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("jute_yarn_type_mst.jute_yarn_type_id"), nullable=True, index=True
+    item_grp_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("item_grp_mst.item_grp_id"), nullable=True, index=True
     )
     jute_yarn_remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     jute_yarn_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -616,10 +616,8 @@ class JuteYarnMst(Base):
     )
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Relationships
-    yarn_type: Mapped[Optional["JuteYarnTypeMst"]] = relationship(
-        "JuteYarnTypeMst", back_populates="yarn_items"
-    )
+    # Note: No ORM relationship to ItemGrpMst because it uses a different DeclarativeBase.
+    # Use raw SQL joins for querying item_grp_mst data.
 
 # =============================================================================
 # JUTE BATCH PLAN MODELS

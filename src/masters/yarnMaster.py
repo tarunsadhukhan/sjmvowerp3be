@@ -5,7 +5,7 @@ Provides CRUD operations for jute yarn master data.
 Schema (jute_yarn_mst):
 - jute_yarn_id: int (PK, auto)
 - jute_yarn_count: float (nullable)
-- jute_yarn_type_id: int (FK to jute_yarn_type_mst)
+- item_grp_id: int (FK to item_grp_mst, replaces old jute_yarn_type_id)
 - jute_yarn_remarks: str (nullable)
 - jute_yarn_name: str (nullable)
 - co_id: int
@@ -23,24 +23,28 @@ from datetime import datetime
 
 router = APIRouter()
 
+# item_type_id for Yarn in item_type_master
+YARN_ITEM_TYPE_ID = 4
+
 
 def get_yarn_list_query():
     """
-    Get all yarn masters for a company with yarn type name joined.
+    Get all yarn masters for a company with item group (yarn type) name joined.
     """
     return text("""
         SELECT 
             ym.jute_yarn_id,
             ym.jute_yarn_name,
             ym.jute_yarn_count,
-            ym.jute_yarn_type_id,
-            yt.jute_yarn_type_name,
+            ym.item_grp_id,
+            ig.item_grp_name,
+            ig.item_grp_code,
             ym.jute_yarn_remarks,
             ym.co_id,
             ym.updated_by,
             ym.updated_date_time
         FROM jute_yarn_mst ym
-        LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+        LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
         WHERE ym.co_id = :co_id
         ORDER BY ym.jute_yarn_id DESC
     """)
@@ -55,18 +59,19 @@ def get_yarn_list_with_search_query():
             ym.jute_yarn_id,
             ym.jute_yarn_name,
             ym.jute_yarn_count,
-            ym.jute_yarn_type_id,
-            yt.jute_yarn_type_name,
+            ym.item_grp_id,
+            ig.item_grp_name,
+            ig.item_grp_code,
             ym.jute_yarn_remarks,
             ym.co_id,
             ym.updated_by,
             ym.updated_date_time
         FROM jute_yarn_mst ym
-        LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+        LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
         WHERE ym.co_id = :co_id
           AND (
               ym.jute_yarn_name LIKE :search
-              OR yt.jute_yarn_type_name LIKE :search
+              OR ig.item_grp_name LIKE :search
               OR ym.jute_yarn_remarks LIKE :search
           )
         ORDER BY ym.jute_yarn_id DESC
@@ -75,15 +80,18 @@ def get_yarn_list_with_search_query():
 
 def get_yarn_types_for_company():
     """
-    Get all yarn types for dropdown.
+    Get all yarn types (item groups with item_type_id=4) for dropdown.
     """
     return text("""
         SELECT 
-            jute_yarn_type_id,
-            jute_yarn_type_name
-        FROM jute_yarn_type_mst
+            item_grp_id,
+            item_grp_name,
+            item_grp_code
+        FROM item_grp_mst
         WHERE co_id = :co_id
-        ORDER BY jute_yarn_type_name
+          AND item_type_id = :item_type_id
+          AND parent_grp_id IS NULL
+        ORDER BY item_grp_name
     """)
 
 
@@ -158,14 +166,15 @@ async def get_yarn_by_id(
                 ym.jute_yarn_id,
                 ym.jute_yarn_name,
                 ym.jute_yarn_count,
-                ym.jute_yarn_type_id,
-                yt.jute_yarn_type_name,
+                ym.item_grp_id,
+                ig.item_grp_name,
+                ig.item_grp_code,
                 ym.jute_yarn_remarks,
                 ym.co_id,
                 ym.updated_by,
                 ym.updated_date_time
             FROM jute_yarn_mst ym
-            LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+            LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
             WHERE ym.jute_yarn_id = :yarn_id
               AND ym.co_id = :co_id
         """)
@@ -198,8 +207,11 @@ async def yarn_create_setup(
         if not co_id:
             raise HTTPException(status_code=400, detail="Company ID (co_id) is required")
 
-        # Get yarn types for dropdown
-        yarn_types_result = db.execute(get_yarn_types_for_company(), {"co_id": int(co_id)}).fetchall()
+        # Get yarn types (item groups with item_type_id=4) for dropdown
+        yarn_types_result = db.execute(
+            get_yarn_types_for_company(),
+            {"co_id": int(co_id), "item_type_id": YARN_ITEM_TYPE_ID},
+        ).fetchall()
         yarn_types = [dict(row._mapping) for row in yarn_types_result]
 
         return {
@@ -234,14 +246,15 @@ async def yarn_edit_setup(
                 ym.jute_yarn_id,
                 ym.jute_yarn_name,
                 ym.jute_yarn_count,
-                ym.jute_yarn_type_id,
-                yt.jute_yarn_type_name,
+                ym.item_grp_id,
+                ig.item_grp_name,
+                ig.item_grp_code,
                 ym.jute_yarn_remarks,
                 ym.co_id,
                 ym.updated_by,
                 ym.updated_date_time
             FROM jute_yarn_mst ym
-            LEFT JOIN jute_yarn_type_mst yt ON ym.jute_yarn_type_id = yt.jute_yarn_type_id
+            LEFT JOIN item_grp_mst ig ON ym.item_grp_id = ig.item_grp_id
             WHERE ym.jute_yarn_id = :yarn_id
               AND ym.co_id = :co_id
         """)
@@ -251,8 +264,11 @@ async def yarn_edit_setup(
         if not result:
             raise HTTPException(status_code=404, detail="Yarn master record not found")
 
-        # Get yarn types for dropdown
-        yarn_types_result = db.execute(get_yarn_types_for_company(), {"co_id": int(co_id)}).fetchall()
+        # Get yarn types (item groups with item_type_id=4) for dropdown
+        yarn_types_result = db.execute(
+            get_yarn_types_for_company(),
+            {"co_id": int(co_id), "item_type_id": YARN_ITEM_TYPE_ID},
+        ).fetchall()
         yarn_types = [dict(row._mapping) for row in yarn_types_result]
 
         return {
@@ -287,7 +303,7 @@ async def yarn_create(
             raise HTTPException(status_code=400, detail="Yarn name is required")
 
         jute_yarn_count = body.get("jute_yarn_count")
-        jute_yarn_type_id = body.get("jute_yarn_type_id")
+        item_grp_id = body.get("item_grp_id")
         jute_yarn_remarks = body.get("jute_yarn_remarks")
 
         # Check for duplicate name within same company
@@ -310,7 +326,7 @@ async def yarn_create(
         new_yarn = JuteYarnMst(
             jute_yarn_name=jute_yarn_name,
             jute_yarn_count=float(jute_yarn_count) if jute_yarn_count else None,
-            jute_yarn_type_id=int(jute_yarn_type_id) if jute_yarn_type_id else None,
+            item_grp_id=int(item_grp_id) if item_grp_id else None,
             jute_yarn_remarks=jute_yarn_remarks,
             co_id=int(co_id),
             updated_by=user_id,
@@ -354,7 +370,7 @@ async def yarn_edit(
             raise HTTPException(status_code=400, detail="Yarn name is required")
 
         jute_yarn_count = body.get("jute_yarn_count")
-        jute_yarn_type_id = body.get("jute_yarn_type_id")
+        item_grp_id = body.get("item_grp_id")
         jute_yarn_remarks = body.get("jute_yarn_remarks")
 
         # Check record exists
@@ -388,7 +404,7 @@ async def yarn_edit(
         # Update the record
         existing.jute_yarn_name = jute_yarn_name
         existing.jute_yarn_count = float(jute_yarn_count) if jute_yarn_count else None
-        existing.jute_yarn_type_id = int(jute_yarn_type_id) if jute_yarn_type_id else None
+        existing.item_grp_id = int(item_grp_id) if item_grp_id else None
         existing.jute_yarn_remarks = jute_yarn_remarks
         existing.updated_by = user_id
         existing.updated_date_time = datetime.now()

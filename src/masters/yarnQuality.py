@@ -126,7 +126,7 @@ async def yarn_quality_create(
         co_id = payload.get("co_id")
         branch_id = payload.get("branch_id")
         quality_code = payload.get("quality_code")
-        jute_yarn_type_id = payload.get("jute_yarn_type_id")
+        item_grp_id = payload.get("item_grp_id")
         twist_per_inch = payload.get("twist_per_inch")
         std_count = payload.get("std_count")
         std_doff = payload.get("std_doff")
@@ -137,7 +137,7 @@ async def yarn_quality_create(
         # Validate required fields
         if not quality_code:
             raise HTTPException(status_code=400, detail="Quality code is required")
-        if not jute_yarn_type_id:
+        if not item_grp_id:
             raise HTTPException(status_code=400, detail="Yarn type is required")
 
         # Check for duplicate quality code
@@ -150,7 +150,7 @@ async def yarn_quality_create(
         # Create new yarn quality record
         new_yarn_quality = YarnQualityMst(
             quality_code=quality_code,
-            yarn_type_id=int(jute_yarn_type_id) if jute_yarn_type_id else None,
+            item_grp_id=int(item_grp_id) if item_grp_id else None,
             twist_per_inch=float(twist_per_inch) if twist_per_inch else None,
             std_count=float(std_count) if std_count else None,
             std_doff=int(std_doff) if std_doff else None,
@@ -285,7 +285,7 @@ async def yarn_quality_edit(
         yarn_quality_id = payload.get("yarn_quality_id")
         co_id = payload.get("co_id")
         quality_code = payload.get("quality_code")
-        jute_yarn_type_id = payload.get("jute_yarn_type_id")
+        item_grp_id = payload.get("item_grp_id")
         twist_per_inch = payload.get("twist_per_inch")
         std_count = payload.get("std_count")
         std_doff = payload.get("std_doff")
@@ -320,7 +320,7 @@ async def yarn_quality_edit(
 
         # Update fields
         existing.quality_code = quality_code or existing.quality_code
-        existing.yarn_type_id = int(jute_yarn_type_id) if jute_yarn_type_id else existing.yarn_type_id
+        existing.item_grp_id = int(item_grp_id) if item_grp_id else existing.item_grp_id
         existing.twist_per_inch = float(twist_per_inch) if twist_per_inch else existing.twist_per_inch
         existing.std_count = float(std_count) if std_count else existing.std_count
         existing.std_doff = int(std_doff) if std_doff else existing.std_doff
