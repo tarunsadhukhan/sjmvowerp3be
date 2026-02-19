@@ -196,3 +196,75 @@ class TestValidateItemEndpoint:
         data = response.json()
         assert data["validation_logic"] == 3
         assert data["warnings"] == []
+
+    @patch("src.procurement.indent.get_current_user_with_refresh")
+    @patch("src.procurement.indent.get_tenant_db")
+    def test_logic1_no_minmax_returns_error(self, mock_db, mock_auth):
+        """Logic 1 (Regular+General) should block entry when item has no min/max configured."""
+        mock_auth.return_value = {"user_id": 1}
+        mock_session = MagicMock()
+
+        # First call: expense type name lookup
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        # Second call: validation data with no min/max
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 0,
+            "outstanding_indent_qty": 0,
+            "minqty": None,
+            "maxqty": None,
+            "min_order_qty": None,
+            "has_open_indent": 0,
+        }
+
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row]
+        mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Regular&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 1
+        assert data["has_minmax"] is False
+        assert len(data["errors"]) > 0
+        assert "min/max" in data["errors"][0].lower() or "Min/Max" in data["errors"][0]
+
+    @patch("src.procurement.indent.get_current_user_with_refresh")
+    @patch("src.procurement.indent.get_tenant_db")
+    def test_logic1_with_minmax_allows_entry(self, mock_db, mock_auth):
+        """Logic 1 (Regular+General) should allow entry when item has min/max configured."""
+        mock_auth.return_value = {"user_id": 1}
+        mock_session = MagicMock()
+
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 10,
+            "outstanding_indent_qty": 5,
+            "minqty": 20,
+            "maxqty": 100,
+            "min_order_qty": 10,
+            "has_open_indent": 0,
+        }
+
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row]
+        mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Regular&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 1
+        assert data["has_minmax"] is True
+        assert data["errors"] == []
+        assert data["max_indent_qty"] is not None

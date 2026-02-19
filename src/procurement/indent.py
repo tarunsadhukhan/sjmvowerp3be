@@ -251,8 +251,12 @@ async def validate_item_for_indent(
                     result["max_indent_qty"] = max_indent
                     result["min_indent_qty"] = float(minqty) if minqty else None
             else:
-                # No max qty → user may enter any value
+                # No max qty configured → block indent entry
                 result["has_minmax"] = False
+                result["errors"].append(
+                    "Min/Max stock levels not configured for this item at this branch. "
+                    "Please configure item min/max before raising an indent."
+                )
 
         elif validation_logic == 2:
             # --- Logic 2: Open Entry + FY Check ---
