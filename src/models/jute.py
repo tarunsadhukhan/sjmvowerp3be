@@ -595,11 +595,14 @@ class JuteYarnTypeMst(Base):
 # =============================================================================
 
 class JuteYarnMst(Base):
-    """Jute yarn master table - stores yarn information.
+    """Jute yarn master table - stores yarn-specific details.
 
-    Based on dev3 schema (2026-01-29).
-    After migration: jute_yarn_type_id renamed to item_grp_id,
-    now references item_grp_mst (item_type_id=4) instead of jute_yarn_type_mst.
+    Based on dev3 schema (2026-02-19).
+    Each yarn also has a corresponding item_mst record (linked via item_id).
+    - item_grp_id: FK to item_grp_mst (item_type_id=4) — the yarn type group.
+    - item_id: FK to item_mst — the item record created alongside this yarn.
+    - jute_yarn_name / co_id: Deprecated — kept for backward compatibility.
+      The authoritative name comes from item_mst.item_name.
     """
     __tablename__ = "jute_yarn_mst"
 
@@ -609,15 +612,18 @@ class JuteYarnMst(Base):
         BigInteger, ForeignKey("item_grp_mst.item_grp_id"), nullable=True, index=True
     )
     jute_yarn_remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # Deprecated: name now sourced from item_mst.item_name; kept for backward compat
     jute_yarn_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Deprecated: company scoping now via item_grp_mst.co_id; kept for backward compat
     co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Note: No ORM relationship to ItemGrpMst because it uses a different DeclarativeBase.
-    # Use raw SQL joins for querying item_grp_mst data.
+    # Note: No ORM relationship to ItemGrpMst or ItemMst because they use
+    # a different DeclarativeBase. Use raw SQL joins for querying.
 
 # =============================================================================
 # JUTE BATCH PLAN MODELS
