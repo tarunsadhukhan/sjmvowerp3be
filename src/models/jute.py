@@ -608,8 +608,9 @@ class JuteYarnMst(Base):
 
     jute_yarn_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     jute_yarn_count: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    # FK exists in DB but omitted from ORM — item_grp_mst uses a different DeclarativeBase
     item_grp_id: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("item_grp_mst.item_grp_id"), nullable=True, index=True
+        BigInteger, nullable=True, index=True
     )
     jute_yarn_remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

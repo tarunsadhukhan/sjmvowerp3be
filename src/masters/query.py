@@ -63,7 +63,7 @@ def get_item_group_drodown(co_id: int = None):
     CAST(igm.item_grp_code AS CHAR) AS item_grp_code_display,
     CAST(igm.item_grp_name AS CHAR) AS item_grp_name_display
   FROM item_grp_mst igm
-  WHERE igm.parent_grp_id IS NULL and igm.co_id =:co_id and igm.active = 1
+  WHERE igm.parent_grp_id IS NULL and igm.co_id =:co_id and (igm.active IN ('Y', '1') OR igm.active IS NULL)
   UNION ALL-- Recursive member: join with children
   SELECT 
     child.item_grp_id,
@@ -74,6 +74,7 @@ def get_item_group_drodown(co_id: int = None):
     CONCAT(parent.item_grp_name_display, '-', child.item_grp_name)
   FROM item_grp_mst child
   JOIN item_hierarchy parent ON child.parent_grp_id = parent.item_grp_id
+  WHERE (child.active IN ('Y', '1') OR child.active IS NULL)
 ) 
 SELECT 
   item_grp_id,
