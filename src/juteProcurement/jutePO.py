@@ -292,9 +292,9 @@ async def jute_po_create_setup(
         vehicle_types_result = db.execute(get_vehicle_types_query(), {"co_id": co_id}).fetchall()
         vehicle_types = [dict(r._mapping) for r in vehicle_types_result]
 
-        # Get jute items (where item_type_id = 2)
-        jute_items_result = db.execute(get_jute_items_query(), {"co_id": co_id}).fetchall()
-        jute_items = [dict(r._mapping) for r in jute_items_result]
+        # Get jute groups (subgroups with parent item_type_id = 2)
+        jute_groups_result = db.execute(get_jute_items_query(), {"co_id": co_id}).fetchall()
+        jute_groups = [dict(r._mapping) for r in jute_groups_result]
 
         # Get all jute suppliers for the company (mandatory field on PO)
         suppliers_result = db.execute(get_all_suppliers_query(), {"co_id": co_id}).fetchall()
@@ -328,7 +328,7 @@ async def jute_po_create_setup(
             "branches": branches,
             "mukams": mukams,
             "vehicle_types": vehicle_types,
-            "jute_items": jute_items,
+            "jute_groups": jute_groups,
             "suppliers": suppliers,
             "channel_options": channel_options,
             "unit_options": unit_options,
@@ -392,14 +392,14 @@ async def get_parties_by_supplier(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_qualities_by_item/{item_id}")
+@router.get("/get_qualities_by_item/{item_grp_id}")
 async def get_qualities_by_item(
-    item_id: int,
+    item_grp_id: int,
     request: Request,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get jute qualities for a specific item."""
+    """Get items (formerly qualities) for a specific jute subgroup."""
     try:
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
@@ -408,7 +408,7 @@ async def get_qualities_by_item(
         co_id = int(q_co_id)
         
         query = get_jute_qualities_by_item_query()
-        result = db.execute(query, {"item_id": item_id, "co_id": co_id}).fetchall()
+        result = db.execute(query, {"item_grp_id": item_grp_id}).fetchall()
         qualities = [dict(r._mapping) for r in result]
         
         return {"qualities": qualities}
@@ -427,7 +427,6 @@ async def get_qualities_by_item(
 class JutePOLineItemCreate(BaseModel):
     """Schema for a Jute PO line item."""
     item_id: Optional[int] = None
-    jute_quality_id: Optional[int] = None
     crop_year: Optional[str] = None
     marka: Optional[str] = None
     quantity: float
@@ -586,7 +585,6 @@ async def jute_po_create(
             line_item = JutePoLi(
                 jute_po_id=jute_po.jute_po_id,
                 item_id=li.item_id,
-                jute_quality_id=li.jute_quality_id,
                 crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                 marka=li.marka,
                 quantity=li.quantity,
@@ -752,7 +750,6 @@ async def jute_po_update(
                 line_item = JutePoLi(
                     jute_po_id=jute_po_id,
                     item_id=li.item_id,
-                    jute_quality_id=li.jute_quality_id,
                     crop_year=int(li.crop_year.split("-")[0]) if li.crop_year else None,
                     marka=li.marka,
                     quantity=li.quantity,

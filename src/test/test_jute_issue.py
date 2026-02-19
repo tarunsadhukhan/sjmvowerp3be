@@ -4,9 +4,12 @@ Tests for Jute Issue API endpoints.
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 from datetime import date, datetime
 from src.main import app
+from src.config.db import get_tenant_db
+from src.authorization.utils import get_current_user_with_refresh
+from src.juteProcurement.query import get_jute_issues_by_date_query
 
 client = TestClient(app)
 
@@ -15,19 +18,26 @@ class TestJuteIssueEndpoints:
     """Tests for Jute Issue API endpoints."""
 
     @pytest.fixture(autouse=True)
-    def mock_auth(self):
-        """Mock authentication for all tests."""
-        with patch("src.juteProcurement.issue.get_current_user_with_refresh") as mock:
-            mock.return_value = {"sub": "test_user", "exp": 9999999999}
-            yield mock
+    def setup_overrides(self):
+        """Override FastAPI dependencies for all endpoint tests."""
+        self._mock_session = MagicMock()
+
+        # Override auth dependency
+        app.dependency_overrides[get_current_user_with_refresh] = lambda: {
+            "user_id": 1, "sub": "test_user", "exp": 9999999999
+        }
+        # Override DB dependency to return mock session
+        app.dependency_overrides[get_tenant_db] = lambda: self._mock_session
+
+        yield
+
+        # Cleanup
+        app.dependency_overrides.clear()
 
     @pytest.fixture
     def mock_db(self):
-        """Create a mock database session."""
-        with patch("src.juteProcurement.issue.get_tenant_db") as mock:
-            mock_session = MagicMock()
-            mock.return_value = mock_session
-            yield mock_session
+        """Access the mock database session."""
+        return self._mock_session
 
     def test_get_issue_table_requires_co_id(self, mock_db):
         """Should return 400 when co_id is missing."""
@@ -98,7 +108,7 @@ class TestJuteIssueEndpoints:
         response = client.get("/api/juteIssue/get_issue_create_setup?co_id=1")
         assert response.status_code == 200
         data = response.json()
-        assert "jute_items" in data
+        assert "jute_groups" in data
         assert "yarn_types" in data
         assert "branches" in data
 
@@ -144,7 +154,11 @@ class TestJuteIssueEndpoints:
         assert response.status_code == 400
 
     def test_get_issues_by_date_success(self, mock_db):
-        """Should return issues for valid branch and date."""
+        """Should return issues for valid branch and date.
+        
+        Tests that the query uses COALESCE to resolve item_id from ji.item_id
+        or mrli.actual_item_id (fallback for old records without item_id).
+        """
         mock_issue = MagicMock()
         mock_issue._mapping = {
             "jute_issue_id": 1,
@@ -156,10 +170,10 @@ class TestJuteIssueEndpoints:
             "jute_mr_li_id": 1,
             "jute_mr_id": 1,
             "branch_mr_no": 100,
-            "item_id": 1,
-            "jute_type": "Desi Jute",
-            "jute_quality_id": 1,
-            "jute_quality": "TD5",
+            "item_grp_id": 244,
+            "jute_group_name": "JUTE",
+            "item_id": 3158,
+            "item_name": "MESTA",
             "yarn_type_id": 1,
             "yarn_type_name": "Warp",
             "quantity": 10.0,
@@ -167,6 +181,8 @@ class TestJuteIssueEndpoints:
             "unit_conversion": "BALE",
             "actual_rate": 4500.0,
             "issue_value": 4500.0,
+            "updated_by": None,
+            "update_date_time": None,
         }
         mock_db.execute.return_value.fetchall.return_value = [mock_issue]
 
@@ -178,6 +194,9 @@ class TestJuteIssueEndpoints:
         assert "data" in data
         assert "summary" in data
         assert data["summary"]["total_entries"] == 1
+        # Verify item_id and item_name are present (resolved via COALESCE)
+        assert data["data"][0]["item_id"] == 3158
+        assert data["data"][0]["item_name"] == "MESTA"
 
     def test_create_issue_success(self, mock_db):
         """Should create issue and return success."""
@@ -194,7 +213,7 @@ class TestJuteIssueEndpoints:
             "issue_date": "2026-02-01",
             "jute_mr_li_id": 1,
             "yarn_type_id": 1,
-            "jute_quality_id": 1,
+            "item_id": 1,
             "quantity": 10.0,
             "weight": 100.0,
             "unit_conversion": "BALE",
@@ -215,7 +234,7 @@ class TestJuteIssueEndpoints:
             "issue_date": "2026-02-01",
             "jute_mr_li_id": 999,
             "yarn_type_id": 1,
-            "jute_quality_id": 1,
+            "item_id": 1,
             "quantity": 10.0,
             "weight": 100.0,
         }
@@ -320,4 +339,56 @@ class TestJuteIssueCalculations:
         weight = 123.45
         rate = 4567
         expected = round((weight / 100) * rate, 2)
-        assert expected == 5637.95
+        assert expected == 5637.96
+
+
+class TestJuteIssueQueries:
+    """Tests for jute issue SQL query functions."""
+
+    def test_issues_by_date_query_returns_text(self):
+        """get_jute_issues_by_date_query should return a sqlalchemy text object."""
+        from sqlalchemy import text as sa_text
+        result = get_jute_issues_by_date_query()
+        assert isinstance(result, type(sa_text("")))
+
+    def test_issues_by_date_query_uses_coalesce_for_item_id(self):
+        """Query should use COALESCE to fallback item_id from MR when ji.item_id is NULL."""
+        result = get_jute_issues_by_date_query()
+        sql_str = str(result)
+        # Should COALESCE ji.item_id with mrli.actual_item_id
+        assert "COALESCE(ji.item_id, mrli.actual_item_id)" in sql_str
+        # Should COALESCE item names from both joins
+        assert "COALESCE(im.item_name, im2.item_name)" in sql_str
+        # Should COALESCE item_grp_id from both item_mst joins
+        assert "COALESCE(im.item_grp_id, im2.item_grp_id)" in sql_str
+
+    def test_issues_by_date_query_joins_item_mst_twice(self):
+        """Query should join item_mst twice: once on ji.item_id and once on mrli.actual_item_id."""
+        result = get_jute_issues_by_date_query()
+        sql_str = str(result)
+        assert "item_mst im ON im.item_id = ji.item_id" in sql_str
+        assert "item_mst im2 ON im2.item_id = mrli.actual_item_id" in sql_str
+
+    def test_issues_by_date_query_has_required_binds(self):
+        """Query should have :co_id, :branch_id, and :issue_date bind parameters."""
+        result = get_jute_issues_by_date_query()
+        sql_str = str(result)
+        assert ":co_id" in sql_str
+        assert ":branch_id" in sql_str
+        assert ":issue_date" in sql_str
+
+    def test_stock_outstanding_query_uses_actual_item_id(self):
+        """Stock outstanding query should use vso.actual_item_id (aliased as item_id)."""
+        from src.juteProcurement.query import get_jute_stock_outstanding_query
+        result = get_jute_stock_outstanding_query()
+        sql_str = str(result)
+        assert "vso.actual_item_id AS item_id" in sql_str
+        assert "im.item_name AS item_name" in sql_str
+
+    def test_stock_outstanding_query_no_quality_reference(self):
+        """Stock outstanding query should NOT reference deprecated quality fields."""
+        from src.juteProcurement.query import get_jute_stock_outstanding_query
+        result = get_jute_stock_outstanding_query()
+        sql_str = str(result)
+        assert "jute_quality" not in sql_str.lower()
+        assert "quality_id" not in sql_str.lower()

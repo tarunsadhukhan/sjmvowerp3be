@@ -545,13 +545,18 @@ async def change_mr_status(
         party_id = mr.get("party_id")
         party_branch_id = mr.get("party_branch_id")
 
-        # Validate party_branch_id before allowing status change from draft
+        # Validate party and party_branch before allowing status change from draft
         # Draft status_id is typically 21
         if current_status_id == 21 and body.new_status_id != 21:
-            if party_id and not party_branch_id:
+            if not party_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot change status: Party must be selected before changing MR status."
+                )
+            if not party_branch_id:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Cannot change status: The selected party does not have a branch configured. Please add a branch for this party in Party Master before approving this MR."
+                    detail="Cannot change status: Party branch must be selected. Please add a branch for this party in Party Master if none exist."
                 )
 
         now = datetime.now()
@@ -844,23 +849,93 @@ def calculate_roundoff(amount: float) -> float:
     return round(rounded - amount, 2)
 
 
-# NOTE: open_mr endpoint is commented out because MR already arrives in Open status
-# from the weighbridge system. There is no Draft → Open transition in this workflow.
-# The endpoint is preserved for reference in case the workflow changes in the future.
-#
-# @router.post("/open_mr")
-# async def open_mr(
-#     request: Request,
-#     body: MRApprovalRequest,
-#     db: Session = Depends(get_tenant_db),
-#     token_data: dict = Depends(get_current_user_with_refresh),
-# ):
-#     """
-#     Open MR - Changes status from Draft (21) to Open (1).
-#     Generates branch_mr_no on first open.
-#     Validates that party_branch_id is set.
-#     """
-#     # ... implementation commented out ...
+@router.post("/open_mr")
+async def open_mr(
+    request: Request,
+    body: MRApprovalRequest,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Open MR - Changes status from Draft (21) to Open (1).
+    Validates that party_id and party_branch_id are set.
+    """
+    try:
+        mr_id = int(body.mr_id)
+        user_id = token_data.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+
+        # Get current MR details
+        check_query = text("""
+            SELECT jute_mr_id, status_id, party_id, party_branch_id
+            FROM jute_mr
+            WHERE jute_mr_id = :mr_id
+        """)
+        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
+
+        if not mr_row:
+            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+
+        mr = dict(mr_row._mapping)
+        current_status = mr.get("status_id")
+        party_id = mr.get("party_id")
+        party_branch_id = mr.get("party_branch_id")
+
+        # Validate current status - can only open from Draft
+        if current_status != MR_STATUS_DRAFT:
+            raise HTTPException(status_code=400, detail="MR can only be opened from Draft status")
+
+        # Validate party_id is set
+        if not party_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot open MR: Party must be selected before opening."
+            )
+
+        # Validate party_branch_id is set
+        if not party_branch_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot open MR: Party branch must be selected before opening. Please add a branch for this party in Party Master if none exist."
+            )
+
+        now = datetime.now()
+
+        # Update status to Open
+        update_query = text("""
+            UPDATE jute_mr
+            SET status_id = :new_status,
+                updated_by = :updated_by,
+                updated_date_time = :updated_date_time
+            WHERE jute_mr_id = :mr_id
+        """)
+
+        db.execute(update_query, {
+            "mr_id": mr_id,
+            "new_status": MR_STATUS_OPEN,
+            "updated_by": user_id,
+            "updated_date_time": now,
+        })
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "MR opened successfully",
+            "mr_id": mr_id,
+            "status_id": MR_STATUS_OPEN,
+            "status_name": "Open",
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error opening MR")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/pending_mr")

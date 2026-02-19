@@ -38,7 +38,7 @@ class JuteIssueCreate(BaseModel):
     issue_date: date
     jute_mr_li_id: int
     yarn_type_id: int
-    jute_quality_id: int
+    item_id: int
     quantity: float
     weight: float
     unit_conversion: Optional[str] = None
@@ -48,7 +48,7 @@ class JuteIssueCreate(BaseModel):
 class JuteIssueUpdate(BaseModel):
     """Model for updating a jute issue line item."""
     yarn_type_id: Optional[int] = None
-    jute_quality_id: Optional[int] = None
+    item_id: Optional[int] = None
     quantity: Optional[float] = None
     weight: Optional[float] = None
     unit_conversion: Optional[str] = None
@@ -116,7 +116,7 @@ async def get_jute_issue_table(
         offset = (page - 1) * limit
         search_param = f"%{q_search}%" if q_search else None
 
-        # Get total count
+        # Get total countget_stock_outstandingz
         count_query = get_jute_issue_table_count_query(co_id, q_search)
         count_result = db.execute(
             count_query,
@@ -174,7 +174,7 @@ async def get_jute_issue_by_id(
             raise HTTPException(status_code=400, detail="Invalid co_id")
 
         sql = text("""
-            SELECT 
+            SELECT
                 ji.jute_issue_id,
                 ji.branch_id,
                 bm.branch_name,
@@ -182,10 +182,11 @@ async def get_jute_issue_by_id(
                 ji.status_id,
                 COALESCE(sm.status_name, 'Draft') AS status,
                 ji.issue_value,
-                ji.jute_quality_id,
-                jqm.jute_quality,
+                COALESCE(ji.item_id, mrli.actual_item_id) AS item_id,
+                COALESCE(im.item_name, im2.item_name) AS item_name,
                 ji.jute_mr_li_id,
                 mrli.jute_mr_id,
+                jm.jute_gate_entry_no,
                 ji.yarn_type_id,
                 jytm.jute_yarn_type_name AS yarn_type_name,
                 ji.quantity,
@@ -196,8 +197,10 @@ async def get_jute_issue_by_id(
             FROM jute_issue ji
             INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
             LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
-            LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ji.jute_quality_id
             LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
+            LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
+            LEFT JOIN item_mst im ON im.item_id = ji.item_id
+            LEFT JOIN item_mst im2 ON im2.item_id = mrli.actual_item_id
             LEFT JOIN jute_yarn_type_mst jytm ON jytm.jute_yarn_type_id = ji.yarn_type_id
             WHERE ji.jute_issue_id = :issue_id
             AND bm.co_id = :co_id
@@ -234,10 +237,10 @@ async def get_issue_create_setup(
         
         co_id = int(q_co_id)
 
-        # Get jute items (item_grp_id 2 or 3)
+        # Get jute groups (subgroups from item_grp_mst)
         jute_items_query = get_jute_issue_create_setup_query()
         jute_items_rows = db.execute(jute_items_query, {"co_id": co_id}).fetchall()
-        jute_items = [dict(r._mapping) for r in jute_items_rows]
+        jute_groups = [dict(r._mapping) for r in jute_items_rows]
 
         # Get yarn types
         yarn_types_query = get_yarn_types_query()
@@ -256,7 +259,7 @@ async def get_issue_create_setup(
         branches = [dict(r._mapping) for r in branches_rows]
 
         return {
-            "jute_items": jute_items,
+            "jute_groups": jute_groups,
             "yarn_types": yarn_types,
             "branches": branches,
         }
@@ -476,11 +479,11 @@ async def create_issue(
 
         sql = text("""
             INSERT INTO jute_issue (
-                branch_id, issue_date, jute_mr_li_id, yarn_type_id, jute_quality_id,
+                branch_id, issue_date, jute_mr_li_id, yarn_type_id, item_id,
                 quantity, weight, unit_conversion, issue_value, status_id,
                 updated_by, update_date_time
             ) VALUES (
-                :branch_id, :issue_date, :jute_mr_li_id, :yarn_type_id, :jute_quality_id,
+                :branch_id, :issue_date, :jute_mr_li_id, :yarn_type_id, :item_id,
                 :quantity, :weight, :unit_conversion, :issue_value, :status_id,
                 :updated_by, :update_date_time
             )
@@ -493,7 +496,7 @@ async def create_issue(
             "issue_date": body.issue_date,
             "jute_mr_li_id": body.jute_mr_li_id,
             "yarn_type_id": body.yarn_type_id,
-            "jute_quality_id": body.jute_quality_id,
+            "item_id": body.item_id,
             "quantity": round(body.quantity, 2) if body.quantity else 0,
             "weight": round(body.weight, 2) if body.weight else 0,
             "unit_conversion": body.unit_conversion,
@@ -561,9 +564,9 @@ async def update_issue(
             update_fields.append("yarn_type_id = :yarn_type_id")
             update_params["yarn_type_id"] = body.yarn_type_id
 
-        if body.jute_quality_id is not None:
-            update_fields.append("jute_quality_id = :jute_quality_id")
-            update_params["jute_quality_id"] = body.jute_quality_id
+        if body.item_id is not None:
+            update_fields.append("item_id = :item_id")
+            update_params["item_id"] = body.item_id
 
         if body.quantity is not None:
             update_fields.append("quantity = :quantity")
