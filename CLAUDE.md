@@ -531,7 +531,7 @@ db.execute(text(sql), {"co_id": 1})  # Names match
 |--------|--------|----------|
 | Procurement | `proc_` | `proc_indent`, `proc_po`, `proc_inward` |
 | Jute | `jute_` | `jute_mr`, `jute_quality_mst` |
-| Sales | `sales_` / `invoice_` | `sales_invoice`, `invoice_line_items` |
+| Sales | `sales_` / `invoice_` | `sales_invoice`, `sales_invoice_dtl` |
 | Inventory | `issue_` | `issue_hdr`, `issue_li` |
 
 ### Column Naming

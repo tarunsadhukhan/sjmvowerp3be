@@ -1159,3 +1159,348 @@ def get_max_delivery_order_no_for_branch_fy():
         AND sdo.delivery_order_date <= :fy_end_date
         AND sdo.delivery_order_no IS NOT NULL;"""
     return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE QUERIES
+# =============================================================================
+
+
+def get_approved_delivery_orders_query():
+    """Get all approved delivery orders (status_id = 3) for dropdown when creating invoice."""
+    sql = """SELECT
+        sdo.sales_delivery_order_id,
+        sdo.delivery_order_no,
+        sdo.delivery_order_date,
+        sdo.party_id,
+        pm.supp_name AS party_name,
+        sdo.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        sdo.net_amount
+    FROM sales_delivery_order AS sdo
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = sdo.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = sdo.party_id
+    WHERE sdo.status_id = 3
+        AND sdo.active = 1
+        AND (:branch_id IS NULL OR sdo.branch_id = :branch_id)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    ORDER BY sdo.delivery_order_date DESC, sdo.sales_delivery_order_id DESC;"""
+    return text(sql)
+
+
+def get_delivery_order_lines_for_invoice():
+    """Get delivery order line items to pre-fill invoice lines."""
+    sql = """SELECT
+        sdod.sales_delivery_order_dtl_id AS delivery_order_dtl_id,
+        sdod.hsn_code,
+        sdod.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code AS item_grp_code,
+        igm.item_grp_name AS item_grp_name,
+        sdod.item_make_id,
+        imk.item_make_name,
+        sdod.quantity,
+        sdod.uom_id,
+        um.uom_name,
+        sdod.rate,
+        sdod.discount_type,
+        sdod.discounted_rate,
+        sdod.discount_amount,
+        sdod.net_amount,
+        sdod.total_amount,
+        sdod.remarks,
+        COALESCE(im.tax_percentage, 0) AS tax_percentage
+    FROM sales_delivery_order_dtl AS sdod
+    LEFT JOIN item_mst AS im ON im.item_id = sdod.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = sdod.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = sdod.uom_id
+    WHERE sdod.sales_delivery_order_id = :sales_delivery_order_id
+        AND sdod.active = 1
+    ORDER BY sdod.sales_delivery_order_dtl_id;"""
+    return text(sql)
+
+
+def get_invoice_table_query():
+    sql = """SELECT
+        si.invoice_id,
+        si.invoice_unique_no,
+        si.invoice_no_string,
+        si.invoice_date,
+        si.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        si.party_id,
+        pm.supp_name AS party_name,
+        si.del_order_no,
+        si.invoice_amount,
+        si.grand_total,
+        si.status,
+        sm.status_name
+    FROM sales_invoice AS si
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = si.status
+    WHERE (si.is_active = 1 OR si.is_active IS NULL)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR si.invoice_no_string LIKE :search_like
+            OR CAST(si.invoice_unique_no AS CHAR) LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        )
+    ORDER BY si.invoice_date DESC, si.invoice_id DESC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_invoice_table_count_query():
+    sql = """SELECT COUNT(1) AS total
+    FROM sales_invoice AS si
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
+    WHERE (si.is_active = 1 OR si.is_active IS NULL)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (
+            :search_like IS NULL
+            OR si.invoice_no_string LIKE :search_like
+            OR CAST(si.invoice_unique_no AS CHAR) LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_invoice_by_id_query():
+    sql = """SELECT
+        si.invoice_id,
+        si.invoice_unique_no,
+        si.invoice_no_string,
+        si.invoice_date,
+        si.challan_no,
+        si.challan_date,
+        si.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        si.party_id,
+        pm.supp_name AS party_name,
+        si.del_order_no,
+        si.del_order_date,
+        si.sale_no,
+        si.shipping_address,
+        si.shipping_state_code,
+        si.shipping_state_name,
+        si.transporter_id,
+        trns.supp_name AS transporter_name,
+        si.vehicle_no,
+        si.eway_bill_no,
+        si.eway_bill_date,
+        si.invoice_type,
+        si.footer_notes,
+        si.terms,
+        si.terms_conditions,
+        si.invoice_amount,
+        si.grand_total,
+        si.tax_amount,
+        si.freight_charges,
+        si.round_off,
+        si.tcs_percentage,
+        si.tcs_amount,
+        si.status,
+        sm.status_name,
+        si.updated_by,
+        si.updated_date,
+        si.intra_inter_state
+    FROM sales_invoice AS si
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
+    LEFT JOIN party_mst AS trns ON trns.party_id = si.transporter_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = si.status
+    WHERE si.invoice_id = :invoice_id
+        AND (:co_id IS NULL OR bm.co_id = :co_id);"""
+    return text(sql)
+
+
+def get_invoice_dtl_by_id_query():
+    sql = """SELECT
+        ili.invoice_line_item_id,
+        ili.invoice_id,
+        ili.delivery_line_id,
+        ili.hsn_code,
+        ili.item_id,
+        ili.item_name,
+        ili.item_group,
+        im.item_grp_id,
+        ili.make,
+        ili.quantity,
+        ili.uom,
+        um.uom_id,
+        ili.rate,
+        ili.amount_without_tax,
+        ili.tax_amount,
+        ili.total_amount,
+        ili.cgst_amt,
+        ili.cgst_per,
+        ili.sgst_amt,
+        ili.sgst_per,
+        ili.igst_amt,
+        ili.igst_per,
+        ili.item_description
+    FROM sales_invoice_dtl AS ili
+    LEFT JOIN item_mst AS im ON CAST(im.item_id AS CHAR) = ili.item_id
+    LEFT JOIN uom_mst AS um ON um.uom_name = ili.uom
+    WHERE ili.invoice_id = :invoice_id
+        AND (ili.is_active = 1 OR ili.is_active IS NULL)
+    ORDER BY ili.invoice_line_item_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice():
+    sql = """INSERT INTO sales_invoice (
+        invoice_date, invoice_unique_no, invoice_no_string,
+        branch_id, co_id, party_id,
+        del_order_no, del_order_date,
+        challan_no, challan_date,
+        transporter_id, vehicle_no,
+        eway_bill_no, eway_bill_date,
+        invoice_type, footer_notes, terms, terms_conditions,
+        invoice_amount, grand_total, tax_amount,
+        freight_charges, round_off,
+        tcs_percentage, tcs_amount,
+        shipping_address, shipping_state_code, shipping_state_name,
+        intra_inter_state,
+        status, is_active,
+        created_by, created_date, updated_by, updated_date
+    ) VALUES (
+        :invoice_date, :invoice_unique_no, :invoice_no_string,
+        :branch_id, :co_id, :party_id,
+        :del_order_no, :del_order_date,
+        :challan_no, :challan_date,
+        :transporter_id, :vehicle_no,
+        :eway_bill_no, :eway_bill_date,
+        :invoice_type, :footer_notes, :terms, :terms_conditions,
+        :invoice_amount, :grand_total, :tax_amount,
+        :freight_charges, :round_off,
+        :tcs_percentage, :tcs_amount,
+        :shipping_address, :shipping_state_code, :shipping_state_name,
+        :intra_inter_state,
+        :status, 1,
+        :created_by, NOW(), :updated_by, CURDATE()
+    );"""
+    return text(sql)
+
+
+def insert_invoice_line_item():
+    sql = """INSERT INTO sales_invoice_dtl (
+        invoice_id, co_id, delivery_line_id,
+        hsn_code, item_id, item_name, item_group, item_description, make,
+        quantity, uom, rate,
+        amount_without_tax, tax_amount, total_amount,
+        cgst_amt, cgst_per, sgst_amt, sgst_per,
+        igst_amt, igst_per,
+        claim_rate,
+        is_active
+    ) VALUES (
+        :invoice_id, :co_id, :delivery_line_id,
+        :hsn_code, :item_id, :item_name, :item_group, :item_description, :make,
+        :quantity, :uom, :rate,
+        :amount_without_tax, :tax_amount, :total_amount,
+        :cgst_amt, :cgst_per, :sgst_amt, :sgst_per,
+        :igst_amt, :igst_per,
+        :claim_rate,
+        1
+    );"""
+    return text(sql)
+
+
+def update_sales_invoice():
+    sql = """UPDATE sales_invoice SET
+        invoice_date = :invoice_date,
+        branch_id = :branch_id,
+        party_id = :party_id,
+        del_order_no = :del_order_no,
+        del_order_date = :del_order_date,
+        challan_no = :challan_no,
+        challan_date = :challan_date,
+        transporter_id = :transporter_id,
+        vehicle_no = :vehicle_no,
+        eway_bill_no = :eway_bill_no,
+        eway_bill_date = :eway_bill_date,
+        invoice_type = :invoice_type,
+        footer_notes = :footer_notes,
+        terms = :terms,
+        terms_conditions = :terms_conditions,
+        invoice_amount = :invoice_amount,
+        grand_total = :grand_total,
+        tax_amount = :tax_amount,
+        freight_charges = :freight_charges,
+        round_off = :round_off,
+        tcs_percentage = :tcs_percentage,
+        tcs_amount = :tcs_amount,
+        updated_by = :updated_by,
+        updated_date = CURDATE()
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def delete_invoice_line_items():
+    sql = """UPDATE sales_invoice_dtl SET is_active = 0
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def update_invoice_status():
+    sql = """UPDATE sales_invoice SET
+        status = :status_id,
+        invoice_unique_no = CASE
+            WHEN :invoice_unique_no IS NOT NULL THEN :invoice_unique_no
+            ELSE invoice_unique_no
+        END,
+        invoice_no_string = CASE
+            WHEN :invoice_no_string IS NOT NULL THEN :invoice_no_string
+            ELSE invoice_no_string
+        END,
+        updated_by = :updated_by,
+        updated_date = CURDATE()
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_invoice_with_approval_info():
+    sql = """SELECT
+        si.invoice_id,
+        si.status,
+        si.invoice_unique_no,
+        si.invoice_no_string,
+        si.branch_id,
+        si.invoice_date,
+        si.invoice_amount,
+        si.grand_total,
+        bm.co_id
+    FROM sales_invoice si
+    LEFT JOIN branch_mst bm ON bm.branch_id = si.branch_id
+    WHERE si.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_max_invoice_no_for_branch_fy():
+    sql = """SELECT COALESCE(MAX(si.invoice_unique_no), 0) AS max_doc_no
+    FROM sales_invoice si
+    WHERE si.branch_id = :branch_id
+        AND si.invoice_date >= :fy_start_date
+        AND si.invoice_date <= :fy_end_date
+        AND si.invoice_unique_no IS NOT NULL;"""
+    return text(sql)

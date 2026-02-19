@@ -194,6 +194,40 @@ class ProcIndentDtlCancel(Base):
 
 
 # =============================================================================
+# INDENT OUTSTANDING VIEW
+# =============================================================================
+
+class VwProcIndentOutstanding(Base):
+    """
+    Read-only model for vw_proc_indent_outstanding view.
+    Provides outstanding indent quantities per detail line, along with
+    item min/max/reorder data from item_minmax_mst.
+    """
+    __tablename__ = "vw_proc_indent_outstanding"
+    __table_args__ = {"extend_existing": True}
+
+    # Primary key for ORM (view has no real PK, use indent_dtl_id)
+    indent_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    indent_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    indent_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    Bal_ind_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    expense_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    indent_type_id: Mapped[Optional[str]] = mapped_column(String(25), nullable=True)
+    expense_type_name: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    bal_tot_ind_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    minqty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    maxqty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    min_order_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    lead_time: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+# =============================================================================
 # INWARD MODELS
 # =============================================================================
 
@@ -737,6 +771,8 @@ __all__ = [
     "ProcIndent",
     "ProcIndentDtl",
     "ProcIndentDtlCancel",
+    # Indent Outstanding View
+    "VwProcIndentOutstanding",
     # Inward
     "ProcInward",
     "ProcInwardDtl",

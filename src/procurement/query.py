@@ -2398,3 +2398,93 @@ def delete_inward_additional():
 
 # Note: GST for additional charges is not supported in current schema
 # proc_gst table does not have a link to proc_inward_additional
+
+
+# =============================================================================
+# INDENT LINE ITEM VALIDATION QUERIES
+# =============================================================================
+
+def get_item_validation_data():
+    """
+    Get validation data for an item at a given branch:
+    - Branch stock from vw_item_balance_qty_by_branch
+    - Min/max/reorder from item_minmax_mst
+    - Total outstanding indent qty from vw_proc_indent_outstanding
+    - Whether an open indent exists for this item at this branch
+    """
+    sql = """
+    SELECT
+        COALESCE(stock.total_balance_qty, 0) AS branch_stock,
+        imm.minqty,
+        imm.maxqty,
+        imm.min_order_qty,
+        imm.lead_time,
+        COALESCE(oi.outstanding_qty, 0) AS outstanding_indent_qty,
+        COALESCE(oi.has_open_indent, 0) AS has_open_indent
+    FROM (SELECT 1 AS dummy) d
+    LEFT JOIN vw_item_balance_qty_by_branch stock
+        ON stock.branch_id = :branch_id AND stock.item_id = :item_id
+    LEFT JOIN item_minmax_mst imm
+        ON imm.branch_id = :branch_id AND imm.item_id = :item_id AND imm.active = 1
+    LEFT JOIN (
+        SELECT
+            SUM(v.Bal_ind_qty) AS outstanding_qty,
+            MAX(CASE WHEN v.status_id NOT IN (4, 5, 6) THEN 1 ELSE 0 END) AS has_open_indent
+        FROM vw_proc_indent_outstanding v
+        JOIN proc_indent_dtl pid ON pid.indent_dtl_id = v.indent_dtl_id AND pid.active = 1
+        JOIN proc_indent pi ON pi.indent_id = pid.indent_id AND pi.branch_id = :branch_id
+        WHERE v.item_id = :item_id
+          AND v.status_id NOT IN (4, 5, 6)
+    ) oi ON 1 = 1;
+    """
+    return text(sql)
+
+
+def get_item_fy_indent_check():
+    """
+    Check if an open-type indent already exists for the item
+    within the current financial year at the given branch.
+    Returns the matching indent number if found.
+    """
+    sql = """
+    SELECT pi.indent_id, pi.indent_no, pi.status_id, pi.indent_date
+    FROM proc_indent_dtl pid
+    JOIN proc_indent pi ON pi.indent_id = pid.indent_id
+    WHERE pid.item_id = :item_id
+      AND pid.active = 1
+      AND pi.branch_id = :branch_id
+      AND pi.indent_type_id = 'Open'
+      AND pi.status_id NOT IN (4, 5, 6)
+      AND pi.indent_date >= :fy_start
+      AND pi.indent_date <= :fy_end
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_item_regular_bom_outstanding():
+    """
+    Get outstanding indent qty from Regular/BOM indents only
+    for the same item at a given branch. Used by Logic 2 (Open indent)
+    to show an informational warning.
+    """
+    sql = """
+    SELECT COALESCE(SUM(v.Bal_ind_qty), 0) AS regular_bom_outstanding
+    FROM vw_proc_indent_outstanding v
+    JOIN proc_indent_dtl pid ON pid.indent_dtl_id = v.indent_dtl_id AND pid.active = 1
+    JOIN proc_indent pi ON pi.indent_id = pid.indent_id AND pi.branch_id = :branch_id
+    WHERE v.item_id = :item_id
+      AND v.indent_type_id IN ('Regular', 'BOM')
+      AND v.status_id NOT IN (4, 5, 6);
+    """
+    return text(sql)
+
+
+def get_expense_type_name_by_id():
+    """Get expense type name by ID."""
+    sql = """
+    SELECT expense_type_name
+    FROM expense_type_mst
+    WHERE expense_type_id = :expense_type_id AND active = 1;
+    """
+    return text(sql)

@@ -1,0 +1,1124 @@
+from fastapi import Depends, Request, HTTPException, APIRouter
+import logging
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
+from datetime import datetime
+from src.config.db import get_tenant_db
+from src.authorization.utils import get_current_user_with_refresh
+from src.masters.query import get_branch_list, get_item_group_drodown
+from src.procurement.indent import (
+    calculate_financial_year,
+    format_indent_no,
+    calculate_approval_permissions,
+)
+from src.procurement.query import (
+    get_item_by_group_id_purchaseable,
+    get_item_make_by_group_id,
+    get_item_uom_by_group_id,
+)
+from src.sales.quotation import (
+    to_int,
+    to_float,
+    to_positive_float,
+    format_date,
+    get_fy_boundaries,
+    process_sales_approval,
+)
+from src.sales.query import (
+    get_customers_for_sales,
+    get_customer_branches_bulk,
+    get_transporters_for_sales,
+    get_approved_delivery_orders_query,
+    get_delivery_order_lines_for_invoice,
+    get_invoice_table_query,
+    get_invoice_table_count_query,
+    get_invoice_by_id_query,
+    get_invoice_dtl_by_id_query,
+    insert_sales_invoice,
+    insert_invoice_line_item,
+    update_sales_invoice,
+    delete_invoice_line_items,
+    update_invoice_status,
+    get_invoice_with_approval_info,
+    get_max_invoice_no_for_branch_fy,
+)
+from src.sales.constants import SALES_DOC_TYPES
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# =============================================================================
+# SETUP ENDPOINTS
+# =============================================================================
+
+
+@router.get("/get_sales_invoice_setup_1")
+async def get_sales_invoice_setup_1(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Return branches, customers, transporters, approved DOs, and item groups for invoice creation."""
+    try:
+        q_branch_id = request.query_params.get("branch_id")
+        q_co_id = request.query_params.get("co_id")
+        branch_id = None
+        co_id = None
+
+        if q_branch_id is not None:
+            try:
+                branch_id = int(q_branch_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid branch_id")
+        if q_co_id is not None:
+            try:
+                co_id = int(q_co_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid co_id")
+
+        if co_id is None:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        # Branches
+        branch_ids_list = [branch_id] if branch_id is not None else None
+        branchquery = get_branch_list(branch_ids=branch_ids_list) if branch_ids_list else get_branch_list()
+        branch_result = db.execute(branchquery, {"branch_ids": branch_ids_list} if branch_ids_list else {}).fetchall()
+        branches = [dict(r._mapping) for r in branch_result]
+
+        # Customers
+        customer_query = get_customers_for_sales(co_id=co_id)
+        customer_result = db.execute(customer_query, {"co_id": co_id}).fetchall()
+        customers = [dict(r._mapping) for r in customer_result]
+
+        # Customer branches in bulk
+        cust_branches_query = get_customer_branches_bulk(co_id=co_id)
+        cust_branches_result = db.execute(cust_branches_query, {"co_id": co_id}).fetchall()
+        branches_by_party: dict[int, list[dict]] = {}
+        for row in cust_branches_result:
+            bd = dict(row._mapping)
+            pid = bd.get("party_id")
+            if pid is not None:
+                if pid not in branches_by_party:
+                    branches_by_party[pid] = []
+                branches_by_party[pid].append(bd)
+        for cust in customers:
+            cust["branches"] = branches_by_party.get(cust.get("party_id"), [])
+
+        # Transporters
+        transporter_query = get_transporters_for_sales(co_id=co_id)
+        transporter_result = db.execute(transporter_query, {"co_id": co_id}).fetchall()
+        transporters = [dict(r._mapping) for r in transporter_result]
+
+        # Approved delivery orders for dropdown (optional reference)
+        ado_query = get_approved_delivery_orders_query()
+        ado_result = db.execute(ado_query, {"branch_id": branch_id, "co_id": co_id}).fetchall()
+        approved_delivery_orders = []
+        for row in ado_result:
+            mapped = dict(row._mapping)
+            raw_no = mapped.get("delivery_order_no")
+            formatted_no = ""
+            if raw_no is not None:
+                try:
+                    formatted_no = format_indent_no(
+                        indent_no=int(raw_no) if raw_no else None,
+                        co_prefix=mapped.get("co_prefix"),
+                        branch_prefix=mapped.get("branch_prefix"),
+                        indent_date=mapped.get("delivery_order_date"),
+                        document_type=SALES_DOC_TYPES.get("DELIVERY_ORDER", "DO"),
+                    )
+                except Exception:
+                    formatted_no = str(raw_no) if raw_no else ""
+            approved_delivery_orders.append({
+                "sales_delivery_order_id": mapped.get("sales_delivery_order_id"),
+                "delivery_order_no": formatted_no,
+                "delivery_order_date": format_date(mapped.get("delivery_order_date")),
+                "party_name": mapped.get("party_name"),
+                "net_amount": mapped.get("net_amount"),
+            })
+
+        # Item groups (for manual entry without delivery order)
+        itemgrp_query = get_item_group_drodown(co_id=co_id)
+        itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
+        item_groups = [dict(r._mapping) for r in itemgrp_result]
+
+        return {
+            "branches": branches,
+            "customers": customers,
+            "transporters": transporters,
+            "approved_delivery_orders": approved_delivery_orders,
+            "item_groups": item_groups,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching sales invoice setup 1")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_sales_invoice_setup_2")
+async def get_sales_invoice_setup_2(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Return items, makes, and UOMs by item_group_id."""
+    try:
+        q_item_group = request.query_params.get("item_group")
+        if q_item_group is None:
+            raise HTTPException(status_code=400, detail="item_group is required")
+
+        try:
+            item_group_id = int(q_item_group)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid item_group")
+
+        items_query = get_item_by_group_id_purchaseable(item_group_id=item_group_id)
+        items_result = db.execute(items_query, {"item_group_id": item_group_id}).fetchall()
+        items = [dict(r._mapping) for r in items_result]
+
+        makes_query = get_item_make_by_group_id(item_group_id=item_group_id)
+        makes_result = db.execute(makes_query, {"item_group_id": item_group_id}).fetchall()
+        makes = [dict(r._mapping) for r in makes_result]
+
+        uoms_query = get_item_uom_by_group_id(item_group_id=item_group_id)
+        uoms_result = db.execute(uoms_query, {"item_group_id": item_group_id}).fetchall()
+        uoms = [dict(r._mapping) for r in uoms_result]
+
+        return {"items": items, "makes": makes, "uoms": uoms}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_delivery_order_lines")
+async def get_delivery_order_lines(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get delivery order line items to pre-fill a new invoice."""
+    try:
+        q_id = request.query_params.get("sales_delivery_order_id")
+        if q_id is None:
+            raise HTTPException(status_code=400, detail="sales_delivery_order_id is required")
+
+        sales_delivery_order_id = int(q_id)
+        query = get_delivery_order_lines_for_invoice()
+        result = db.execute(query, {"sales_delivery_order_id": sales_delivery_order_id}).fetchall()
+        data = [dict(r._mapping) for r in result]
+        return {"data": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# CRUD ENDPOINTS
+# =============================================================================
+
+
+@router.get("/get_sales_invoice_table")
+async def get_sales_invoice_table(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    page: int = 1,
+    limit: int = 10,
+    search: str | None = None,
+    co_id: int | None = None,
+):
+    """Return paginated sales invoice list."""
+    try:
+        page = max(page, 1)
+        limit = max(min(limit, 100), 1)
+        offset = (page - 1) * limit
+        search_like = f"%{search.strip()}%" if search else None
+
+        params = {"co_id": co_id, "search_like": search_like, "limit": limit, "offset": offset}
+
+        list_query = get_invoice_table_query()
+        rows = db.execute(list_query, params).fetchall()
+        data = []
+        for row in rows:
+            mapped = dict(row._mapping)
+            raw_no = mapped.get("invoice_unique_no")
+            formatted_no = mapped.get("invoice_no_string") or ""
+            if not formatted_no and raw_no is not None:
+                try:
+                    formatted_no = format_indent_no(
+                        indent_no=int(raw_no) if raw_no else None,
+                        co_prefix=mapped.get("co_prefix"),
+                        branch_prefix=mapped.get("branch_prefix"),
+                        indent_date=mapped.get("invoice_date"),
+                        document_type=SALES_DOC_TYPES.get("INVOICE", "SI"),
+                    )
+                except Exception:
+                    formatted_no = str(raw_no) if raw_no else ""
+
+            data.append({
+                "invoice_id": mapped.get("invoice_id"),
+                "invoice_no": formatted_no,
+                "invoice_date": format_date(mapped.get("invoice_date")),
+                "branch_name": mapped.get("branch_name"),
+                "party_name": mapped.get("party_name"),
+                "del_order_no": mapped.get("del_order_no"),
+                "invoice_amount": mapped.get("invoice_amount"),
+                "grand_total": mapped.get("grand_total"),
+                "status": mapped.get("status_name"),
+                "status_id": mapped.get("status"),
+            })
+
+        count_query = get_invoice_table_count_query()
+        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        total = int(count_result) if count_result is not None else 0
+
+        return {"data": data, "total": total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching sales invoice table")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_sales_invoice_by_id")
+async def get_sales_invoice_by_id(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Return invoice details by ID with line items."""
+    try:
+        q_id = request.query_params.get("invoice_id")
+        q_co_id = request.query_params.get("co_id")
+        if q_id is None:
+            raise HTTPException(status_code=400, detail="invoice_id is required")
+        if q_co_id is None:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        try:
+            invoice_id = int(q_id)
+            co_id = int(q_co_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid invoice_id or co_id")
+
+        # Header
+        header_query = get_invoice_by_id_query()
+        header_result = db.execute(header_query, {"invoice_id": invoice_id, "co_id": co_id}).fetchone()
+        if not header_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found or access denied")
+        header = dict(header_result._mapping)
+
+        # Details
+        detail_query = get_invoice_dtl_by_id_query()
+        detail_results = db.execute(detail_query, {"invoice_id": invoice_id}).fetchall()
+        details = [dict(r._mapping) for r in detail_results]
+
+        # Format invoice number
+        raw_no = header.get("invoice_unique_no")
+        formatted_no = header.get("invoice_no_string") or ""
+        if not formatted_no and raw_no is not None:
+            try:
+                formatted_no = format_indent_no(
+                    indent_no=int(raw_no) if raw_no else None,
+                    co_prefix=header.get("co_prefix"),
+                    branch_prefix=header.get("branch_prefix"),
+                    indent_date=header.get("invoice_date"),
+                    document_type=SALES_DOC_TYPES.get("INVOICE", "SI"),
+                )
+            except Exception:
+                formatted_no = str(raw_no) if raw_no else ""
+
+        status_id = header.get("status")
+        branch_id = header.get("branch_id")
+
+        # Permissions
+        q_menu_id = request.query_params.get("menu_id")
+        permissions = None
+        if q_menu_id is not None and branch_id is not None and status_id is not None:
+            try:
+                permissions = calculate_approval_permissions(
+                    user_id=int(token_data.get("user_id")),
+                    menu_id=int(q_menu_id),
+                    branch_id=branch_id,
+                    status_id=status_id,
+                    current_approval_level=None,
+                    db=db,
+                )
+            except Exception:
+                logger.exception("Error calculating permissions")
+
+        response = {
+            "id": str(header.get("invoice_id", "")),
+            "invoiceNo": formatted_no,
+            "invoiceDate": format_date(header.get("invoice_date")),
+            "challanNo": header.get("challan_no"),
+            "challanDate": format_date(header.get("challan_date")),
+            "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+            "deliveryOrder": str(header.get("del_order_no", "")) if header.get("del_order_no") else None,
+            "saleNo": header.get("sale_no"),
+            "party": str(header.get("party_id", "")) if header.get("party_id") else "",
+            "partyName": header.get("party_name"),
+            "shippingAddress": header.get("shipping_address"),
+            "shippingStateCode": header.get("shipping_state_code"),
+            "shippingStateName": header.get("shipping_state_name"),
+            "transporter": str(header.get("transporter_id", "")) if header.get("transporter_id") else None,
+            "transporterName": header.get("transporter_name"),
+            "vehicleNo": header.get("vehicle_no"),
+            "ewayBillNo": header.get("eway_bill_no"),
+            "ewayBillDate": format_date(header.get("eway_bill_date")),
+            "invoiceType": header.get("invoice_type"),
+            "footerNote": header.get("footer_notes"),
+            "termsConditions": header.get("terms_conditions"),
+            "grossAmount": header.get("invoice_amount"),
+            "netAmount": header.get("grand_total"),
+            "freightCharges": header.get("freight_charges"),
+            "roundOff": header.get("round_off"),
+            "tcsPercentage": header.get("tcs_percentage"),
+            "tcsAmount": header.get("tcs_amount"),
+            "intraInterState": header.get("intra_inter_state"),
+            "status": header.get("status_name"),
+            "statusId": status_id,
+            "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
+            "updatedAt": format_date(header.get("updated_date")),
+            "lines": [],
+        }
+
+        if permissions is not None:
+            response["permissions"] = permissions
+
+        for detail in details:
+            line = {
+                "id": str(detail.get("invoice_line_item_id", "")),
+                "deliveryOrderDtlId": detail.get("delivery_line_id"),
+                "hsnCode": detail.get("hsn_code"),
+                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else str(detail.get("item_group", "")),
+                "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+                "itemName": detail.get("item_name"),
+                "itemMake": str(detail.get("make", "")) if detail.get("make") else None,
+                "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
+                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else str(detail.get("uom", "")),
+                "uomName": detail.get("uom"),
+                "rate": detail.get("rate"),
+                "netAmount": detail.get("amount_without_tax"),
+                "totalAmount": detail.get("total_amount"),
+                "remarks": detail.get("item_description"),
+                "gst": {
+                    "igstAmount": detail.get("igst_amt"),
+                    "igstPercent": detail.get("igst_per"),
+                    "cgstAmount": detail.get("cgst_amt"),
+                    "cgstPercent": detail.get("cgst_per"),
+                    "sgstAmount": detail.get("sgst_amt"),
+                    "sgstPercent": detail.get("sgst_per"),
+                    "gstTotal": detail.get("tax_amount"),
+                },
+            }
+            response["lines"].append(line)
+
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching sales invoice by ID")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/create_sales_invoice")
+async def create_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Create a sales invoice with line items. Delivery order reference is optional."""
+    try:
+        branch_id = to_int(payload.get("branch"), "branch", required=True)
+        party_id = to_int(payload.get("party"), "party", required=True)
+
+        date_str = payload.get("date")
+        if not date_str:
+            raise HTTPException(status_code=400, detail="date is required")
+        try:
+            invoice_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list) or len(raw_items) == 0:
+            raise HTTPException(status_code=400, detail="At least one item row is required")
+
+        user_id = to_int(token_data.get("user_id"), "user_id")
+
+        # Optional fields
+        transporter_id = to_int(payload.get("transporter"), "transporter")
+        delivery_order = payload.get("delivery_order")
+        del_order_no = str(delivery_order).strip() if delivery_order else None
+
+        gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
+        net_amount = to_float(payload.get("net_amount"), "net_amount")
+        freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
+        round_off = to_float(payload.get("round_off"), "round_off")
+        tcs_percentage = to_float(payload.get("tcs_percentage"), "tcs_percentage")
+        tcs_amount = to_float(payload.get("tcs_amount"), "tcs_amount")
+        tax_amount = to_float(payload.get("tax_amount"), "tax_amount")
+
+        challan_date = None
+        if payload.get("challan_date"):
+            try:
+                challan_date = datetime.strptime(str(payload["challan_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        del_order_date = None
+        if payload.get("del_order_date"):
+            try:
+                del_order_date = datetime.strptime(str(payload["del_order_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        eway_bill_date = None
+        if payload.get("eway_bill_date"):
+            try:
+                eway_bill_date = datetime.strptime(str(payload["eway_bill_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        # Look up co_id from branch
+        branch_row = db.execute(
+            text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id"),
+            {"branch_id": branch_id},
+        ).fetchone()
+        co_id = dict(branch_row._mapping).get("co_id") if branch_row else None
+
+        # Normalize items — sales_invoice_dtl uses String columns for item_id, item_group, uom, make
+        normalized_items = []
+        for idx, item in enumerate(raw_items, start=1):
+            item_val = item.get("item")
+            if not item_val:
+                raise HTTPException(status_code=400, detail=f"items[{idx}].item is required")
+            uom_val = item.get("uom")
+            if not uom_val:
+                raise HTTPException(status_code=400, detail=f"items[{idx}].uom is required")
+
+            qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
+            rate = to_float(item.get("rate"), f"items[{idx}].rate")
+
+            # Resolve item name/group from DB if not provided
+            item_name = item.get("item_name") or ""
+            item_group = item.get("item_group") or ""
+            uom_name = item.get("uom_name") or ""
+            make_name = item.get("item_make") or ""
+
+            # Try to look up item_name, item_grp_code, uom_name from DB
+            if not item_name or not uom_name:
+                item_row = db.execute(
+                    text("""SELECT im.item_name, im.item_code, ig.item_grp_id, ig.item_grp_code, um.uom_name
+                            FROM item_mst im
+                            LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+                            LEFT JOIN uom_mst um ON um.uom_id = :uom_id
+                            WHERE im.item_id = :item_id"""),
+                    {"item_id": int(item_val), "uom_id": int(uom_val) if str(uom_val).isdigit() else None},
+                ).fetchone()
+                if item_row:
+                    row_data = dict(item_row._mapping)
+                    if not item_name:
+                        item_name = row_data.get("item_name", "")
+                    if not item_group:
+                        item_group = str(row_data.get("item_grp_id", ""))
+                    if not uom_name:
+                        uom_name = row_data.get("uom_name", "")
+
+            # Look up make name if make ID provided
+            if make_name and str(make_name).isdigit():
+                make_row = db.execute(
+                    text("SELECT item_make_name FROM item_make WHERE item_make_id = :id"),
+                    {"id": int(make_name)},
+                ).fetchone()
+                if make_row:
+                    make_name = dict(make_row._mapping).get("item_make_name", make_name)
+
+            # Calculate line amounts
+            amount_without_tax = to_float(item.get("net_amount"), f"items[{idx}].net_amount")
+            if amount_without_tax is None and qty and rate:
+                amount_without_tax = round(qty * rate, 2)
+            line_tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
+            line_total_amount = to_float(item.get("total_amount"), f"items[{idx}].total_amount")
+
+            gst = item.get("gst") or {}
+            cgst_amt = to_float(gst.get("cgst_amount"), "cgst_amount")
+            cgst_per = to_float(gst.get("cgst_percent"), "cgst_percent")
+            sgst_amt = to_float(gst.get("sgst_amount"), "sgst_amount")
+            sgst_per = to_float(gst.get("sgst_percent"), "sgst_percent")
+            igst_amt = to_float(gst.get("igst_amount"), "igst_amount")
+            igst_per = to_float(gst.get("igst_percent"), "igst_percent")
+
+            if line_tax_amount is None:
+                line_tax_amount = (cgst_amt or 0) + (sgst_amt or 0) + (igst_amt or 0)
+            if line_total_amount is None and amount_without_tax is not None:
+                line_total_amount = round((amount_without_tax or 0) + (line_tax_amount or 0), 2)
+
+            normalized_items.append({
+                "delivery_line_id": to_int(item.get("delivery_order_dtl_id"), "delivery_order_dtl_id"),
+                "hsn_code": item.get("hsn_code"),
+                "item_id": str(item_val),
+                "item_name": item_name,
+                "item_group": str(item_group) if item_group else "",
+                "item_description": str(item.get("remarks", "")).strip()[:500] if item.get("remarks") else None,
+                "make": str(make_name) if make_name else None,
+                "quantity": qty,
+                "uom": uom_name if uom_name else str(uom_val),
+                "rate": rate,
+                "amount_without_tax": amount_without_tax,
+                "tax_amount": line_tax_amount,
+                "total_amount": line_total_amount,
+                "cgst_amt": cgst_amt,
+                "cgst_per": cgst_per,
+                "sgst_amt": sgst_amt,
+                "sgst_per": sgst_per,
+                "igst_amt": igst_amt,
+                "igst_per": igst_per,
+            })
+
+        # Insert header
+        insert_hdr = insert_sales_invoice()
+        header_params = {
+            "invoice_date": invoice_date,
+            "invoice_unique_no": None,
+            "invoice_no_string": None,
+            "branch_id": branch_id,
+            "co_id": co_id,
+            "party_id": party_id,
+            "del_order_no": del_order_no,
+            "del_order_date": del_order_date,
+            "challan_no": payload.get("challan_no"),
+            "challan_date": challan_date,
+            "transporter_id": transporter_id,
+            "vehicle_no": payload.get("vehicle_no"),
+            "eway_bill_no": payload.get("eway_bill_no"),
+            "eway_bill_date": eway_bill_date,
+            "invoice_type": payload.get("invoice_type"),
+            "footer_notes": payload.get("footer_note"),
+            "terms": payload.get("terms"),
+            "terms_conditions": payload.get("terms_conditions"),
+            "invoice_amount": gross_amount or 0,
+            "grand_total": net_amount or 0,
+            "tax_amount": tax_amount or 0,
+            "freight_charges": freight_charges or 0,
+            "round_off": round_off or 0,
+            "tcs_percentage": tcs_percentage or 0,
+            "tcs_amount": tcs_amount or 0,
+            "shipping_address": payload.get("shipping_address"),
+            "shipping_state_code": payload.get("shipping_state_code"),
+            "shipping_state_name": payload.get("shipping_state_name"),
+            "intra_inter_state": payload.get("intra_inter_state"),
+            "status": 21,
+            "created_by": user_id,
+            "updated_by": user_id,
+        }
+
+        result = db.execute(insert_hdr, header_params)
+        invoice_id = result.lastrowid
+        if not invoice_id:
+            raise HTTPException(status_code=500, detail="Failed to create sales invoice header")
+
+        # Insert line items
+        line_query = insert_invoice_line_item()
+        for item in normalized_items:
+            db.execute(line_query, {
+                "invoice_id": invoice_id,
+                "co_id": co_id,
+                "delivery_line_id": item["delivery_line_id"],
+                "hsn_code": item["hsn_code"],
+                "item_id": item["item_id"],
+                "item_name": item["item_name"],
+                "item_group": item["item_group"],
+                "item_description": item["item_description"],
+                "make": item["make"],
+                "quantity": item["quantity"] or 0,
+                "uom": item["uom"],
+                "rate": item["rate"] or 0,
+                "amount_without_tax": item["amount_without_tax"] or 0,
+                "tax_amount": item["tax_amount"] or 0,
+                "total_amount": item["total_amount"] or 0,
+                "cgst_amt": item["cgst_amt"] or 0,
+                "cgst_per": item["cgst_per"] or 0,
+                "sgst_amt": item["sgst_amt"] or 0,
+                "sgst_per": item["sgst_per"] or 0,
+                "igst_amt": item["igst_amt"] or 0,
+                "igst_per": item["igst_per"] or 0,
+                "claim_rate": 0,
+            })
+
+        db.commit()
+        return {"message": "Sales invoice created successfully", "invoice_id": invoice_id}
+    except HTTPException as exc:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error creating sales invoice")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/update_sales_invoice")
+async def update_sales_invoice_endpoint(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Update a sales invoice with line items (delete-reinsert pattern)."""
+    try:
+        invoice_id = to_int(payload.get("id"), "id", required=True)
+        branch_id = to_int(payload.get("branch"), "branch", required=True)
+        party_id = to_int(payload.get("party"), "party", required=True)
+
+        date_str = payload.get("date")
+        if not date_str:
+            raise HTTPException(status_code=400, detail="date is required")
+        try:
+            invoice_date = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list) or len(raw_items) == 0:
+            raise HTTPException(status_code=400, detail="At least one item row is required")
+
+        # Verify exists
+        check_query = text("SELECT invoice_id, status, is_active FROM sales_invoice WHERE invoice_id = :id AND (is_active = 1 OR is_active IS NULL)")
+        check_result = db.execute(check_query, {"id": invoice_id}).fetchone()
+        if not check_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found or inactive")
+
+        user_id = to_int(token_data.get("user_id"), "user_id")
+
+        transporter_id = to_int(payload.get("transporter"), "transporter")
+        delivery_order = payload.get("delivery_order")
+        del_order_no = str(delivery_order).strip() if delivery_order else None
+
+        gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
+        net_amount = to_float(payload.get("net_amount"), "net_amount")
+        freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
+        round_off = to_float(payload.get("round_off"), "round_off")
+        tcs_percentage = to_float(payload.get("tcs_percentage"), "tcs_percentage")
+        tcs_amount = to_float(payload.get("tcs_amount"), "tcs_amount")
+        tax_amount = to_float(payload.get("tax_amount"), "tax_amount")
+
+        challan_date = None
+        if payload.get("challan_date"):
+            try:
+                challan_date = datetime.strptime(str(payload["challan_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        eway_bill_date = None
+        if payload.get("eway_bill_date"):
+            try:
+                eway_bill_date = datetime.strptime(str(payload["eway_bill_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        # Update header
+        update_hdr = update_sales_invoice()
+        db.execute(update_hdr, {
+            "invoice_id": invoice_id,
+            "invoice_date": invoice_date,
+            "branch_id": branch_id,
+            "party_id": party_id,
+            "del_order_no": del_order_no,
+            "del_order_date": None,
+            "challan_no": payload.get("challan_no"),
+            "challan_date": challan_date,
+            "transporter_id": transporter_id,
+            "vehicle_no": payload.get("vehicle_no"),
+            "eway_bill_no": payload.get("eway_bill_no"),
+            "eway_bill_date": eway_bill_date,
+            "invoice_type": payload.get("invoice_type"),
+            "footer_notes": payload.get("footer_note"),
+            "terms": payload.get("terms"),
+            "terms_conditions": payload.get("terms_conditions"),
+            "invoice_amount": gross_amount or 0,
+            "grand_total": net_amount or 0,
+            "tax_amount": tax_amount or 0,
+            "freight_charges": freight_charges or 0,
+            "round_off": round_off or 0,
+            "tcs_percentage": tcs_percentage or 0,
+            "tcs_amount": tcs_amount or 0,
+            "updated_by": user_id,
+        })
+
+        # Soft-delete old line items
+        delete_q = delete_invoice_line_items()
+        db.execute(delete_q, {"invoice_id": invoice_id})
+
+        # Look up co_id
+        branch_row = db.execute(
+            text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id"),
+            {"branch_id": branch_id},
+        ).fetchone()
+        co_id = dict(branch_row._mapping).get("co_id") if branch_row else None
+
+        # Re-insert line items
+        line_query = insert_invoice_line_item()
+        for idx, item in enumerate(raw_items, start=1):
+            item_val = item.get("item")
+            if not item_val:
+                raise HTTPException(status_code=400, detail=f"items[{idx}].item is required")
+            uom_val = item.get("uom")
+            if not uom_val:
+                raise HTTPException(status_code=400, detail=f"items[{idx}].uom is required")
+
+            qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
+            rate = to_float(item.get("rate"), f"items[{idx}].rate")
+
+            item_name = item.get("item_name") or ""
+            item_group = item.get("item_group") or ""
+            uom_name = item.get("uom_name") or ""
+            make_name = item.get("item_make") or ""
+
+            if not item_name or not uom_name:
+                item_row = db.execute(
+                    text("""SELECT im.item_name, ig.item_grp_id, um.uom_name
+                            FROM item_mst im
+                            LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+                            LEFT JOIN uom_mst um ON um.uom_id = :uom_id
+                            WHERE im.item_id = :item_id"""),
+                    {"item_id": int(item_val), "uom_id": int(uom_val) if str(uom_val).isdigit() else None},
+                ).fetchone()
+                if item_row:
+                    row_data = dict(item_row._mapping)
+                    if not item_name:
+                        item_name = row_data.get("item_name", "")
+                    if not item_group:
+                        item_group = str(row_data.get("item_grp_id", ""))
+                    if not uom_name:
+                        uom_name = row_data.get("uom_name", "")
+
+            if make_name and str(make_name).isdigit():
+                make_row = db.execute(
+                    text("SELECT item_make_name FROM item_make WHERE item_make_id = :id"),
+                    {"id": int(make_name)},
+                ).fetchone()
+                if make_row:
+                    make_name = dict(make_row._mapping).get("item_make_name", make_name)
+
+            amount_without_tax = to_float(item.get("net_amount"), f"items[{idx}].net_amount")
+            if amount_without_tax is None and qty and rate:
+                amount_without_tax = round(qty * rate, 2)
+            line_tax = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
+            line_total = to_float(item.get("total_amount"), f"items[{idx}].total_amount")
+
+            gst = item.get("gst") or {}
+            cgst_amt = to_float(gst.get("cgst_amount"), "cgst_amount")
+            cgst_per = to_float(gst.get("cgst_percent"), "cgst_percent")
+            sgst_amt = to_float(gst.get("sgst_amount"), "sgst_amount")
+            sgst_per = to_float(gst.get("sgst_percent"), "sgst_percent")
+            igst_amt = to_float(gst.get("igst_amount"), "igst_amount")
+            igst_per = to_float(gst.get("igst_percent"), "igst_percent")
+
+            if line_tax is None:
+                line_tax = (cgst_amt or 0) + (sgst_amt or 0) + (igst_amt or 0)
+            if line_total is None and amount_without_tax is not None:
+                line_total = round((amount_without_tax or 0) + (line_tax or 0), 2)
+
+            db.execute(line_query, {
+                "invoice_id": invoice_id,
+                "co_id": co_id,
+                "delivery_line_id": to_int(item.get("delivery_order_dtl_id"), "delivery_order_dtl_id"),
+                "hsn_code": item.get("hsn_code"),
+                "item_id": str(item_val),
+                "item_name": item_name,
+                "item_group": str(item_group) if item_group else "",
+                "item_description": str(item.get("remarks", "")).strip()[:500] if item.get("remarks") else None,
+                "make": str(make_name) if make_name else None,
+                "quantity": qty,
+                "uom": uom_name if uom_name else str(uom_val),
+                "rate": rate,
+                "amount_without_tax": amount_without_tax,
+                "tax_amount": line_tax,
+                "total_amount": line_total,
+                "cgst_amt": cgst_amt,
+                "cgst_per": cgst_per,
+                "sgst_amt": sgst_amt,
+                "sgst_per": sgst_per,
+                "igst_amt": igst_amt,
+                "igst_per": igst_per,
+                "claim_rate": 0,
+            })
+
+        db.commit()
+        return {"message": "Sales invoice updated successfully", "invoice_id": invoice_id}
+    except HTTPException as exc:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error updating sales invoice")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# WORKFLOW ENDPOINTS
+# =============================================================================
+
+
+@router.post("/open_sales_invoice")
+async def open_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Open a sales invoice (21 -> 1). Generates document number."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        branch_id = to_int(payload.get("branch_id"), "branch_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        doc = dict(doc_result._mapping)
+
+        if doc.get("status") != 21:
+            raise HTTPException(status_code=400, detail=f"Cannot open invoice with status {doc.get('status')}. Expected 21 (Draft).")
+
+        invoice_date = doc.get("invoice_date")
+        if not invoice_date:
+            raise HTTPException(status_code=400, detail="Invoice date is required to generate document number.")
+
+        current_no = doc.get("invoice_unique_no")
+        new_no = None
+        new_no_string = None
+        if current_no is None or current_no == "" or current_no == 0:
+            fy_start, fy_end = get_fy_boundaries(invoice_date)
+            max_query = get_max_invoice_no_for_branch_fy()
+            max_result = db.execute(max_query, {"branch_id": branch_id, "fy_start_date": fy_start, "fy_end_date": fy_end}).fetchone()
+            max_no = dict(max_result._mapping).get("max_doc_no") or 0 if max_result else 0
+            new_no = int(max_no) + 1
+
+            # Get prefixes for formatted number string
+            branch_row = db.execute(
+                text("SELECT bm.branch_prefix, cm.co_prefix FROM branch_mst bm LEFT JOIN co_mst cm ON cm.co_id = bm.co_id WHERE bm.branch_id = :branch_id"),
+                {"branch_id": branch_id},
+            ).fetchone()
+            if branch_row:
+                bdata = dict(branch_row._mapping)
+                try:
+                    new_no_string = format_indent_no(
+                        indent_no=new_no,
+                        co_prefix=bdata.get("co_prefix"),
+                        branch_prefix=bdata.get("branch_prefix"),
+                        indent_date=invoice_date,
+                        document_type=SALES_DOC_TYPES.get("INVOICE", "SI"),
+                    )
+                except Exception:
+                    new_no_string = str(new_no)
+
+        update_q = update_invoice_status()
+        db.execute(update_q, {
+            "invoice_id": invoice_id,
+            "status_id": 1,
+            "invoice_unique_no": new_no,
+            "invoice_no_string": new_no_string,
+            "updated_by": user_id,
+        })
+        db.commit()
+
+        return {
+            "status": "success",
+            "new_status_id": 1,
+            "message": "Sales invoice opened successfully.",
+            "invoice_no": new_no_string if new_no_string else str(current_no) if current_no else None,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error opening sales invoice")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cancel_draft_sales_invoice")
+async def cancel_draft_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Cancel a draft sales invoice (21 -> 6)."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        if dict(doc_result._mapping).get("status") != 21:
+            raise HTTPException(status_code=400, detail="Cannot cancel. Expected status 21 (Draft).")
+
+        update_q = update_invoice_status()
+        db.execute(update_q, {
+            "invoice_id": invoice_id,
+            "status_id": 6,
+            "invoice_unique_no": None,
+            "invoice_no_string": None,
+            "updated_by": user_id,
+        })
+        db.commit()
+        return {"status": "success", "new_status_id": 6, "message": "Draft cancelled successfully."}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/send_sales_invoice_for_approval")
+async def send_sales_invoice_for_approval(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Send sales invoice for approval (1 -> 20, level=1)."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        if dict(doc_result._mapping).get("status") != 1:
+            raise HTTPException(status_code=400, detail="Cannot send for approval. Expected status 1 (Open).")
+
+        update_q = update_invoice_status()
+        db.execute(update_q, {
+            "invoice_id": invoice_id,
+            "status_id": 20,
+            "invoice_unique_no": None,
+            "invoice_no_string": None,
+            "updated_by": user_id,
+        })
+        db.commit()
+        return {"status": "success", "new_status_id": 20, "new_approval_level": 1, "message": "Sales invoice sent for approval."}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/approve_sales_invoice")
+async def approve_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Approve a sales invoice."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        menu_id = to_int(payload.get("menu_id"), "menu_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        document_amount = float(dict(doc_result._mapping).get("grand_total", 0) or 0)
+
+        result = process_sales_approval(
+            doc_id=invoice_id, user_id=user_id, menu_id=menu_id,
+            get_doc_query=get_invoice_with_approval_info,
+            update_status_query=update_invoice_status,
+            id_param_name="invoice_id", doc_name="Sales invoice",
+            db=db, document_amount=document_amount,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reject_sales_invoice")
+async def reject_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Reject a sales invoice (20 -> 4)."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        if dict(doc_result._mapping).get("status") != 20:
+            raise HTTPException(status_code=400, detail="Cannot reject. Expected status 20 (Pending Approval).")
+
+        update_q = update_invoice_status()
+        db.execute(update_q, {
+            "invoice_id": invoice_id,
+            "status_id": 4,
+            "invoice_unique_no": None,
+            "invoice_no_string": None,
+            "updated_by": user_id,
+        })
+        db.commit()
+        return {"status": "success", "new_status_id": 4, "message": "Sales invoice rejected."}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reopen_sales_invoice")
+async def reopen_sales_invoice(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Reopen a cancelled (6 -> 21) or rejected (4 -> 1) sales invoice."""
+    try:
+        invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        user_id = int(token_data.get("user_id"))
+
+        doc_query = get_invoice_with_approval_info()
+        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
+        if not doc_result:
+            raise HTTPException(status_code=404, detail="Sales invoice not found")
+        current_status = dict(doc_result._mapping).get("status")
+
+        if current_status == 6:
+            new_status_id = 21
+        elif current_status == 4:
+            new_status_id = 1
+        else:
+            raise HTTPException(status_code=400, detail=f"Cannot reopen with status {current_status}. Only 6 or 4.")
+
+        update_q = update_invoice_status()
+        db.execute(update_q, {
+            "invoice_id": invoice_id,
+            "status_id": new_status_id,
+            "invoice_unique_no": None,
+            "invoice_no_string": None,
+            "updated_by": user_id,
+        })
+        db.commit()
+        return {"status": "success", "new_status_id": new_status_id, "message": f"Sales invoice reopened (status: {new_status_id})."}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

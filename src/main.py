@@ -52,6 +52,7 @@ from src.juteProcurement.issue import router as jute_issue_router
 from src.sales.quotation import router as quotation_router
 from src.sales.salesOrder import router as sales_order_router
 from src.sales.deliveryOrder import router as delivery_order_router
+from src.sales.salesInvoice import router as sales_invoice_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -137,7 +138,7 @@ app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-
 app.include_router(quotation_router, prefix="/api/salesQuotation", tags=["sales-quotation"])
 app.include_router(sales_order_router, prefix="/api/salesOrder", tags=["sales-order"])
 app.include_router(delivery_order_router, prefix="/api/salesDeliveryOrder", tags=["sales-delivery-order"])
-
+app.include_router(sales_invoice_router, prefix="/api/salesInvoice", tags=["sales-invoice"])
 
 
 logging.basicConfig(level=logging.INFO)

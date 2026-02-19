@@ -124,8 +124,8 @@ class InvoiceHdr(Base):
 
 
 class InvoiceLineItem(Base):
-    """Invoice line items table."""
-    __tablename__ = "invoice_line_items"
+    """Sales invoice detail/line items table."""
+    __tablename__ = "sales_invoice_dtl"
 
     invoice_line_item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     amount_without_tax: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
