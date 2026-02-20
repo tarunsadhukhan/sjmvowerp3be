@@ -711,12 +711,15 @@ def get_company_branch_addresses(co_id: int = None, branch_id: int = None):
 
 
 def get_indent_line_items_for_po(indent_id: int):
-    """Get line items for an indent to be used in PO creation popup."""
+    """Get line items for an indent to be used in PO creation popup.
+    Includes indent_type and outstanding (unfulfilled) qty from vw_proc_indent_outstanding.
+    """
     sql = """SELECT
         pid.indent_dtl_id,
         pi.indent_id,
         pi.indent_no,
         pi.expense_type_id,
+        pi.indent_type_id AS indent_type,
         pid.item_id,
         im.item_code,
         im.item_name,
@@ -724,6 +727,7 @@ def get_indent_line_items_for_po(indent_id: int):
         igm.item_grp_code,
         igm.item_grp_name,
         pid.qty,
+        COALESCE(oi.Bal_ind_qty, 0) AS outstanding_qty,
         pid.uom_id,
         um.uom_name,
         pid.item_make_id,
@@ -731,7 +735,8 @@ def get_indent_line_items_for_po(indent_id: int):
         pid.dept_id,
         dm.dept_desc AS dept_name,
         im.tax_percentage,
-        pid.remarks
+        pid.remarks,
+        oi.min_order_qty
     FROM proc_indent_dtl AS pid
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
@@ -739,6 +744,7 @@ def get_indent_line_items_for_po(indent_id: int):
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
+    LEFT JOIN vw_proc_indent_outstanding oi ON oi.indent_dtl_id = pid.indent_dtl_id
     WHERE pid.indent_id = :indent_id
         AND pid.active = 1
     ORDER BY pid.indent_dtl_id;"""
@@ -776,7 +782,8 @@ def insert_proc_po():
         updated_by,
         updated_date_time,
         approval_level,
-        expense_type_id
+        expense_type_id,
+        po_type
     ) VALUES (
         :credit_days,
         :delivery_instructions,
@@ -806,7 +813,8 @@ def insert_proc_po():
         :updated_by,
         :updated_date_time,
         :approval_level,
-        :expense_type_id
+        :expense_type_id,
+        :po_type
     );"""
     return text(sql)
 
@@ -928,7 +936,8 @@ def update_proc_po():
         po_no = COALESCE(:po_no, po_no),
         status_id = COALESCE(:status_id, status_id),
         approval_level = :approval_level,
-        expense_type_id = :expense_type_id
+        expense_type_id = :expense_type_id,
+        po_type = :po_type
     WHERE po_id = :po_id;"""
     return text(sql)
 
@@ -2483,5 +2492,78 @@ def get_expense_type_name_by_id():
     SELECT expense_type_name
     FROM expense_type_mst
     WHERE expense_type_id = :expense_type_id AND active = 1;
+    """
+    return text(sql)
+
+
+# =============================================================================
+# PO LINE ITEM VALIDATION QUERIES
+# =============================================================================
+
+def get_outstanding_po_qty():
+    """
+    Compute the total outstanding (unreceived) PO quantity for a specific item
+    at a given branch, across all active POs (status NOT IN 4=rejected, 5=closed, 6=cancelled).
+
+    Outstanding qty per PO line = po_dtl.qty - SUM(approved inward qty linked to that PO line).
+    Aggregated across all active PO lines for the item+branch.
+    """
+    sql = """
+    SELECT COALESCE(SUM(ppd.qty - COALESCE(rcv.rcv_qty, 0)), 0) AS outstanding_po_qty
+    FROM proc_po_dtl ppd
+    JOIN proc_po pp ON pp.po_id = ppd.po_id
+    LEFT JOIN (
+        SELECT po_dtl_id, SUM(approved_qty) AS rcv_qty
+        FROM proc_inward_dtl
+        WHERE active = 1
+        GROUP BY po_dtl_id
+    ) rcv ON rcv.po_dtl_id = ppd.po_dtl_id
+    WHERE ppd.item_id = :item_id
+      AND pp.branch_id = :branch_id
+      AND ppd.active = 1
+      AND pp.status_id NOT IN (4, 5, 6);
+    """
+    return text(sql)
+
+
+def check_open_po_for_item():
+    """
+    Check if any active (non-rejected, non-closed, non-cancelled) PO already
+    exists for a given item_id + branch_id.
+    Returns po_id and po_no of the first match, or no rows if none found.
+    Used in Direct PO Logic 1 Step 2.
+    """
+    sql = """
+    SELECT pp.po_id, pp.po_no
+    FROM proc_po_dtl ppd
+    JOIN proc_po pp ON pp.po_id = ppd.po_id
+    WHERE ppd.item_id = :item_id
+      AND pp.branch_id = :branch_id
+      AND ppd.active = 1
+      AND pp.status_id NOT IN (4, 5, 6)
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_po_fy_check():
+    """
+    Check if an open (non-rejected, non-closed, non-cancelled) PO already exists
+    for a given item_id + branch_id within the current financial year
+    (po_date between :fy_start and :fy_end).
+    Returns po_id and po_no of the first match, or no rows if none found.
+    Used in Direct PO Logic 2 Step 1.
+    """
+    sql = """
+    SELECT pp.po_id, pp.po_no
+    FROM proc_po_dtl ppd
+    JOIN proc_po pp ON pp.po_id = ppd.po_id
+    WHERE ppd.item_id = :item_id
+      AND pp.branch_id = :branch_id
+      AND ppd.active = 1
+      AND pp.status_id NOT IN (4, 5, 6)
+      AND pp.po_date >= :fy_start
+      AND pp.po_date <= :fy_end
+    LIMIT 1;
     """
     return text(sql)
