@@ -12,7 +12,7 @@ Schema (jute_batch_plan):
 Schema (jute_batch_plan_li):
 - batch_plan_li_id: bigint (PK, auto)
 - batch_plan_id: bigint (FK to jute_batch_plan)
-- item_id: int (FK to item_mst — the item, formerly quality)
+- jute_quality_id: int (FK to item_mst — the item/quality)
 - percentage: double (nullable)
 - updated_by: bigint
 - updated_date_time: datetime
@@ -149,13 +149,13 @@ def get_batch_plan_line_items_query():
         SELECT 
             bpli.batch_plan_li_id,
             bpli.batch_plan_id,
-            bpli.item_id,
+            bpli.jute_quality_id AS item_id,
             bpli.percentage,
             im.item_name AS quality_name,
             im.item_grp_id,
             COALESCE(fp.item_grp_name_path, ig.item_grp_name) AS jute_group_name
         FROM jute_batch_plan_li bpli
-        LEFT JOIN item_mst im ON bpli.item_id = im.item_id
+        LEFT JOIN item_mst im ON bpli.jute_quality_id = im.item_id
         LEFT JOIN item_grp_mst ig ON im.item_grp_id = ig.item_grp_id
         LEFT JOIN full_paths fp ON fp.target_id = ig.item_grp_id
         WHERE bpli.batch_plan_id = :batch_plan_id
@@ -502,7 +502,7 @@ async def batch_plan_create(
         for li in payload.line_items:
             line_item = JuteBatchPlanLi(
                 batch_plan_id=batch_plan.batch_plan_id,
-                item_id=li.item_id,
+                jute_quality_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
                 updated_date_time=datetime.now(),
@@ -591,7 +591,7 @@ async def batch_plan_edit(
         for li in payload.line_items:
             line_item = JuteBatchPlanLi(
                 batch_plan_id=batch_plan_id,
-                item_id=li.item_id,
+                jute_quality_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
                 updated_date_time=datetime.now(),

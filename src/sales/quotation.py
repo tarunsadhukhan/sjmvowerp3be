@@ -636,7 +636,10 @@ async def create_quotation(
     try:
         # Accept both short names (branch, party) and suffixed names (branch_id, party_id)
         branch_id = to_int(payload.get("branch_id") or payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party_id") or payload.get("party"), "party", required=True)
+        party_id = to_int(payload.get("party_id") or payload.get("party"), "party")
+        sales_broker_id_check = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        if not party_id and not sales_broker_id_check:
+            raise HTTPException(status_code=400, detail="At least one of customer or broker is required")
 
         date_str = payload.get("quotation_date") or payload.get("date")
         if not date_str:
@@ -654,7 +657,7 @@ async def create_quotation(
         created_at = datetime.utcnow()
 
         # Optional header fields — accept both short and suffixed names
-        sales_broker_id = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        sales_broker_id = sales_broker_id_check
         billing_address_id = to_int(payload.get("billing_address_id") or payload.get("billing_address"), "billing_address")
         shipping_address_id = to_int(payload.get("shipping_address_id") or payload.get("shipping_address"), "shipping_address")
         expiry_str = payload.get("quotation_expiry_date") or payload.get("expiry_date")
@@ -787,7 +790,10 @@ async def update_quotation(
     try:
         sales_quotation_id = to_int(payload.get("sales_quotation_id") or payload.get("id"), "id", required=True)
         branch_id = to_int(payload.get("branch_id") or payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party_id") or payload.get("party"), "party", required=True)
+        party_id = to_int(payload.get("party_id") or payload.get("party"), "party")
+        sales_broker_id_check = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        if not party_id and not sales_broker_id_check:
+            raise HTTPException(status_code=400, detail="At least one of customer or broker is required")
 
         date_str = payload.get("quotation_date") or payload.get("date")
         if not date_str:
@@ -812,7 +818,7 @@ async def update_quotation(
         updated_at = datetime.utcnow()
 
         # Optional fields — accept both short and suffixed names
-        sales_broker_id = to_int(payload.get("sales_broker_id") or payload.get("broker"), "broker")
+        sales_broker_id = sales_broker_id_check
         billing_address_id = to_int(payload.get("billing_address_id") or payload.get("billing_address"), "billing_address")
         shipping_address_id = to_int(payload.get("shipping_address_id") or payload.get("shipping_address"), "shipping_address")
         expiry_str = payload.get("quotation_expiry_date") or payload.get("expiry_date")
