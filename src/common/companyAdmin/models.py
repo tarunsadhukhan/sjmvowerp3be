@@ -103,7 +103,6 @@ class CoMst(Base):
     city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
-    updated_by_con_user = Column(Integer)
     co_cin_no = Column(String(25))
     co_email_id = Column(String(255))
     co_pan_no = Column(String(25))
@@ -141,6 +140,7 @@ class BranchMst(Base):
     branch_email = Column(String(255))
     active = Column(Boolean, default=True)
     gst_verified = Column(Boolean, default=False)
+    updated_by = Column(Integer, nullable=False)
 
     def __repr__(self):
         return f"<BranchMst(id={self.branch_id}, name='{self.branch_name}')>"
