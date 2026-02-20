@@ -214,22 +214,38 @@ async def validate_item_for_indent(
         minqty = vdata.get("minqty")
         maxqty = vdata.get("maxqty")
         min_order_qty = vdata.get("min_order_qty")
-        has_open = int(vdata.get("has_open_indent") or 0)
-
         result["branch_stock"] = branch_stock
         result["outstanding_indent_qty"] = outstanding
         result["minqty"] = float(minqty) if minqty is not None else None
         result["maxqty"] = float(maxqty) if maxqty is not None else None
         result["min_order_qty"] = float(min_order_qty) if min_order_qty is not None else None
-        result["has_open_indent"] = bool(has_open)
 
         if validation_logic == 1:
             # --- Logic 1: Max/Min + Stock Check ---
 
-            # Step 1: Check for open indent against the item
-            if has_open:
+            # Step 1: Check if an Open-type indent (indent_type = 'Open') already exists for
+            # this item in the current financial year. Open-type indents are blanket/standing
+            # orders — if one is active for the item, a new Regular indent should be blocked.
+            today = date.today()
+            fy_start, fy_end = get_fy_boundaries(today)
+            fy_open_row = db.execute(
+                get_item_fy_indent_check(),
+                {
+                    "branch_id": branch_id,
+                    "item_id": item_id,
+                    "fy_start": fy_start,
+                    "fy_end": fy_end,
+                },
+            ).fetchone()
+
+            if fy_open_row:
+                fy_open_data = dict(fy_open_row._mapping)
+                result["has_open_indent"] = True
+                result["fy_indent_exists"] = True
+                result["fy_indent_no"] = fy_open_data.get("indent_no")
                 result["errors"].append(
-                    "An open indent already exists for this item at this branch."
+                    f"An Open-type indent (#{fy_open_data.get('indent_no')}) already exists for this item "
+                    f"in the current financial year ({fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')})."
                 )
 
             # Step 2: Check stock + outstanding against max quantity
@@ -251,12 +267,9 @@ async def validate_item_for_indent(
                     result["max_indent_qty"] = max_indent
                     result["min_indent_qty"] = float(minqty) if minqty else None
             else:
-                # No max qty configured → block indent entry
+                # No max qty configured — per Logic 1, user may enter any value
                 result["has_minmax"] = False
-                result["errors"].append(
-                    "Min/Max stock levels not configured for this item at this branch. "
-                    "Please configure item min/max before raising an indent."
-                )
+                # No error — free entry allowed when min/max not configured for Logic 1
 
         elif validation_logic == 2:
             # --- Logic 2: Open Entry + FY Check ---

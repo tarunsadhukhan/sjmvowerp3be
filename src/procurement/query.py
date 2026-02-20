@@ -2419,17 +2419,14 @@ def get_item_validation_data():
         imm.maxqty,
         imm.min_order_qty,
         imm.lead_time,
-        COALESCE(oi.outstanding_qty, 0) AS outstanding_indent_qty,
-        COALESCE(oi.has_open_indent, 0) AS has_open_indent
+        COALESCE(oi.outstanding_qty, 0) AS outstanding_indent_qty
     FROM (SELECT 1 AS dummy) d
     LEFT JOIN vw_item_balance_qty_by_branch stock
         ON stock.branch_id = :branch_id AND stock.item_id = :item_id
     LEFT JOIN item_minmax_mst imm
         ON imm.branch_id = :branch_id AND imm.item_id = :item_id AND imm.active = 1
     LEFT JOIN (
-        SELECT
-            SUM(v.Bal_ind_qty) AS outstanding_qty,
-            MAX(CASE WHEN v.status_id NOT IN (4, 5, 6) THEN 1 ELSE 0 END) AS has_open_indent
+        SELECT SUM(v.Bal_ind_qty) AS outstanding_qty
         FROM vw_proc_indent_outstanding v
         JOIN proc_indent_dtl pid ON pid.indent_dtl_id = v.indent_dtl_id AND pid.active = 1
         JOIN proc_indent pi ON pi.indent_id = pid.indent_id AND pi.branch_id = :branch_id
