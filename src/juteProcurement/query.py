@@ -1833,3 +1833,134 @@ def get_yarn_types_query():
         ORDER BY COALESCE(im.item_name, ym.jute_yarn_name)
     """
     return text(sql)
+
+
+# =============================================================================
+# BATCH DAILY ASSIGN QUERIES
+# =============================================================================
+
+def get_batch_daily_assign_table_query(search: str = None):
+    """
+    Query to get batch daily assignments aggregated by date and branch.
+    Groups by assign_date and branch_id, counts assignments, determines status.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(bda.assign_date AS CHAR) LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT
+            bda.assign_date,
+            bda.branch_id,
+            bm.branch_name,
+            COUNT(*) AS total_assignments,
+            SUM(CASE WHEN bda.status_id = 3 THEN 1 ELSE 0 END) AS approved_count,
+            CASE
+                WHEN COUNT(*) = SUM(CASE WHEN bda.status_id = 3 THEN 1 ELSE 0 END) AND COUNT(*) > 0 THEN 'Approved'
+                WHEN SUM(CASE WHEN bda.status_id = 3 THEN 1 ELSE 0 END) > 0 THEN 'Partial Approved'
+                ELSE 'Draft'
+            END AS status
+        FROM jute_batch_daily_assign bda
+        INNER JOIN branch_mst bm ON bm.branch_id = bda.branch_id
+        WHERE bm.branch_id = :branch_id
+        {search_clause}
+        GROUP BY bda.assign_date, bda.branch_id, bm.branch_name
+        ORDER BY bda.assign_date DESC, bm.branch_name
+        LIMIT :limit OFFSET :offset
+    """
+    return text(sql)
+
+
+def get_batch_daily_assign_table_count_query(search: str = None):
+    """
+    Count of unique assign_date+branch combinations for pagination.
+    """
+    search_clause = ""
+    if search:
+        search_clause = """
+            AND (
+                CAST(bda.assign_date AS CHAR) LIKE :search
+                OR bm.branch_name LIKE :search
+            )
+        """
+
+    sql = f"""
+        SELECT COUNT(*) AS total FROM (
+            SELECT bda.assign_date, bda.branch_id
+            FROM jute_batch_daily_assign bda
+            INNER JOIN branch_mst bm ON bm.branch_id = bda.branch_id
+            WHERE bm.branch_id = :branch_id
+            {search_clause}
+            GROUP BY bda.assign_date, bda.branch_id
+        ) sub
+    """
+    return text(sql)
+
+
+def get_batch_daily_assigns_by_date_query():
+    """
+    All assignments for a specific date+branch, with yarn type and batch plan names.
+    """
+    sql = """
+        SELECT
+            bda.batch_daily_assign_id,
+            bda.branch_id,
+            bda.assign_date,
+            bda.jute_yarn_id,
+            ym.jute_yarn_name AS yarn_type_name,
+            bda.batch_plan_id,
+            bp.plan_name,
+            bda.status_id,
+            bda.updated_by,
+            bda.updated_date_time
+        FROM jute_batch_daily_assign bda
+        LEFT JOIN jute_yarn_mst ym ON ym.jute_yarn_id = bda.jute_yarn_id
+        LEFT JOIN jute_batch_plan bp ON bp.batch_plan_id = bda.batch_plan_id
+        WHERE bda.branch_id = :branch_id
+          AND bda.assign_date = :assign_date
+        ORDER BY ym.jute_yarn_name
+    """
+    return text(sql)
+
+
+def get_batch_daily_assign_create_setup_query():
+    """
+    Setup data for creating assignments: yarn types for the company.
+    """
+    sql = """
+        SELECT jute_yarn_id, jute_yarn_name
+        FROM jute_yarn_mst
+        WHERE co_id = :co_id
+        ORDER BY jute_yarn_name
+    """
+    return text(sql)
+
+
+def get_batch_plans_for_branch_query():
+    """
+    Get batch plans available for a specific branch.
+    """
+    sql = """
+        SELECT bp.batch_plan_id, bp.plan_name
+        FROM jute_batch_plan bp
+        WHERE bp.branch_id = :branch_id
+        ORDER BY bp.plan_name
+    """
+    return text(sql)
+
+
+def get_batch_daily_assign_max_date_query():
+    """
+    Get latest assignment date for a branch to auto-increment.
+    """
+    sql = """
+        SELECT MAX(assign_date) AS max_date
+        FROM jute_batch_daily_assign
+        WHERE branch_id = :branch_id
+    """
+    return text(sql)
