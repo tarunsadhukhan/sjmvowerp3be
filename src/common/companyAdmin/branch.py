@@ -136,6 +136,7 @@ async def create_branch_data(
         branch_email = payload.branch_email,
         active = payload.active,
         gst_verified = payload.gst_verified,
+        updated_by = token_data.get("user_id"),
         )
         
         db.add(new_branch)
@@ -195,6 +196,7 @@ async def edit_branch_data(
         branch.branch_email = payload.branch_email
         branch.active = payload.active
         branch.gst_verified = payload.gst_verified
+        branch.updated_by = token_data.get("user_id")
         
         # # Only update active status if it's provided in the payload
         # if payload.active is not None:

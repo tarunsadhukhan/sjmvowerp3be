@@ -130,7 +130,6 @@ async def create_org_data(
             state_id=payload.state_id,
             city_id=payload.city_id,
             co_logo=payload.co_logo,
-            created_by_con_user=token_data.get("user_id"),
             co_cin_no=payload.co_cin_no,
             co_email_id=payload.co_email_id,
             co_pan_no=payload.co_pan_no,
