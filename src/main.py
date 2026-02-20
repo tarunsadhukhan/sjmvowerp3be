@@ -50,6 +50,7 @@ from src.juteProcurement.juteAgentMap import router as jute_agent_map_router
 from src.juteProcurement.billPass import router as jute_bill_pass_router
 from src.juteProcurement.issue import router as jute_issue_router
 from src.juteProcurement.batchDailyAssign import router as batch_daily_assign_router
+from src.juteProcurement.reports import router as jute_reports_router
 from src.sales.quotation import router as quotation_router
 from src.sales.salesOrder import router as sales_order_router
 from src.sales.deliveryOrder import router as delivery_order_router
@@ -132,6 +133,7 @@ app.include_router(jute_agent_map_router, prefix="/api/juteAgentMap", tags=["jut
 app.include_router(jute_bill_pass_router, prefix="/api/juteBillPass", tags=["jute-procurement-bill-pass"])
 app.include_router(jute_issue_router, prefix="/api/juteIssue", tags=["jute-procurement-issue"])
 app.include_router(batch_daily_assign_router, prefix="/api/batchDailyAssign", tags=["jute-procurement-batch-daily-assign"])
+app.include_router(jute_reports_router, prefix="/api/juteReports", tags=["jute-procurement-reports"])
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
