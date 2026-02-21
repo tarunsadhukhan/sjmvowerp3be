@@ -287,12 +287,22 @@ def get_quotation_by_id_query():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
+        bm.state_id AS branch_state_id,
+        bsm.state AS branch_state_name,
         sq.party_id,
         pm.supp_name AS party_name,
         sq.sales_broker_id,
         brkr.supp_name AS broker_name,
         sq.billing_address_id,
         sq.shipping_address_id,
+        pbill.address AS billing_address_text,
+        pbill.party_mst_branch_id AS billing_party_branch_id,
+        pbill_city.state_id AS billing_state_id,
+        sbill.state AS billing_state_name,
+        pship.address AS shipping_address_text,
+        pship.party_mst_branch_id AS shipping_party_branch_id,
+        pship_city.state_id AS shipping_state_id,
+        sship.state AS shipping_state_name,
         sq.footer_notes,
         sq.brokerage_percentage,
         sq.gross_amount,
@@ -313,10 +323,17 @@ def get_quotation_by_id_query():
         END AS approval_level
     FROM sales_quotation AS sq
     LEFT JOIN branch_mst AS bm ON bm.branch_id = sq.branch_id
+    LEFT JOIN state_mst AS bsm ON bsm.state_id = bm.state_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = sq.party_id
     LEFT JOIN party_mst AS brkr ON brkr.party_id = sq.sales_broker_id
     LEFT JOIN status_mst AS sm ON sm.status_id = sq.status_id
+    LEFT JOIN party_branch_mst AS pbill ON pbill.party_mst_branch_id = sq.billing_address_id
+    LEFT JOIN city_mst AS pbill_city ON pbill_city.city_id = pbill.city_id
+    LEFT JOIN state_mst AS sbill ON sbill.state_id = pbill_city.state_id
+    LEFT JOIN party_branch_mst AS pship ON pship.party_mst_branch_id = sq.shipping_address_id
+    LEFT JOIN city_mst AS pship_city ON pship_city.city_id = pship.city_id
+    LEFT JOIN state_mst AS sship ON sship.state_id = pship_city.state_id
     WHERE sq.sales_quotation_id = :sales_quotation_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)

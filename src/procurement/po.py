@@ -1756,6 +1756,10 @@ def process_po_approval_with_value(
 		current_status_id = po.get("status_id")
 		current_approval_level = po.get("approval_level") or 0
 		branch_id = po.get("branch_id")
+
+		# Guard: cannot approve an already-approved PO
+		if current_status_id == 3:
+			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
 		
 		# If status is Open (1), first transition to Pending Approval (20) with level 1
 		if current_status_id == 1:
@@ -1909,6 +1913,10 @@ async def approve_po(
 		
 		po = dict(po_result._mapping)
 		document_amount = float(po.get("total_amount", 0))
+
+		# Guard: cannot approve an already-approved PO
+		if po.get("status_id") == 3:
+			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
 		
 		# Process approval with value checks
 		result = process_po_approval_with_value(
