@@ -263,6 +263,7 @@ async def get_sales_invoice_table(
                 "invoice_id": mapped.get("invoice_id"),
                 "invoice_no": formatted_no,
                 "invoice_date": format_date(mapped.get("invoice_date")),
+                "branch_id": mapped.get("branch_id"),
                 "branch_name": mapped.get("branch_name"),
                 "party_name": mapped.get("party_name"),
                 "del_order_no": mapped.get("del_order_no"),

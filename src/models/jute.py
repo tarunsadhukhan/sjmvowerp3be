@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
@@ -662,7 +663,7 @@ class JuteBatchPlanLi(Base):
     batch_plan_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("jute_batch_plan.batch_plan_id"), nullable=True, index=True
     )
-    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     updated_date_time: Mapped[datetime] = mapped_column(
@@ -797,3 +798,36 @@ class VwJuteStockOutstanding(Base):
     # Rate fields
     rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     actual_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+# =============================================================================
+# JUTE BATCH DAILY ASSIGNMENT
+# =============================================================================
+
+class JuteBatchDailyAssign(Base):
+    """Daily assignment of batch plans to yarn types per branch.
+
+    Maps: Date + Branch + Yarn Type → Batch Plan.
+    Each day+branch can have multiple yarn types, each assigned exactly one batch plan.
+    Unique constraint: (branch_id, assign_date, jute_yarn_id).
+
+    Status workflow: Draft (21) → Open (1) → Approved (3) / Rejected (4).
+
+    Based on design doc 2026-02-20.
+    """
+    __tablename__ = "jute_batch_daily_assign"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "assign_date", "jute_yarn_id", name="uq_branch_date_yarn"),
+        {"extend_existing": True},
+    )
+
+    batch_daily_assign_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    branch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    assign_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    jute_yarn_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    batch_plan_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    status_id: Mapped[int] = mapped_column(Integer, nullable=False, default=21)
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )

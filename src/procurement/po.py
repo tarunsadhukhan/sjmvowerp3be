@@ -1,8 +1,9 @@
 from fastapi import Depends, Request, HTTPException, APIRouter
 import logging
+import math
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -37,6 +38,15 @@ from src.procurement.query import (
 	get_po_header_query,
 	get_po_dtl_query,
 	get_additional_charges_mst_list,
+	# Validation queries (shared with indent)
+	get_item_validation_data,
+	get_item_fy_indent_check,
+	get_item_regular_bom_outstanding,
+	get_expense_type_name_by_id,
+	# PO-specific validation queries
+	get_outstanding_po_qty,
+	check_open_po_for_item,
+	get_po_fy_check,
 )
 from src.masters.query import (
 	get_branch_list,
@@ -48,6 +58,9 @@ from src.procurement.indent import (
 	format_indent_no,
 	calculate_financial_year,
 	calculate_approval_permissions,
+	determine_validation_logic,
+	get_fy_boundaries,
+	calculate_max_indent_qty,
 )
 from src.procurement.query import (
 	get_approval_flow_by_menu_branch,
@@ -238,6 +251,253 @@ async def get_po_setup_2(
 		raise
 	except Exception as e:
 		logger.exception("Error fetching PO setup 2")
+		raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/validate_item_for_po")
+async def validate_item_for_po(
+	request: Request,
+	db: Session = Depends(get_tenant_db),
+	token_data: dict = Depends(get_current_user_with_refresh),
+):
+	"""
+	Validate an item for direct PO creation.
+	Returns validation data including errors, warnings, and allowable qty range
+	based on (po_type + expense_type) → Logic 1, 2, or 3.
+
+	Logic mapping (mirrors indent validation matrix):
+	  Logic 1 (Regular + General/Maintenance/Production/Overhaul): Stock + max/min formula including outstanding_po_qty.
+	  Logic 2 (Open + General/Maintenance/Production): FY PO check + max qty forced.
+	  Logic 3 (Regular + Capital, others): No validation, free entry.
+	"""
+	try:
+		branch_id = request.query_params.get("branch_id")
+		item_id = request.query_params.get("item_id")
+		po_type = request.query_params.get("po_type")  # "Regular" or "Open"
+		expense_type_id = request.query_params.get("expense_type_id")
+
+		if not branch_id:
+			raise HTTPException(status_code=400, detail="branch_id is required")
+		if not item_id:
+			raise HTTPException(status_code=400, detail="item_id is required")
+		if not po_type:
+			raise HTTPException(status_code=400, detail="po_type is required")
+		if not expense_type_id:
+			raise HTTPException(status_code=400, detail="expense_type_id is required")
+
+		try:
+			branch_id = int(branch_id)
+			item_id = int(item_id)
+			expense_type_id = int(expense_type_id)
+		except (TypeError, ValueError) as e:
+			raise HTTPException(status_code=400, detail=f"Invalid parameter format: {e}")
+
+		po_type = po_type.strip().capitalize()
+		if po_type not in ("Regular", "Open"):
+			raise HTTPException(status_code=400, detail=f"Invalid po_type '{po_type}'. Must be 'Regular' or 'Open'.")
+
+		# Resolve expense type name
+		expense_row = db.execute(
+			get_expense_type_name_by_id(),
+			{"expense_type_id": expense_type_id},
+		).fetchone()
+		if not expense_row:
+			raise HTTPException(status_code=400, detail=f"Invalid expense_type_id: {expense_type_id}")
+		expense_type_name = dict(expense_row._mapping)["expense_type_name"]
+
+		# Determine validation logic using the same mapping as indent
+		validation_logic = determine_validation_logic(po_type, expense_type_name)
+
+		result = {
+			"validation_logic": validation_logic,
+			"po_type": po_type,
+			"expense_type_name": expense_type_name,
+			"errors": [],
+			"warnings": [],
+			# Logic 1 fields
+			"branch_stock": None,
+			"outstanding_indent_qty": None,
+			"outstanding_po_qty": None,
+			"minqty": None,
+			"maxqty": None,
+			"min_order_qty": None,
+			"has_open_indent": False,
+			"has_open_po": False,
+			"stock_exceeds_max": False,
+			"max_po_qty": None,
+			"min_po_qty": None,
+			# Logic 2 fields
+			"fy_po_exists": False,
+			"fy_po_no": None,
+			"fy_indent_exists": False,
+			"fy_indent_no": None,
+			"has_minmax": False,
+			"regular_bom_outstanding": None,
+			"forced_qty": None,
+		}
+
+		if validation_logic == 3:
+			# No validation — free entry
+			return result
+
+		today = date.today()
+		fy_start, fy_end = get_fy_boundaries(today)
+
+		# Fetch common item validation data (stock, min/max, outstanding indent qty)
+		vdata_row = db.execute(
+			get_item_validation_data(),
+			{"branch_id": branch_id, "item_id": item_id},
+		).fetchone()
+
+		vdata = dict(vdata_row._mapping) if vdata_row else {}
+		branch_stock = float(vdata.get("branch_stock") or 0)
+		outstanding_indent = float(vdata.get("outstanding_indent_qty") or 0)
+		minqty = vdata.get("minqty")
+		maxqty = vdata.get("maxqty")
+		min_order_qty = vdata.get("min_order_qty")
+
+		result["branch_stock"] = branch_stock
+		result["outstanding_indent_qty"] = outstanding_indent
+		result["minqty"] = float(minqty) if minqty is not None else None
+		result["maxqty"] = float(maxqty) if maxqty is not None else None
+		result["min_order_qty"] = float(min_order_qty) if min_order_qty is not None else None
+
+		if validation_logic == 1:
+			# --- Logic 1: Max/Min + Stock Check (Regular PO, non-Capital expense) ---
+
+			# Step 1: Check if an open indent already exists for this item at this branch
+			open_indent_row = db.execute(
+				get_item_fy_indent_check(),
+				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
+			).fetchone()
+
+			if open_indent_row:
+				open_indent_data = dict(open_indent_row._mapping)
+				result["has_open_indent"] = True
+				result["errors"].append(
+					f"An open indent (#{open_indent_data.get('indent_no')}) already exists for this item. "
+					f"Please use the indent-based PO route instead."
+				)
+				return result
+
+			# Step 2: Check if an active PO already exists for this item at this branch
+			open_po_row = db.execute(
+				check_open_po_for_item(),
+				{"branch_id": branch_id, "item_id": item_id},
+			).fetchone()
+
+			if open_po_row:
+				open_po_data = dict(open_po_row._mapping)
+				result["has_open_po"] = True
+				result["errors"].append(
+					f"An active PO (#{open_po_data.get('po_no')}) already exists for this item. "
+					f"Please resolve the existing PO before creating a new one."
+				)
+				return result
+
+			# Step 3: Check stock + outstanding against max quantity
+			# Fetch outstanding PO qty (quantities committed in active POs not yet received)
+			po_qty_row = db.execute(
+				get_outstanding_po_qty(),
+				{"branch_id": branch_id, "item_id": item_id},
+			).fetchone()
+			outstanding_po = float(dict(po_qty_row._mapping).get("outstanding_po_qty") or 0) if po_qty_row else 0.0
+			result["outstanding_po_qty"] = outstanding_po
+
+			if maxqty is not None and float(maxqty) > 0:
+				result["has_minmax"] = True
+				max_val = float(maxqty)
+				if branch_stock + outstanding_po > max_val:
+					result["stock_exceeds_max"] = True
+					result["errors"].append(
+						f"Branch stock ({branch_stock}) + outstanding PO qty ({outstanding_po}) "
+						f"already meets or exceeds max qty ({max_val}). Cannot create PO."
+					)
+				else:
+					# Step 4: Calculate allowable PO quantity
+					reorder = float(min_order_qty) if min_order_qty else 0
+					available = max_val - branch_stock - outstanding_indent - outstanding_po
+					if available <= 0:
+						result["max_po_qty"] = reorder if reorder > 0 else None
+					elif reorder > 0:
+						if available < reorder:
+							max_qty_calc = reorder
+						else:
+							max_qty_calc = math.ceil(available / reorder) * reorder
+						result["max_po_qty"] = max_qty_calc
+					else:
+						result["max_po_qty"] = available
+					result["min_po_qty"] = float(minqty) if minqty is not None else None
+			else:
+				# No max qty configured — free entry allowed
+				result["has_minmax"] = False
+
+		elif validation_logic == 2:
+			# --- Logic 2: Open Entry + FY Check (Open PO, General/Maintenance/Production) ---
+
+			# Step 1: Check if an open PO already exists for this item in current FY
+			fy_po_row = db.execute(
+				get_po_fy_check(),
+				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
+			).fetchone()
+
+			if fy_po_row:
+				fy_po_data = dict(fy_po_row._mapping)
+				result["fy_po_exists"] = True
+				result["fy_po_no"] = fy_po_data.get("po_no")
+				result["errors"].append(
+					f"An open PO (#{fy_po_data.get('po_no')}) already exists for this item "
+					f"in the current financial year ({fy_start.strftime('%d-%b-%Y')} to {fy_end.strftime('%d-%b-%Y')})."
+				)
+
+			# Step 2: Check if an open indent exists in current FY (warning only)
+			fy_indent_row = db.execute(
+				get_item_fy_indent_check(),
+				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
+			).fetchone()
+
+			if fy_indent_row:
+				fy_indent_data = dict(fy_indent_row._mapping)
+				result["fy_indent_exists"] = True
+				result["fy_indent_no"] = fy_indent_data.get("indent_no")
+				result["warnings"].append(
+					f"An open indent (#{fy_indent_data.get('indent_no')}) exists for this item "
+					f"in the current financial year. Consider using indent-based PO."
+				)
+
+			# Step 3: Check if max/min exists (required for Open PO)
+			if maxqty is None and minqty is None:
+				result["has_minmax"] = False
+				result["errors"].append(
+					"No max/min quantity defined for this item. Cannot create an Open PO."
+				)
+			else:
+				result["has_minmax"] = True
+
+			# Step 4: Check for Regular/BOM outstanding indent qty (warning only)
+			rb_row = db.execute(
+				get_item_regular_bom_outstanding(),
+				{"branch_id": branch_id, "item_id": item_id},
+			).fetchone()
+
+			if rb_row:
+				rb_outstanding = float(dict(rb_row._mapping).get("regular_bom_outstanding") or 0)
+				result["regular_bom_outstanding"] = rb_outstanding
+				if rb_outstanding > 0:
+					result["warnings"].append(
+						f"Outstanding indent qty ({rb_outstanding}) exists from Regular/BOM indents for this item."
+					)
+
+			# Step 5: Force qty to maxqty
+			if maxqty is not None:
+				result["forced_qty"] = float(maxqty)
+
+		return result
+
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.exception("Error validating item for PO")
 		raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -547,6 +807,7 @@ async def create_po(
 		remarks = payload.get("internal_note", "").strip() or None
 		terms_conditions = payload.get("terms_conditions", "").strip() or None
 		expense_type_id = to_int(payload.get("expense_type"), "expense_type")
+		po_type = payload.get("po_type", "").strip() or None
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
@@ -761,6 +1022,7 @@ async def create_po(
 			"updated_date_time": created_at,
 			"approval_level": None,
 			"expense_type_id": expense_type_id,
+			"po_type": po_type,
 		}
 		
 		result = db.execute(insert_header_query, header_params)
@@ -989,6 +1251,7 @@ async def get_po_by_id(
 			"shippingState": header.get("shipping_state_name") if header.get("shipping_state_name") else None,
 			"project": str(header.get("project_id", "")) if header.get("project_id") else "",
 			"expenseType": str(header.get("expense_type_id", "")) if header.get("expense_type_id") else "",
+			"poType": header.get("po_type") or "",
 			"creditTerm": header.get("credit_days"),
 			"deliveryTimeline": header.get("expected_delivery_days"),
 			"contactPerson": header.get("contact_person") or "",
@@ -1128,6 +1391,7 @@ async def update_po(
 		remarks = payload.get("internal_note", "").strip() or None
 		terms_conditions = payload.get("terms_conditions", "").strip() or None
 		expense_type_id = to_int(payload.get("expense_type"), "expense_type")
+		po_type = payload.get("po_type", "").strip() or None
 		
 		advance_value = to_float(payload.get("advance_percentage"), "advance_percentage")
 		
@@ -1345,6 +1609,7 @@ async def update_po(
 			"status_id": None,
 			"approval_level": None,
 			"expense_type_id": expense_type_id,
+			"po_type": po_type,
 		}
 		db.execute(update_header_query, header_params)
 		delete_detail_query = delete_proc_po_dtl()
@@ -1491,6 +1756,10 @@ def process_po_approval_with_value(
 		current_status_id = po.get("status_id")
 		current_approval_level = po.get("approval_level") or 0
 		branch_id = po.get("branch_id")
+
+		# Guard: cannot approve an already-approved PO
+		if current_status_id == 3:
+			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
 		
 		# If status is Open (1), first transition to Pending Approval (20) with level 1
 		if current_status_id == 1:
@@ -1644,6 +1913,10 @@ async def approve_po(
 		
 		po = dict(po_result._mapping)
 		document_amount = float(po.get("total_amount", 0))
+
+		# Guard: cannot approve an already-approved PO
+		if po.get("status_id") == 3:
+			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
 		
 		# Process approval with value checks
 		result = process_po_approval_with_value(
