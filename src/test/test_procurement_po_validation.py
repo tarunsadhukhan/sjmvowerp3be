@@ -136,12 +136,15 @@ class TestValidateItemForPOLogic1:
         assert data["has_open_indent"] is True
         assert len(data["errors"]) > 0
 
-    def test_open_po_exists_blocks_item(self):
+    def test_open_po_exists_is_warning_not_error(self):
+        """Active PO for the same item should produce a warning (not an error)
+        and validation should continue to compute max/min qty."""
         session = self._make_session({
             0: _mock_row({"expense_type_name": "Maintenance"}),
             1: _mock_row({"minqty": 5, "maxqty": 80, "min_order_qty": 5, "branch_stock": 10, "outstanding_indent_qty": 0}),
-            2: None,
-            3: _mock_row({"po_id": 10, "po_no": "PO/2025/010"}),
+            2: None,  # no open indent
+            3: _mock_row({"po_id": 10, "po_no": "PO/2025/010"}),  # open PO exists
+            4: _mock_row({"outstanding_po_qty": 5}),  # outstanding PO qty for Step 3
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
         response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Regular&expense_type_id=1")
@@ -149,7 +152,14 @@ class TestValidateItemForPOLogic1:
         data = response.json()
         assert data["validation_logic"] == 1
         assert data["has_open_po"] is True
-        assert len(data["errors"]) > 0
+        # Should be a warning, NOT an error
+        assert len(data["warnings"]) > 0
+        assert any("active po" in w.lower() for w in data["warnings"])
+        # Errors should be empty (no blocking error from active PO)
+        assert len(data["errors"]) == 0
+        # Validation should have continued to compute qty range
+        assert data["outstanding_po_qty"] == 5
+        assert data["max_po_qty"] is not None
 
     def test_clean_path_computes_max_po_qty(self):
         session = self._make_session({

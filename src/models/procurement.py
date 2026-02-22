@@ -711,6 +711,9 @@ class DrcrNoteDtl(Base):
     __tablename__ = "drcr_note_dtl"
 
     drcr_note_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    debit_credit_note_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("drcr_note.debit_credit_note_id"), nullable=False, index=True
+    )
     inward_dtl_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("proc_inward_dtl.inward_dtl_id"), nullable=True, index=True
     )
@@ -727,7 +730,7 @@ class DrcrNoteDtl(Base):
 
     # Relationships
     drcr_note: Mapped[Optional["DrcrNote"]] = relationship(
-        "DrcrNote", back_populates="details", foreign_keys="DrcrNoteDtl.inward_dtl_id"
+        "DrcrNote", back_populates="details", foreign_keys="DrcrNoteDtl.debit_credit_note_id"
     )
     inward_dtl: Mapped[Optional["ProcInwardDtl"]] = relationship(
         "ProcInwardDtl", back_populates="drcr_note_details"

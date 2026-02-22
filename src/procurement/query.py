@@ -1836,7 +1836,7 @@ def get_drcr_note_list_query():
     """Get list of DRCR notes with pagination."""
     sql = """SELECT
         dn.debit_credit_note_id,
-        dn.note_date,
+        dn.date AS note_date,
         dn.adjustment_type,
         dn.inward_id,
         pi.inward_sequence_no,
@@ -1863,7 +1863,7 @@ def get_drcr_note_list_query():
             OR pi.inward_sequence_no LIKE :search_like
             OR pm.supp_name LIKE :search_like
         )
-    ORDER BY dn.note_date DESC, dn.debit_credit_note_id DESC
+    ORDER BY dn.date DESC, dn.debit_credit_note_id DESC
     LIMIT :limit OFFSET :offset;"""
     return text(sql)
 
@@ -1888,7 +1888,7 @@ def get_drcr_note_by_id_query():
     """Get DRCR note header by ID."""
     sql = """SELECT
         dn.debit_credit_note_id,
-        dn.note_date,
+        dn.date AS note_date,
         dn.adjustment_type,
         dn.inward_id,
         pi.inward_sequence_no,
@@ -1933,6 +1933,7 @@ def get_drcr_note_dtl_query():
         pid.item_id,
         im.item_code,
         im.item_name,
+        ig.item_grp_name,
         pid.uom_id,
         um.uom_name,
         pid.rate AS original_rate,
@@ -1945,13 +1946,10 @@ def get_drcr_note_dtl_query():
     FROM drcr_note_dtl AS dnd
     LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN drcr_note_dtl_gst AS dndg ON dndg.drcr_note_dtl_id = dnd.drcr_note_dtl_id
-    WHERE dnd.inward_dtl_id IN (
-        SELECT inward_dtl_id FROM proc_inward_dtl WHERE inward_id = (
-            SELECT inward_id FROM drcr_note WHERE debit_credit_note_id = :drcr_note_id
-        )
-    )
+    WHERE dnd.debit_credit_note_id = :drcr_note_id
     ORDER BY dnd.drcr_note_dtl_id;"""
     return text(sql)
 
@@ -1987,6 +1985,7 @@ def insert_drcr_note():
 def insert_drcr_note_dtl():
     """Insert a new DRCR note line item."""
     sql = """INSERT INTO drcr_note_dtl (
+        debit_credit_note_id,
         inward_dtl_id,
         debitnote_type,
         quantity,
@@ -1997,6 +1996,7 @@ def insert_drcr_note_dtl():
         updated_by,
         updated_date_time
     ) VALUES (
+        :debit_credit_note_id,
         :inward_dtl_id,
         :debitnote_type,
         :quantity,

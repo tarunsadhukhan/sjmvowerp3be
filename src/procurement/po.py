@@ -381,6 +381,7 @@ async def validate_item_for_po(
 				return result
 
 			# Step 2: Check if an active PO already exists for this item at this branch
+			# This is a non-blocking warning — the user may still create a new PO.
 			open_po_row = db.execute(
 				check_open_po_for_item(),
 				{"branch_id": branch_id, "item_id": item_id},
@@ -389,11 +390,10 @@ async def validate_item_for_po(
 			if open_po_row:
 				open_po_data = dict(open_po_row._mapping)
 				result["has_open_po"] = True
-				result["errors"].append(
+				result["warnings"].append(
 					f"An active PO (#{open_po_data.get('po_no')}) already exists for this item. "
 					f"Please resolve the existing PO before creating a new one."
 				)
-				return result
 
 			# Step 3: Check stock + outstanding against max quantity
 			# Fetch outstanding PO qty (quantities committed in active POs not yet received)
