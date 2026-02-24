@@ -84,11 +84,13 @@ def calculate_line_amount(line: DrcrNoteLineItem) -> float:
     return gross - discount
 
 
-def format_drcr_note_no(note_id: int, adjustment_type: int, note_date) -> str:
+def format_drcr_note_no(note_id, adjustment_type, note_date) -> str:
     """Format DRCR Note number."""
+    if note_id is None:
+        return ""
     prefix = "DN" if adjustment_type == DRCR_TYPE_DEBIT else "CN"
     year = note_date.year if hasattr(note_date, 'year') else datetime.now().year
-    return f"{prefix}-{year}-{note_id:05d}"
+    return f"{prefix}-{year}-{int(note_id):05d}"
 
 
 # =============================================================================
@@ -153,9 +155,10 @@ async def get_drcr_note_list(
             adj_type = mapped.get("adjustment_type")
             type_label = "Debit Note" if adj_type == DRCR_TYPE_DEBIT else "Credit Note"
             
+            note_id = mapped.get("debit_credit_note_id")
             data.append({
-                "drcr_note_id": mapped.get("drcr_note_id"),
-                "note_no": format_drcr_note_no(mapped.get("drcr_note_id"), adj_type, note_date_obj),
+                "drcr_note_id": note_id,
+                "note_no": format_drcr_note_no(note_id, adj_type, note_date_obj),
                 "note_date": note_date,
                 "adjustment_type": adj_type,
                 "adjustment_type_label": type_label,
@@ -243,10 +246,11 @@ async def get_drcr_note_by_id(
             
             line_items.append(item)
         
+        hdr_note_id = header.get("debit_credit_note_id")
         return {
             "header": {
-                "drcr_note_id": header.get("drcr_note_id"),
-                "note_no": format_drcr_note_no(header.get("drcr_note_id"), adj_type, header.get("note_date")),
+                "drcr_note_id": hdr_note_id,
+                "note_no": format_drcr_note_no(hdr_note_id, adj_type, header.get("note_date")),
                 "note_date": format_date(header.get("note_date")),
                 "adjustment_type": adj_type,
                 "adjustment_type_label": type_label,
@@ -328,6 +332,7 @@ async def create_drcr_note(
         insert_dtl = insert_drcr_note_dtl()
         for line in request_body.line_items:
             db.execute(insert_dtl, {
+                "debit_credit_note_id": note_id,
                 "inward_dtl_id": line.inward_dtl_id,
                 "debitnote_type": line.debitnote_type,
                 "quantity": line.quantity,

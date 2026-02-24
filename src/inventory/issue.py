@@ -5,7 +5,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.inventory.query import (
@@ -39,12 +39,18 @@ router = APIRouter()
 # ============================================================================
 
 class IssueLineItemCreate(BaseModel):
-    """Line item for creating/updating an issue."""
+    """Line item for creating/updating an issue.
+    Accepts both backend names (issue_qty, expense_type_id) and
+    frontend names (qty, expense_id) via aliases.
+    """
+    model_config = {"populate_by_name": True}
+
     item_id: int
+    item_group_id: Optional[int] = Field(default=None, description="Item group ID (accepted but not stored in issue_li)")
     uom_id: int
     req_quantity: Optional[float] = None
-    issue_qty: float
-    expense_type_id: Optional[int] = None
+    issue_qty: float = Field(validation_alias="qty")
+    expense_type_id: Optional[int] = Field(default=None, validation_alias="expense_id")
     cost_factor_id: Optional[int] = None
     machine_id: Optional[int] = None
     inward_dtl_id: Optional[int] = None
@@ -52,7 +58,11 @@ class IssueLineItemCreate(BaseModel):
 
 
 class IssueCreate(BaseModel):
-    """Request body for creating an issue."""
+    """Request body for creating an issue.
+    Accepts both 'lines' and 'line_items' as the line items field.
+    """
+    model_config = {"populate_by_name": True}
+
     branch_id: int
     dept_id: int
     issue_date: str  # YYYY-MM-DD
@@ -61,11 +71,13 @@ class IssueCreate(BaseModel):
     project_id: Optional[int] = None
     customer_id: Optional[int] = None
     internal_note: Optional[str] = None
-    lines: List[IssueLineItemCreate]
+    lines: List[IssueLineItemCreate] = Field(validation_alias="line_items")
 
 
 class IssueUpdate(BaseModel):
     """Request body for updating an issue."""
+    model_config = {"populate_by_name": True}
+
     branch_id: Optional[int] = None
     dept_id: Optional[int] = None
     issue_date: Optional[str] = None
@@ -74,7 +86,7 @@ class IssueUpdate(BaseModel):
     project_id: Optional[int] = None
     customer_id: Optional[int] = None
     internal_note: Optional[str] = None
-    lines: Optional[List[IssueLineItemCreate]] = None
+    lines: Optional[List[IssueLineItemCreate]] = Field(default=None, validation_alias="line_items")
 
 
 class IssueStatusUpdate(BaseModel):

@@ -1,6 +1,5 @@
 from fastapi import Depends, Request, HTTPException, APIRouter
 import logging
-import math
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime, date
@@ -38,15 +37,14 @@ from src.procurement.query import (
 	get_po_header_query,
 	get_po_dtl_query,
 	get_additional_charges_mst_list,
-	# Validation queries (shared with indent)
-	get_item_validation_data,
-	get_item_fy_indent_check,
-	get_item_regular_bom_outstanding,
+	# Validation queries (v2 — reads from pre-aggregated views)
+	get_item_validation_data_v2,
+	get_item_fy_indent_check_v2,
 	get_expense_type_name_by_id,
-	# PO-specific validation queries
-	get_outstanding_po_qty,
-	check_open_po_for_item,
-	get_po_fy_check,
+	# PO-specific validation queries (v2)
+	get_outstanding_po_qty_v2,
+	check_open_po_for_item_v2,
+	get_po_fy_check_v2,
 )
 from src.masters.query import (
 	get_branch_list,
@@ -60,7 +58,6 @@ from src.procurement.indent import (
 	calculate_approval_permissions,
 	determine_validation_logic,
 	get_fy_boundaries,
-	calculate_max_indent_qty,
 )
 from src.procurement.query import (
 	get_approval_flow_by_menu_branch,
@@ -343,31 +340,41 @@ async def validate_item_for_po(
 		today = date.today()
 		fy_start, fy_end = get_fy_boundaries(today)
 
-		# Fetch common item validation data (stock, min/max, outstanding indent qty)
+		# Fetch common item validation data (stock, min/max, outstanding, pre-computed limits)
 		vdata_row = db.execute(
-			get_item_validation_data(),
+			get_item_validation_data_v2(),
 			{"branch_id": branch_id, "item_id": item_id},
 		).fetchone()
 
 		vdata = dict(vdata_row._mapping) if vdata_row else {}
 		branch_stock = float(vdata.get("branch_stock") or 0)
 		outstanding_indent = float(vdata.get("outstanding_indent_qty") or 0)
+		outstanding_po = float(vdata.get("outstanding_po_qty") or 0)
+		regular_bom_outstanding_val = float(vdata.get("regular_bom_outstanding") or 0)
 		minqty = vdata.get("minqty")
 		maxqty = vdata.get("maxqty")
 		min_order_qty = vdata.get("min_order_qty")
+		# Pre-computed PO validation limits from view (sentinel: -2=open PO outstanding, -1=no minmax, >=0=limit)
+		view_max_po = float(vdata.get("max_po_qty", -1))
+		view_min_po = float(vdata.get("min_po_qty", -1))
 
 		result["branch_stock"] = branch_stock
 		result["outstanding_indent_qty"] = outstanding_indent
+		result["outstanding_po_qty"] = outstanding_po
 		result["minqty"] = float(minqty) if minqty is not None else None
 		result["maxqty"] = float(maxqty) if maxqty is not None else None
 		result["min_order_qty"] = float(min_order_qty) if min_order_qty is not None else None
 
 		if validation_logic == 1:
 			# --- Logic 1: Max/Min + Stock Check (Regular PO, non-Capital expense) ---
+			# Pre-computed view columns handle sentinel values:
+			#   -2 = open PO outstanding exists (warning)
+			#   -1 = no minmax configured (free entry)
+			#   >= 0 = computed limit (enforce)
 
 			# Step 1: Check if an open indent already exists for this item at this branch
 			open_indent_row = db.execute(
-				get_item_fy_indent_check(),
+				get_item_fy_indent_check_v2(),
 				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
 			).fetchone()
 
@@ -381,63 +388,56 @@ async def validate_item_for_po(
 				return result
 
 			# Step 2: Check if an active PO already exists for this item at this branch
+			# This is a non-blocking warning — the user may still create a new PO.
 			open_po_row = db.execute(
-				check_open_po_for_item(),
+				check_open_po_for_item_v2(),
 				{"branch_id": branch_id, "item_id": item_id},
 			).fetchone()
 
 			if open_po_row:
 				open_po_data = dict(open_po_row._mapping)
 				result["has_open_po"] = True
-				result["errors"].append(
+				result["warnings"].append(
 					f"An active PO (#{open_po_data.get('po_no')}) already exists for this item. "
 					f"Please resolve the existing PO before creating a new one."
 				)
-				return result
 
-			# Step 3: Check stock + outstanding against max quantity
-			# Fetch outstanding PO qty (quantities committed in active POs not yet received)
-			po_qty_row = db.execute(
-				get_outstanding_po_qty(),
-				{"branch_id": branch_id, "item_id": item_id},
-			).fetchone()
-			outstanding_po = float(dict(po_qty_row._mapping).get("outstanding_po_qty") or 0) if po_qty_row else 0.0
-			result["outstanding_po_qty"] = outstanding_po
-
-			if maxqty is not None and float(maxqty) > 0:
+			# Step 3: Use pre-computed max/min from view with sentinel handling
+			if view_max_po == -2:
+				# Sentinel: open PO outstanding exists — warn but allow
+				result["has_open_po"] = True
 				result["has_minmax"] = True
-				max_val = float(maxqty)
-				if branch_stock + outstanding_po > max_val:
-					result["stock_exceeds_max"] = True
-					result["errors"].append(
-						f"Branch stock ({branch_stock}) + outstanding PO qty ({outstanding_po}) "
-						f"already meets or exceeds max qty ({max_val}). Cannot create PO."
-					)
-				else:
-					# Step 4: Calculate allowable PO quantity
-					reorder = float(min_order_qty) if min_order_qty else 0
-					available = max_val - branch_stock - outstanding_indent - outstanding_po
-					if available <= 0:
-						result["max_po_qty"] = reorder if reorder > 0 else None
-					elif reorder > 0:
-						if available < reorder:
-							max_qty_calc = reorder
-						else:
-							max_qty_calc = math.ceil(available / reorder) * reorder
-						result["max_po_qty"] = max_qty_calc
-					else:
-						result["max_po_qty"] = available
-					result["min_po_qty"] = float(minqty) if minqty is not None else None
-			else:
+				result["max_po_qty"] = None  # Cannot determine — open outstanding muddies the picture
+				result["min_po_qty"] = None
+				result["warnings"].append(
+					f"Open PO outstanding ({float(vdata.get('open_po_outstanding', 0))}) exists "
+					f"for this item. Max PO qty cannot be precisely calculated."
+				)
+			elif view_max_po == -1:
 				# No max qty configured — free entry allowed
 				result["has_minmax"] = False
+			elif view_max_po == 0:
+				# Computed limit is zero — stock + outstanding already meets/exceeds max
+				result["has_minmax"] = True
+				result["stock_exceeds_max"] = True
+				result["max_po_qty"] = 0
+				result["min_po_qty"] = view_min_po if view_min_po >= 0 else None
+				result["errors"].append(
+					f"Branch stock ({branch_stock}) + outstanding PO qty ({outstanding_po}) "
+					f"already meets or exceeds max qty ({float(maxqty) if maxqty else 0}). Cannot create PO."
+				)
+			else:
+				# view_max_po > 0: valid computed limit
+				result["has_minmax"] = True
+				result["max_po_qty"] = view_max_po
+				result["min_po_qty"] = view_min_po if view_min_po >= 0 else None
 
 		elif validation_logic == 2:
 			# --- Logic 2: Open Entry + FY Check (Open PO, General/Maintenance/Production) ---
 
 			# Step 1: Check if an open PO already exists for this item in current FY
 			fy_po_row = db.execute(
-				get_po_fy_check(),
+				get_po_fy_check_v2(),
 				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
 			).fetchone()
 
@@ -452,7 +452,7 @@ async def validate_item_for_po(
 
 			# Step 2: Check if an open indent exists in current FY (warning only)
 			fy_indent_row = db.execute(
-				get_item_fy_indent_check(),
+				get_item_fy_indent_check_v2(),
 				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
 			).fetchone()
 
@@ -475,18 +475,12 @@ async def validate_item_for_po(
 				result["has_minmax"] = True
 
 			# Step 4: Check for Regular/BOM outstanding indent qty (warning only)
-			rb_row = db.execute(
-				get_item_regular_bom_outstanding(),
-				{"branch_id": branch_id, "item_id": item_id},
-			).fetchone()
-
-			if rb_row:
-				rb_outstanding = float(dict(rb_row._mapping).get("regular_bom_outstanding") or 0)
-				result["regular_bom_outstanding"] = rb_outstanding
-				if rb_outstanding > 0:
-					result["warnings"].append(
-						f"Outstanding indent qty ({rb_outstanding}) exists from Regular/BOM indents for this item."
-					)
+			# Already fetched from the aggregate view (regular_bom_outstanding_val)
+			result["regular_bom_outstanding"] = regular_bom_outstanding_val
+			if regular_bom_outstanding_val > 0:
+				result["warnings"].append(
+					f"Outstanding indent qty ({regular_bom_outstanding_val}) exists from Regular/BOM indents for this item."
+				)
 
 			# Step 5: Force qty to maxqty
 			if maxqty is not None:

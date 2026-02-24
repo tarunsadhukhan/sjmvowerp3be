@@ -456,18 +456,18 @@ async def save_sr(
         gross_amount += additional_charges_total
         net_amount += additional_charges_total
         
-        # Get branch_id for SR number generation
-        branch_query = text("SELECT branch_id FROM proc_inward WHERE inward_id = :id")
-        branch_result = db.execute(branch_query, {"id": request_body.inward_id}).fetchone()
-        branch_id = branch_result.branch_id if branch_result else None
-        
-        # Generate SR number if not exists
-        sr_no_query = text("SELECT sr_no FROM proc_inward WHERE inward_id = :id")
-        sr_no_result = db.execute(sr_no_query, {"id": request_body.inward_id}).fetchone()
-        sr_no = sr_no_result.sr_no if sr_no_result and sr_no_result.sr_no else None
+        # Get branch_id and current SR status for number generation
+        header_query = text("SELECT branch_id, sr_no, sr_status FROM proc_inward WHERE inward_id = :id")
+        header_result = db.execute(header_query, {"id": request_body.inward_id}).fetchone()
+        branch_id = header_result.branch_id if header_result else None
+        sr_no = header_result.sr_no if header_result and header_result.sr_no else None
+        current_sr_status = header_result.sr_status if header_result and header_result.sr_status else None
         
         if not sr_no and branch_id:
             sr_no = generate_sr_no(db, branch_id, sr_date)
+        
+        # Preserve existing status; only default to Draft for new SRs
+        sr_status = current_sr_status if current_sr_status and current_sr_status != 0 else STATUS_DRAFT
         
         # Parse invoice_date if provided
         invoice_date = None
@@ -483,7 +483,7 @@ async def save_sr(
             "inward_id": request_body.inward_id,
             "sr_no": sr_no,
             "sr_date": sr_date,
-            "sr_status": STATUS_DRAFT,
+            "sr_status": sr_status,
             "sr_value": net_amount,
             "sr_remarks": request_body.sr_remarks,
             "sr_approved_by": None,
@@ -638,6 +638,7 @@ async def approve_sr(
                 insert_dtl = insert_drcr_note_dtl()
                 for line in drcr_lines_debit:
                     db.execute(insert_dtl, {
+                        "debit_credit_note_id": note_id,
                         "inward_dtl_id": line["inward_dtl_id"],
                         "debitnote_type": line["debitnote_type"],
                         "quantity": line["quantity"],
@@ -677,6 +678,7 @@ async def approve_sr(
                 insert_dtl = insert_drcr_note_dtl()
                 for line in drcr_lines_credit:
                     db.execute(insert_dtl, {
+                        "debit_credit_note_id": note_id,
                         "inward_dtl_id": line["inward_dtl_id"],
                         "debitnote_type": line["debitnote_type"],
                         "quantity": line["quantity"],
