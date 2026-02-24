@@ -173,48 +173,25 @@ async def dept_master_create_setup(
     search: str = None
 ):
     try:
-        # Get the item groups for the company specified in the request received
-        print('request', request, response)
-        url = str(request.url)
-        print("Request URL:", url, flush=True)
-        parsed_url = urlparse(url)
-        raw_query = parsed_url.query              # e.g. "%5B1,2,3%5D="
-#        print("Raw query string:", raw_query, flush=True)
-        # Decode to text like "[1,2,3]" or "[4]"
-        decoded = unquote(raw_query)              # e.g. "[1,2,3]="
-        if decoded.endswith("="):                 # our case puts the array in the key
-            decoded = decoded[:-1]                # -> "[1,2,3]"
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
 
-        # Safely convert to Python list
-        try:
-            ids = ast.literal_eval(decoded)       # -> [1, 2, 3] or [4]
-            if not isinstance(ids, list):
-                ids = [ids]
-        except Exception:
-            ids = []  # fallback if someone sends junk
+        # Parse branch_id from query param (supports JSON array "[1,2]", CSV "1,2", or single "1")
+        raw_branch_ids = request.query_params.get("branch_id") or request.query_params.get("branchids")
+        branch_ids_param = parse_branch_ids(raw_branch_ids)
 
-        print("IDs:", ids)
-        search_param = f"%{search}%" if search else None
-
-        branch_ids_param = ids
-
-        print(f"Parsed params co_id=, branch_ids={branch_ids_param}, search={search_param}", flush=True)
-
-        # Build query (pass parsed branch_ids list so query generator can include the IN clause)
-        query = dept_master_create_setup_query(branch_ids=branch_ids_param)
-        if branch_ids_param is not None:
-            params = { "branch_ids": branch_ids_param}
-        else:
-            params = {"search": search_param}
-        
-#        print("Executing query:", query, "params:", params, flush=True)
-        result = db.execute(query, params).fetchall()
-        data = [dict(row._mapping) for row in result]
+        # Return branches filtered by co_id and optionally by sidebar-selected branch_ids
+        q_br = get_branch_list(co_id=int(co_id), branch_ids=branch_ids_param)
+        params_br: dict = {"co_id": int(co_id)}
+        if branch_ids_param:
+            params_br["branch_ids"] = branch_ids_param
+        rows_br = db.execute(q_br, params_br).fetchall()
+        data = [dict(row._mapping) for row in rows_br]
         return {"data": data}
     except HTTPException:
         raise
     except Exception as e:
-        print("dept_master_table error:", str(e), flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 # ...existing code...
 
