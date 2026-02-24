@@ -22,6 +22,13 @@ def main():
         # KEY CHANGE: item_minmax_mst is now the driving table so that ALL items
         # with a min/max record appear in the view, even when they have zero indent
         # outstanding, zero PO outstanding, and zero stock.
+        #
+        # IMPORTANT - bal_qty_ind_to_validate formula:
+        #   = bal_tot_ind_qty - open_bal_ind_tot_qty - capital_maintainance_bal_ind_tot_qty
+        # This excludes Open-type and Capital/Maintenance (expense_type_id IN (5,7)) indents,
+        # leaving only Regular + BOM indents which are the ones used for max/min validation.
+        # The same logic applies to the PO side (bal_qty_po_to_validate).
+        # The CASE expressions for max/min limits also use this corrected deduction.
         new_view_sql = """
 CREATE OR REPLACE
 ALGORITHM=UNDEFINED
@@ -31,21 +38,34 @@ VIEW `vw_item_balance_qty_by_branch_new` AS
 select
     `imm`.`branch_id` AS `branch_id`,
     `imm`.`item_id`   AS `item_id`,
-    COALESCE(`ind`.`bal_tot_ind_qty`, 0)    AS `bal_tot_ind_qty`,
-    COALESCE(`ind`.`open_bal_ind_tot_qty`, 0) AS `open_bal_Ind_tot_qty`,
-    -- bal_qty_ind_to_validate = total indent outstanding minus Open-type indent outstanding
-    (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)) AS `bal_qty_ind_to_validate`,
-    COALESCE(`po`.`bal_tot_po_qty`, 0)      AS `bal_tot_po_qty`,
-    COALESCE(`po`.`open_bal_tot_po_qty`, 0) AS `open_bal_tot_po_qty`,
-    ifnull(`imm`.`maxqty`,0)       AS `maxqty`,
-    ifnull(`imm`.`minqty`,0)       AS `minqty`,
+    COALESCE(`ind`.`bal_tot_ind_qty`, 0)                        AS `bal_tot_ind_qty`,
+    COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)                   AS `open_bal_Ind_tot_qty`,
+    COALESCE(`ind`.`capital_maintainance_bal_ind_tot_qty`, 0)   AS `capital_maintance_bal_Ind_tot_qty`,
+    -- bal_qty_ind_to_validate: excludes Open + Capital/Maintenance → Regular + BOM only
+    (  COALESCE(`ind`.`bal_tot_ind_qty`, 0)
+     - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)
+     - COALESCE(`ind`.`capital_maintainance_bal_ind_tot_qty`, 0)
+    ) AS `bal_qty_ind_to_validate`,
+    COALESCE(`po`.`bal_tot_po_qty`, 0)                          AS `bal_tot_po_qty`,
+    COALESCE(`po`.`open_bal_tot_po_qty`, 0)                     AS `open_bal_tot_po_qty`,
+    COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)     AS `capital_maintainance_bal_tot_po_qty`,
+    -- bal_qty_po_to_validate: excludes Open + Capital/Maintenance → Regular POs only
+    (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+     - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+     - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)
+    ) AS `bal_qty_po_to_validate`,
+    ifnull(`imm`.`maxqty`,0)        AS `maxqty`,
+    ifnull(`imm`.`minqty`,0)        AS `minqty`,
     ifnull(`imm`.`min_order_qty`,0) AS `min_order_qty`,
-    ifnull(`stk`.`cur_stock`,0)    AS `cur_stock`,
+    ifnull(`stk`.`cur_stock`,0)     AS `cur_stock`,
 
     -- max_indent_qty sentinels:
-    --   -2 = open indent outstanding > 0 (warn)
+    --   -2 = open indent outstanding > 0 (warn; Open-type blanket indents exist)
     --   -1 = no max qty configured (free entry)
-    --   >= 0 = CEIL(available / min_order_qty) * min_order_qty
+    --   >= 0 = CEIL(available / min_order_qty) * min_order_qty  (where 0 means stock+outstanding >= max)
+    --
+    -- available = maxqty - cur_stock - bal_qty_ind_to_validate - bal_qty_po_to_validate
+    -- (deducts Regular+BOM outstanding from both indent and PO sides; excludes Open+Capital/Maint)
     CASE
         WHEN COALESCE(`ind`.`open_bal_ind_tot_qty`, 0) > 0 THEN -2
         WHEN COALESCE(ifnull(`imm`.`maxqty`,0), 0) = 0 THEN -1
@@ -53,8 +73,12 @@ select
             GREATEST(
                 COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                 - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                - (  COALESCE(`ind`.`bal_tot_ind_qty`, 0)
+                   - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)
+                   - COALESCE(`ind`.`capital_maintainance_bal_ind_tot_qty`, 0))
+                - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                   - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                   - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                 0
             )
         ELSE
@@ -63,8 +87,12 @@ select
                     GREATEST(
                         COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                         - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                        - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                        - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                        - (  COALESCE(`ind`.`bal_tot_ind_qty`, 0)
+                           - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)
+                           - COALESCE(`ind`.`capital_maintainance_bal_ind_tot_qty`, 0))
+                        - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                           - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                           - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                         0
                     ) / COALESCE(ifnull(`imm`.`min_order_qty`,0), 1)
                 ) * COALESCE(ifnull(`imm`.`min_order_qty`,0), 1),
@@ -72,7 +100,7 @@ select
             )
     END AS `max_indent_qty`,
 
-    -- min_indent_qty: CEIL(minqty / min_order_qty) * min_order_qty, capped at max_indent_qty
+    -- min_indent_qty: CEIL(minqty/min_order_qty)*min_order_qty, capped at max_indent_qty
     CASE
         WHEN COALESCE(`ind`.`open_bal_ind_tot_qty`, 0) > 0 THEN -2
         WHEN COALESCE(ifnull(`imm`.`maxqty`,0), 0) = 0 THEN -1
@@ -88,8 +116,12 @@ select
                         GREATEST(
                             COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                             - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                            - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                            - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                            - (  COALESCE(`ind`.`bal_tot_ind_qty`, 0)
+                               - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0)
+                               - COALESCE(`ind`.`capital_maintainance_bal_ind_tot_qty`, 0))
+                            - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                               - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                               - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                             0
                         ) / COALESCE(ifnull(`imm`.`min_order_qty`,0), 1)
                     ) * COALESCE(ifnull(`imm`.`min_order_qty`,0), 1),
@@ -102,6 +134,10 @@ select
     --   -2 = open PO outstanding > 0 (warn)
     --   -1 = no max qty configured (free entry)
     --   >= 0 = CEIL(available / min_order_qty) * min_order_qty
+    --
+    -- available = maxqty − cur_stock − bal_qty_po_to_validate
+    -- (bal_qty_po_to_validate = bal_tot_po_qty − open_bal_tot_po_qty − capital_maintainance_bal_tot_po_qty)
+    -- Only Regular PO outstanding is deducted; Open and Capital/Maintenance POs are excluded.
     CASE
         WHEN COALESCE(`po`.`open_bal_tot_po_qty`, 0) > 0 THEN -2
         WHEN COALESCE(ifnull(`imm`.`maxqty`,0), 0) = 0 THEN -1
@@ -109,8 +145,9 @@ select
             GREATEST(
                 COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                 - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                   - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                   - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                 0
             )
         ELSE
@@ -119,8 +156,9 @@ select
                     GREATEST(
                         COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                         - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                        - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                        - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                        - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                           - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                           - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                         0
                     ) / COALESCE(ifnull(`imm`.`min_order_qty`,0), 1)
                 ) * COALESCE(ifnull(`imm`.`min_order_qty`,0), 1),
@@ -128,7 +166,8 @@ select
             )
     END AS `max_po_qty`,
 
-    -- min_po_qty: CEIL(minqty / min_order_qty) * min_order_qty, capped at max_po_qty
+    -- min_po_qty: CEIL(minqty/min_order_qty)*min_order_qty, capped at max_po_qty
+    -- Uses the same bal_qty_po_to_validate formula for the cap calculation.
     CASE
         WHEN COALESCE(`po`.`open_bal_tot_po_qty`, 0) > 0 THEN -2
         WHEN COALESCE(ifnull(`imm`.`maxqty`,0), 0) = 0 THEN -1
@@ -144,8 +183,9 @@ select
                         GREATEST(
                             COALESCE(ifnull(`imm`.`maxqty`,0), 0)
                             - COALESCE(ifnull(`stk`.`cur_stock`,0), 0)
-                            - (COALESCE(`ind`.`bal_tot_ind_qty`, 0) - COALESCE(`ind`.`open_bal_ind_tot_qty`, 0))
-                            - (COALESCE(`po`.`bal_tot_po_qty`, 0) - COALESCE(`po`.`open_bal_tot_po_qty`, 0)),
+                            - (  COALESCE(`po`.`bal_tot_po_qty`, 0)
+                               - COALESCE(`po`.`open_bal_tot_po_qty`, 0)
+                               - COALESCE(`po`.`capital_maintainance_bal_tot_po_qty`, 0)),
                             0
                         ) / COALESCE(ifnull(`imm`.`min_order_qty`,0), 1)
                     ) * COALESCE(ifnull(`imm`.`min_order_qty`,0), 1),
@@ -158,23 +198,29 @@ select
 -- appear regardless of whether any indent or PO outstanding exists.
 from `item_minmax_mst` `imm`
 left join (
-    -- All indent outstanding, total and Open-type, per branch+item
+    -- All indent outstanding per branch+item, split by type
     select
         `vpion`.`branch_id` AS `branch_id`,
         `vpion`.`item_id`   AS `item_id`,
         sum(`vpion`.`bal_ind_qty`) AS `bal_tot_ind_qty`,
-        sum(case when `vpion`.`indent_type_id` = 'Open' then `vpion`.`bal_ind_qty` else 0 end) AS `open_bal_ind_tot_qty`
+        sum(case when `vpion`.`indent_type_id` = 'Open'
+                 then `vpion`.`bal_ind_qty` else 0 end)                          AS `open_bal_ind_tot_qty`,
+        sum(case when `vpion`.`expense_type_id` in (5, 7)
+                 then `vpion`.`bal_ind_qty` else 0 end)                          AS `capital_maintainance_bal_ind_tot_qty`
     from `vw_proc_indent_outstanding_new` `vpion`
     group by `vpion`.`branch_id`, `vpion`.`item_id`
 ) `ind`
     on(`ind`.`branch_id` = `imm`.`branch_id` and `ind`.`item_id` = `imm`.`item_id`)
 left join (
-    -- All PO outstanding, total and Open-type, per branch+item
+    -- All PO outstanding per branch+item, split by type
     select
         `vppon`.`branch_id` AS `branch_id`,
         `vppon`.`item_id`   AS `item_id`,
         sum(`vppon`.`bal_po_qty`) AS `bal_tot_po_qty`,
-        sum(case when `vppon`.`po_type` = 'Open' then `vppon`.`bal_po_qty` else 0 end) AS `open_bal_tot_po_qty`
+        sum(case when `vppon`.`po_type` = 'Open'
+                 then `vppon`.`bal_po_qty` else 0 end)                           AS `open_bal_tot_po_qty`,
+        sum(case when `vppon`.`expense_type_id` in (5, 7)
+                 then `vppon`.`bal_po_qty` else 0 end)                           AS `capital_maintainance_bal_tot_po_qty`
     from `vw_proc_po_outstanding_new` `vppon`
     group by `vppon`.`branch_id`, `vppon`.`item_id`
 ) `po`

@@ -2068,18 +2068,19 @@ def get_bill_pass_list_query():
     LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
     LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
     LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
-    -- SR totals from inward detail lines
+    -- SR totals from inward detail lines + proc_gst for tax
     LEFT JOIN (
         SELECT 
-            inward_id,
+            pid.inward_id,
             SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
-            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
                 (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+                COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
-        GROUP BY inward_id
+        LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
+        GROUP BY pid.inward_id
     ) sr_totals ON sr_totals.inward_id = pi.inward_id
     -- Debit Note totals (adjustment_type = 1, status_id = 3 approved)
     LEFT JOIN (
@@ -2186,19 +2187,20 @@ def get_bill_pass_by_id_query():
     LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
     LEFT JOIN (
         SELECT 
-            inward_id,
+            pid.inward_id,
             COUNT(*) AS line_count,
             SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
-            SUM(COALESCE(pid.cgst_amount, 0)) AS sr_cgst,
-            SUM(COALESCE(pid.sgst_amount, 0)) AS sr_sgst,
-            SUM(COALESCE(pid.igst_amount, 0)) AS sr_igst,
-            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(COALESCE(pg.c_tax_amount, 0)) AS sr_cgst,
+            SUM(COALESCE(pg.s_tax_amount, 0)) AS sr_sgst,
+            SUM(COALESCE(pg.i_tax_amount, 0)) AS sr_igst,
+            SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
                 (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+                COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
-        GROUP BY inward_id
+        LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
+        GROUP BY pid.inward_id
     ) sr_totals ON sr_totals.inward_id = pi.inward_id
     LEFT JOIN (
         SELECT 
@@ -2243,18 +2245,19 @@ def get_bill_pass_sr_lines_query():
         pid.discount_mode,
         pid.discount_value,
         pid.discount_amount,
-        pid.cgst_percent,
-        pid.cgst_amount,
-        pid.sgst_percent,
-        pid.sgst_amount,
-        pid.igst_percent,
-        pid.igst_amount,
-        (COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS tax_amount,
+        pg.c_tax_percentage AS cgst_percent,
+        pg.c_tax_amount AS cgst_amount,
+        pg.stax_percentage AS sgst_percent,
+        pg.s_tax_amount AS sgst_amount,
+        pg.i_tax_percentage AS igst_percent,
+        pg.i_tax_amount AS igst_amount,
+        (COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS tax_amount,
         (
             (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-            COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+            COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
         ) AS line_total
     FROM proc_inward_dtl pid
+    LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make imk ON imk.item_make_id = pid.accepted_item_make_id
@@ -2609,9 +2612,10 @@ def get_item_validation_data_v2():
     Returned columns (raw view data):
         cur_stock          → branch_stock
         maxqty, minqty, min_order_qty  → unchanged
-        bal_tot_ind_qty    → total outstanding indent qty (all types)
-        bal_qty_ind_to_validate → outstanding from Regular/BOM only
-        open_bal_ind_tot_qty   → outstanding from Open indents
+        bal_qty_ind_to_validate → outstanding_indent_qty  (Regular/BOM only — used for validation)
+        bal_qty_ind_to_validate → regular_bom_outstanding (same value, kept for backward compat)
+        bal_tot_ind_qty    → total_all_indent_outstanding  (all types incl. Open — informational only)
+        open_bal_ind_tot_qty   → open_indent_outstanding
         bal_tot_po_qty     → total outstanding PO qty
 
     Pre-computed validation columns (added 2026-02-24):
@@ -2626,8 +2630,9 @@ def get_item_validation_data_v2():
         v.minqty,
         v.maxqty,
         v.min_order_qty,
-        COALESCE(v.bal_tot_ind_qty, 0)         AS outstanding_indent_qty,
+        COALESCE(v.bal_qty_ind_to_validate, 0) AS outstanding_indent_qty,
         COALESCE(v.bal_qty_ind_to_validate, 0) AS regular_bom_outstanding,
+        COALESCE(v.bal_tot_ind_qty, 0)         AS total_all_indent_outstanding,
         COALESCE(v.open_bal_ind_tot_qty, 0)    AS open_indent_outstanding,
         COALESCE(v.bal_tot_po_qty, 0)          AS outstanding_po_qty,
         COALESCE(v.open_bal_tot_po_qty, 0)     AS open_po_outstanding,

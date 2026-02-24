@@ -337,14 +337,20 @@ class VwItemBalanceQtyByBranchNew(Base):
 
     Columns — raw aggregates:
     - bal_tot_ind_qty: Total outstanding indent qty across all indent types
-      (Regular + BOM + Open) for the branch+item.
+      (Regular + BOM + Open + Capital/Maintenance) for the branch+item.
     - open_bal_ind_tot_qty: Outstanding indent qty from Open-type indents only.
+    - capital_maintance_bal_ind_tot_qty: Outstanding indent qty from
+      Capital/Maintenance-type indents only. (Note: production typo "maintance".)
     - bal_qty_ind_to_validate: bal_tot_ind_qty − open_bal_ind_tot_qty.
       This is the outstanding indent qty from Regular/BOM indents (the portion
       that counts toward validation in Logic 1).
     - bal_tot_po_qty: Total outstanding PO qty across all PO types for the
       branch+item.
     - open_bal_tot_po_qty: Outstanding PO qty from Open-type POs only.
+    - capital_maintainance_bal_tot_po_qty: Outstanding PO qty from
+      Capital/Maintenance-type POs only. (Note: production spelling "maintainance".)
+    - bal_qty_po_to_validate: PO equivalent of bal_qty_ind_to_validate — the
+      outstanding PO qty used in validation (excludes Open/Capital POs).
     - maxqty: Max stock qty from item_minmax_mst (0 if not set).
     - minqty: Reorder point from item_minmax_mst (0 if not set).
     - min_order_qty: Minimum order batch size from item_minmax_mst (0 if not set).
@@ -413,9 +419,19 @@ class VwItemBalanceQtyByBranchNew(Base):
     open_bal_ind_tot_qty: Mapped[Optional[float]] = mapped_column(
         "open_bal_Ind_tot_qty", Double, nullable=True
     )
+    # Capital/maintenance outstanding indent qty (separate from Open/Regular/BOM breakdown)
+    capital_maintance_bal_ind_tot_qty: Mapped[Optional[float]] = mapped_column(
+        "capital_maintance_bal_Ind_tot_qty", Double, nullable=True
+    )
     bal_qty_ind_to_validate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     open_bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    # Capital/maintenance outstanding PO qty (separate from Open/Regular breakdown)
+    capital_maintainance_bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(
+        Double, nullable=True
+    )
+    # PO equivalent of bal_qty_ind_to_validate: outstanding PO qty used for validation
+    bal_qty_po_to_validate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     maxqty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
     minqty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
     min_order_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)

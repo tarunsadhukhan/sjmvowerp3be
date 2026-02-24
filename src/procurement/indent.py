@@ -138,12 +138,22 @@ async def validate_item_for_indent(
     Validate an item for indent creation.
     Returns validation data including errors, warnings, and allowable qty range
     based on (indent_type + expense_type) → Logic 1, 2, or 3.
+
+    Query params:
+        branch_id       : int  (required)
+        item_id         : int  (required)
+        indent_type     : str  (required) — Regular | BOM | Open | Capital | Maintenance
+        expense_type_id : int  (required)
+        indent_date     : str  (optional, YYYY-MM-DD) — date selected by user for the indent;
+                          used to derive the correct financial year for FY duplicate checks.
+                          Defaults to today if omitted.
     """
     try:
         branch_id = request.query_params.get("branch_id")
         item_id = request.query_params.get("item_id")
         indent_type = request.query_params.get("indent_type")
         expense_type_id = request.query_params.get("expense_type_id")
+        indent_date_str = request.query_params.get("indent_date")
 
         if not branch_id:
             raise HTTPException(status_code=400, detail="branch_id is required")
@@ -160,6 +170,19 @@ async def validate_item_for_indent(
             expense_type_id = int(expense_type_id)
         except (TypeError, ValueError) as e:
             raise HTTPException(status_code=400, detail=f"Invalid parameter format: {e}")
+
+        # Derive the reference date for FY boundary calculation.
+        # Use the user-supplied indent_date if provided; fall back to today.
+        if indent_date_str:
+            try:
+                ref_date = datetime.strptime(indent_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid indent_date format '{indent_date_str}'. Expected YYYY-MM-DD.",
+                )
+        else:
+            ref_date = date.today()
 
         indent_type = normalize_indent_type(indent_type)
         if not is_valid_indent_type(indent_type):
@@ -179,10 +202,16 @@ async def validate_item_for_indent(
 
         validation_logic = determine_validation_logic(indent_type, expense_type_name)
 
+        fy_start, fy_end = get_fy_boundaries(ref_date)
+
         result = {
             "validation_logic": validation_logic,
             "indent_type": indent_type,
             "expense_type_name": expense_type_name,
+            # The reference date and FY used for duplicate-indent checks
+            "indent_date": ref_date.strftime("%Y-%m-%d"),
+            "fy_start": fy_start.strftime("%Y-%m-%d"),
+            "fy_end": fy_end.strftime("%Y-%m-%d"),
             "errors": [],
             "warnings": [],
             # Logic 1 fields
@@ -239,8 +268,7 @@ async def validate_item_for_indent(
             # Step 1: Check if an Open-type indent (indent_type = 'Open') already exists for
             # this item in the current financial year. Open-type indents are blanket/standing
             # orders — if one is active for the item, a new Regular indent should be blocked.
-            today = date.today()
-            fy_start, fy_end = get_fy_boundaries(today)
+            # (fy_start / fy_end already derived from ref_date above)
             fy_open_row = db.execute(
                 get_item_fy_indent_check_v2(),
                 {
@@ -295,9 +323,8 @@ async def validate_item_for_indent(
         elif validation_logic == 2:
             # --- Logic 2: Open Entry + FY Check ---
 
-            # Step 1: Check for existing open indent in current FY
-            today = date.today()
-            fy_start, fy_end = get_fy_boundaries(today)
+            # Step 1: Check for existing open indent in FY derived from ref_date
+            # (fy_start / fy_end already derived from ref_date above)
             fy_row = db.execute(
                 get_item_fy_indent_check_v2(),
                 {
