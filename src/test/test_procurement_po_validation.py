@@ -123,9 +123,17 @@ class TestValidateItemForPOLogic1:
         return mock_session
 
     def test_open_indent_exists_blocks_item(self):
+        """v2 call order: 0=expense_type, 1=vdata(includes all fields), 2=fy_indent_check"""
         session = self._make_session({
             0: _mock_row({"expense_type_name": "General"}),
-            1: _mock_row({"minqty": 10, "maxqty": 100, "min_order_qty": 5, "branch_stock": 5, "outstanding_indent_qty": 0}),
+            1: _mock_row({
+                "minqty": 10, "maxqty": 100, "min_order_qty": 5,
+                "branch_stock": 5, "outstanding_indent_qty": 0,
+                "regular_bom_outstanding": 0, "open_indent_outstanding": 0,
+                "outstanding_po_qty": 0, "open_po_outstanding": 0,
+                "max_indent_qty": 95, "min_indent_qty": 10,
+                "max_po_qty": 95, "min_po_qty": 10,
+            }),
             2: _mock_row({"indent_id": 55, "indent_no": "IND/2025/001"}),
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
@@ -138,13 +146,20 @@ class TestValidateItemForPOLogic1:
 
     def test_open_po_exists_is_warning_not_error(self):
         """Active PO for the same item should produce a warning (not an error)
-        and validation should continue to compute max/min qty."""
+        and validation should continue to compute max/min qty.
+        v2 call order: 0=expense_type, 1=vdata(includes outstanding), 2=fy_indent_check, 3=open_po_check"""
         session = self._make_session({
             0: _mock_row({"expense_type_name": "Maintenance"}),
-            1: _mock_row({"minqty": 5, "maxqty": 80, "min_order_qty": 5, "branch_stock": 10, "outstanding_indent_qty": 0}),
+            1: _mock_row({
+                "minqty": 5, "maxqty": 80, "min_order_qty": 5,
+                "branch_stock": 10, "outstanding_indent_qty": 0,
+                "regular_bom_outstanding": 0, "open_indent_outstanding": 0,
+                "outstanding_po_qty": 5, "open_po_outstanding": 0,
+                "max_indent_qty": 70, "min_indent_qty": 5,
+                "max_po_qty": 70, "min_po_qty": 5,
+            }),
             2: None,  # no open indent
             3: _mock_row({"po_id": 10, "po_no": "PO/2025/010"}),  # open PO exists
-            4: _mock_row({"outstanding_po_qty": 5}),  # outstanding PO qty for Step 3
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
         response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Regular&expense_type_id=1")
@@ -157,17 +172,24 @@ class TestValidateItemForPOLogic1:
         assert any("active po" in w.lower() for w in data["warnings"])
         # Errors should be empty (no blocking error from active PO)
         assert len(data["errors"]) == 0
-        # Validation should have continued to compute qty range
+        # Pre-computed from view — outstanding_po_qty now in vdata
         assert data["outstanding_po_qty"] == 5
-        assert data["max_po_qty"] is not None
+        assert data["max_po_qty"] == 70
 
     def test_clean_path_computes_max_po_qty(self):
+        """v2 call order: 0=expense_type, 1=vdata, 2=fy_indent_check, 3=open_po_check"""
         session = self._make_session({
             0: _mock_row({"expense_type_name": "General"}),
-            1: _mock_row({"minqty": 10, "maxqty": 200, "min_order_qty": 10, "branch_stock": 20, "outstanding_indent_qty": 0}),
+            1: _mock_row({
+                "minqty": 10, "maxqty": 200, "min_order_qty": 10,
+                "branch_stock": 20, "outstanding_indent_qty": 0,
+                "regular_bom_outstanding": 0, "open_indent_outstanding": 0,
+                "outstanding_po_qty": 0, "open_po_outstanding": 0,
+                "max_indent_qty": 180, "min_indent_qty": 10,
+                "max_po_qty": 180, "min_po_qty": 10,
+            }),
             2: None,
             3: None,
-            4: _mock_row({"outstanding_po_qty": 0}),
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
         response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Regular&expense_type_id=1")
@@ -177,7 +199,7 @@ class TestValidateItemForPOLogic1:
         assert data["errors"] == []
         assert data["has_open_indent"] is False
         assert data["has_open_po"] is False
-        assert data["max_po_qty"] is not None
+        assert data["max_po_qty"] == 180
 
 
 class TestValidateItemForPOLogic2:
@@ -200,10 +222,17 @@ class TestValidateItemForPOLogic2:
         return mock_session
 
     def test_fy_po_exists_blocks(self):
-        # Call order: 0=expense_type, 1=item_validation_data(vdata), 2=po_fy_check
+        # v2 call order: 0=expense_type, 1=vdata(all fields), 2=po_fy_check
         session = self._make_session({
             0: _mock_row({"expense_type_name": "General"}),
-            1: _mock_row({"minqty": 100, "maxqty": 500, "min_order_qty": 10, "branch_stock": 50, "outstanding_indent_qty": 0}),
+            1: _mock_row({
+                "minqty": 100, "maxqty": 500, "min_order_qty": 10,
+                "branch_stock": 50, "outstanding_indent_qty": 0,
+                "regular_bom_outstanding": 0, "open_indent_outstanding": 0,
+                "outstanding_po_qty": 0, "open_po_outstanding": 0,
+                "max_indent_qty": 450, "min_indent_qty": 100,
+                "max_po_qty": 450, "min_po_qty": 100,
+            }),
             2: _mock_row({"po_id": 7, "po_no": "PO/2025/007"}),
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
@@ -216,13 +245,20 @@ class TestValidateItemForPOLogic2:
         assert len(data["errors"]) > 0
 
     def test_missing_minmax_blocks(self):
-        # Call order: 0=expense_type, 1=vdata(no minmax), 2=po_fy_check, 3=indent_fy_check, 4=regular_bom
+        # v2 call order: 0=expense_type, 1=vdata(no minmax), 2=po_fy_check, 3=indent_fy_check
+        # regular_bom_outstanding now comes from vdata directly (no separate call)
         session = self._make_session({
             0: _mock_row({"expense_type_name": "General"}),
-            1: _mock_row({"minqty": None, "maxqty": None, "min_order_qty": None, "branch_stock": 0, "outstanding_indent_qty": 0}),
+            1: _mock_row({
+                "minqty": None, "maxqty": None, "min_order_qty": None,
+                "branch_stock": 0, "outstanding_indent_qty": 0,
+                "regular_bom_outstanding": 0, "open_indent_outstanding": 0,
+                "outstanding_po_qty": 0, "open_po_outstanding": 0,
+                "max_indent_qty": -1, "min_indent_qty": -1,
+                "max_po_qty": -1, "min_po_qty": -1,
+            }),
             2: None,
             3: None,
-            4: None,
         })
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(session)
         response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Open&expense_type_id=1")
@@ -254,3 +290,47 @@ class TestPOQueryHelpers:
         assert ":item_id" in sql
         assert ":fy_start" in sql
         assert ":fy_end" in sql
+
+
+class TestPOV2QueryHelpers:
+    """Tests for v2 PO query functions that use aggregate views."""
+
+    def test_get_outstanding_po_qty_v2_has_required_binds(self):
+        from src.procurement.query import get_outstanding_po_qty_v2
+        sql = str(get_outstanding_po_qty_v2())
+        assert ":branch_id" in sql
+        assert ":item_id" in sql
+
+    def test_get_outstanding_po_qty_v2_references_new_view(self):
+        from src.procurement.query import get_outstanding_po_qty_v2
+        sql = str(get_outstanding_po_qty_v2())
+        assert "vw_item_balance_qty_by_branch_new" in sql
+
+    def test_check_open_po_for_item_v2_has_required_binds(self):
+        from src.procurement.query import check_open_po_for_item_v2
+        sql = str(check_open_po_for_item_v2())
+        assert ":branch_id" in sql
+        assert ":item_id" in sql
+
+    def test_check_open_po_for_item_v2_references_new_view(self):
+        from src.procurement.query import check_open_po_for_item_v2
+        sql = str(check_open_po_for_item_v2())
+        assert "vw_proc_po_outstanding_new" in sql
+
+    def test_get_po_fy_check_v2_has_required_binds(self):
+        from src.procurement.query import get_po_fy_check_v2
+        sql = str(get_po_fy_check_v2())
+        assert ":branch_id" in sql
+        assert ":item_id" in sql
+        assert ":fy_start" in sql
+        assert ":fy_end" in sql
+
+    def test_get_po_fy_check_v2_references_new_view(self):
+        from src.procurement.query import get_po_fy_check_v2
+        sql = str(get_po_fy_check_v2())
+        assert "vw_proc_po_outstanding_new" in sql
+
+    def test_get_po_fy_check_v2_checks_open_type(self):
+        from src.procurement.query import get_po_fy_check_v2
+        sql = str(get_po_fy_check_v2())
+        assert "'Open'" in sql
