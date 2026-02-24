@@ -1836,7 +1836,7 @@ def get_drcr_note_list_query():
     """Get list of DRCR notes with pagination."""
     sql = """SELECT
         dn.debit_credit_note_id,
-        dn.note_date,
+        dn.date AS note_date,
         dn.adjustment_type,
         dn.inward_id,
         pi.inward_sequence_no,
@@ -1863,7 +1863,7 @@ def get_drcr_note_list_query():
             OR pi.inward_sequence_no LIKE :search_like
             OR pm.supp_name LIKE :search_like
         )
-    ORDER BY dn.note_date DESC, dn.debit_credit_note_id DESC
+    ORDER BY dn.date DESC, dn.debit_credit_note_id DESC
     LIMIT :limit OFFSET :offset;"""
     return text(sql)
 
@@ -1888,7 +1888,7 @@ def get_drcr_note_by_id_query():
     """Get DRCR note header by ID."""
     sql = """SELECT
         dn.debit_credit_note_id,
-        dn.note_date,
+        dn.date AS note_date,
         dn.adjustment_type,
         dn.inward_id,
         pi.inward_sequence_no,
@@ -1933,6 +1933,7 @@ def get_drcr_note_dtl_query():
         pid.item_id,
         im.item_code,
         im.item_name,
+        ig.item_grp_name,
         pid.uom_id,
         um.uom_name,
         pid.rate AS original_rate,
@@ -1945,13 +1946,10 @@ def get_drcr_note_dtl_query():
     FROM drcr_note_dtl AS dnd
     LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN drcr_note_dtl_gst AS dndg ON dndg.drcr_note_dtl_id = dnd.drcr_note_dtl_id
-    WHERE dnd.inward_dtl_id IN (
-        SELECT inward_dtl_id FROM proc_inward_dtl WHERE inward_id = (
-            SELECT inward_id FROM drcr_note WHERE debit_credit_note_id = :drcr_note_id
-        )
-    )
+    WHERE dnd.debit_credit_note_id = :drcr_note_id
     ORDER BY dnd.drcr_note_dtl_id;"""
     return text(sql)
 
@@ -1987,6 +1985,7 @@ def insert_drcr_note():
 def insert_drcr_note_dtl():
     """Insert a new DRCR note line item."""
     sql = """INSERT INTO drcr_note_dtl (
+        debit_credit_note_id,
         inward_dtl_id,
         debitnote_type,
         quantity,
@@ -1997,6 +1996,7 @@ def insert_drcr_note_dtl():
         updated_by,
         updated_date_time
     ) VALUES (
+        :debit_credit_note_id,
         :inward_dtl_id,
         :debitnote_type,
         :quantity,
@@ -2068,18 +2068,19 @@ def get_bill_pass_list_query():
     LEFT JOIN branch_mst bm ON bm.branch_id = pi.branch_id
     LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
     LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
-    -- SR totals from inward detail lines
+    -- SR totals from inward detail lines + proc_gst for tax
     LEFT JOIN (
         SELECT 
-            inward_id,
+            pid.inward_id,
             SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
-            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
                 (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+                COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
-        GROUP BY inward_id
+        LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
+        GROUP BY pid.inward_id
     ) sr_totals ON sr_totals.inward_id = pi.inward_id
     -- Debit Note totals (adjustment_type = 1, status_id = 3 approved)
     LEFT JOIN (
@@ -2186,19 +2187,20 @@ def get_bill_pass_by_id_query():
     LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
     LEFT JOIN (
         SELECT 
-            inward_id,
+            pid.inward_id,
             COUNT(*) AS line_count,
             SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
-            SUM(COALESCE(pid.cgst_amount, 0)) AS sr_cgst,
-            SUM(COALESCE(pid.sgst_amount, 0)) AS sr_sgst,
-            SUM(COALESCE(pid.igst_amount, 0)) AS sr_igst,
-            SUM(COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS sr_tax,
+            SUM(COALESCE(pg.c_tax_amount, 0)) AS sr_cgst,
+            SUM(COALESCE(pg.s_tax_amount, 0)) AS sr_sgst,
+            SUM(COALESCE(pg.i_tax_amount, 0)) AS sr_igst,
+            SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
                 (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-                COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+                COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
-        GROUP BY inward_id
+        LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
+        GROUP BY pid.inward_id
     ) sr_totals ON sr_totals.inward_id = pi.inward_id
     LEFT JOIN (
         SELECT 
@@ -2243,18 +2245,19 @@ def get_bill_pass_sr_lines_query():
         pid.discount_mode,
         pid.discount_value,
         pid.discount_amount,
-        pid.cgst_percent,
-        pid.cgst_amount,
-        pid.sgst_percent,
-        pid.sgst_amount,
-        pid.igst_percent,
-        pid.igst_amount,
-        (COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)) AS tax_amount,
+        pg.c_tax_percentage AS cgst_percent,
+        pg.c_tax_amount AS cgst_amount,
+        pg.stax_percentage AS sgst_percent,
+        pg.s_tax_amount AS sgst_amount,
+        pg.i_tax_percentage AS igst_percent,
+        pg.i_tax_amount AS igst_amount,
+        (COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS tax_amount,
         (
             (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) +
-            COALESCE(pid.cgst_amount, 0) + COALESCE(pid.sgst_amount, 0) + COALESCE(pid.igst_amount, 0)
+            COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
         ) AS line_total
     FROM proc_inward_dtl pid
+    LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make imk ON imk.item_make_id = pid.accepted_item_make_id
@@ -2415,6 +2418,10 @@ def delete_inward_additional():
 
 def get_item_validation_data():
     """
+    DEPRECATED — use get_item_validation_data_v2() which reads from
+    the pre-aggregated view vw_item_balance_qty_by_branch_new.
+    Kept for rollback safety.
+
     Get validation data for an item at a given branch:
     - Branch stock from vw_item_balance_qty_by_branch
     - Min/max/reorder from item_minmax_mst
@@ -2470,6 +2477,10 @@ def get_item_fy_indent_check():
 
 def get_item_regular_bom_outstanding():
     """
+    DEPRECATED — the v2 validation query (get_item_validation_data_v2)
+    returns regular_bom_outstanding directly from the aggregate view.
+    Kept for rollback safety.
+
     Get outstanding indent qty from Regular/BOM indents only
     for the same item at a given branch. Used by Logic 2 (Open indent)
     to show an informational warning.
@@ -2502,6 +2513,10 @@ def get_expense_type_name_by_id():
 
 def get_outstanding_po_qty():
     """
+    DEPRECATED — use get_outstanding_po_qty_v2() which reads from
+    the pre-aggregated view vw_item_balance_qty_by_branch_new.
+    Kept for rollback safety.
+
     Compute the total outstanding (unreceived) PO quantity for a specific item
     at a given branch, across all active POs (status NOT IN 4=rejected, 5=closed, 6=cancelled).
 
@@ -2528,6 +2543,10 @@ def get_outstanding_po_qty():
 
 def check_open_po_for_item():
     """
+    DEPRECATED — use check_open_po_for_item_v2() which reads
+    from vw_proc_po_outstanding_new.
+    Kept for rollback safety.
+
     Check if any active (non-rejected, non-closed, non-cancelled) PO already
     exists for a given item_id + branch_id.
     Returns po_id and po_no of the first match, or no rows if none found.
@@ -2548,6 +2567,10 @@ def check_open_po_for_item():
 
 def get_po_fy_check():
     """
+    DEPRECATED — use get_po_fy_check_v2() which reads from
+    vw_proc_po_outstanding_new (has po_date + po_type columns).
+    Kept for rollback safety.
+
     Check if an open (non-rejected, non-closed, non-cancelled) PO already exists
     for a given item_id + branch_id within the current financial year
     (po_date between :fy_start and :fy_end).
@@ -2565,5 +2588,209 @@ def get_po_fy_check():
       AND pp.po_date >= :fy_start
       AND pp.po_date <= :fy_end
     LIMIT 1;
+    """
+    return text(sql)
+
+
+# =============================================================================
+# V2 INDENT VALIDATION QUERIES (using new aggregate views)
+# =============================================================================
+# These replace the original validation queries above by reading from
+# pre-computed views instead of ad-hoc multi-table joins.  The old functions
+# are kept (deprecated) for rollback safety.
+# =============================================================================
+
+def get_item_validation_data_v2():
+    """
+    V2: Get validation data for an item at a given branch from the
+    pre-aggregated view `vw_item_balance_qty_by_branch_new`.
+
+    This single SELECT replaces the 3-way LEFT JOIN in
+    get_item_validation_data() — stock, min/max, and outstanding indent
+    qty are all pre-computed in the view.
+
+    Returned columns (raw view data):
+        cur_stock          → branch_stock
+        maxqty, minqty, min_order_qty  → unchanged
+        bal_qty_ind_to_validate → outstanding_indent_qty  (Regular/BOM only — used for validation)
+        bal_qty_ind_to_validate → regular_bom_outstanding (same value, kept for backward compat)
+        bal_tot_ind_qty    → total_all_indent_outstanding  (all types incl. Open — informational only)
+        open_bal_ind_tot_qty   → open_indent_outstanding
+        bal_tot_po_qty     → total outstanding PO qty
+
+    Pre-computed validation columns (added 2026-02-24):
+        max_indent_qty  → sentinel -2 (open outstanding), -1 (no minmax), or >=0 (limit)
+        min_indent_qty  → sentinel -2/-1, or minqty (reorder point)
+        max_po_qty      → sentinel -2 (open PO outstanding), -1 (no minmax), or >=0 (limit)
+        min_po_qty      → sentinel -2/-1, or minqty (reorder point)
+    """
+    sql = """
+    SELECT
+        COALESCE(v.cur_stock, 0)               AS branch_stock,
+        v.minqty,
+        v.maxqty,
+        v.min_order_qty,
+        COALESCE(v.bal_qty_ind_to_validate, 0) AS outstanding_indent_qty,
+        COALESCE(v.bal_qty_ind_to_validate, 0) AS regular_bom_outstanding,
+        COALESCE(v.bal_tot_ind_qty, 0)         AS total_all_indent_outstanding,
+        COALESCE(v.open_bal_ind_tot_qty, 0)    AS open_indent_outstanding,
+        COALESCE(v.bal_tot_po_qty, 0)          AS outstanding_po_qty,
+        COALESCE(v.open_bal_tot_po_qty, 0)     AS open_po_outstanding,
+        COALESCE(v.max_indent_qty, -1)         AS max_indent_qty,
+        COALESCE(v.min_indent_qty, -1)         AS min_indent_qty,
+        COALESCE(v.max_po_qty, -1)             AS max_po_qty,
+        COALESCE(v.min_po_qty, -1)             AS min_po_qty
+    FROM vw_item_balance_qty_by_branch_new v
+    WHERE v.branch_id = :branch_id
+      AND v.item_id   = :item_id;
+    """
+    return text(sql)
+
+
+def get_item_fy_indent_check_v2():
+    """
+    V2: Check if an Open-type indent already exists for the item
+    within the current financial year at the given branch.
+
+    Uses `vw_proc_indent_outstanding_new` (which only contains
+    approved/closed indents, status IN (3, 5)) joined back to
+    `proc_indent` for indent_date filtering.
+
+    Additionally checks `proc_indent` / `proc_indent_dtl` directly
+    for non-approved statuses (draft=21, open=1, pending=20) that are
+    NOT in the view, so we don't miss indents still in the pipeline.
+
+    Returns the matching indent number if found.
+    """
+    sql = """
+    SELECT pi.indent_id, pi.indent_no, pi.status_id, pi.indent_date
+    FROM proc_indent_dtl pid
+    JOIN proc_indent pi ON pi.indent_id = pid.indent_id
+    WHERE pid.item_id   = :item_id
+      AND pid.active     = 1
+      AND pi.branch_id   = :branch_id
+      AND pi.indent_type_id = 'Open'
+      AND pi.status_id NOT IN (4, 5, 6)
+      AND pi.indent_date >= :fy_start
+      AND pi.indent_date <= :fy_end
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+# =============================================================================
+# V2 PO VALIDATION QUERIES (using new aggregate views)
+# =============================================================================
+
+def get_outstanding_po_qty_v2():
+    """
+    V2: Total outstanding PO qty for an item at a branch.
+    Read directly from the aggregate view instead of computing
+    from proc_po_dtl - inward subquery.
+
+    Note: the aggregate view already accounts for approved/closed POs.
+    For all-status outstanding we fall back to the original query.
+    """
+    sql = """
+    SELECT COALESCE(v.bal_tot_po_qty, 0) AS outstanding_po_qty
+    FROM vw_item_balance_qty_by_branch_new v
+    WHERE v.branch_id = :branch_id
+      AND v.item_id   = :item_id;
+    """
+    return text(sql)
+
+
+def check_open_po_for_item_v2():
+    """
+    V2: Check if any active PO with outstanding qty exists for
+    item + branch, using `vw_proc_po_outstanding_new`.
+    Returns po_id, po_no of first match.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.bal_po_qty > 0
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_po_fy_check_v2():
+    """
+    V2: Check if an Open PO exists for item + branch within the
+    current FY, using `vw_proc_po_outstanding_new` which already
+    has po_date and po_type columns.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.po_type    = 'Open'
+      AND v.bal_po_qty > 0
+      AND v.po_date   >= :fy_start
+      AND v.po_date   <= :fy_end
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+# ─── Indent Template / Indent Name queries ─────────────────────────────────
+
+def get_distinct_indent_titles():
+    """Return distinct non-empty indent_title values scoped by co_id and optionally branch_id."""
+    sql = """
+    SELECT DISTINCT pi.indent_title
+    FROM proc_indent pi
+    INNER JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    WHERE pi.indent_title IS NOT NULL
+      AND pi.indent_title != ''
+      AND pi.active = 1
+      AND bm.co_id = :co_id
+      AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
+    ORDER BY pi.indent_title;
+    """
+    return text(sql)
+
+
+def get_latest_indent_lines_by_title():
+    """
+    Fetch line items from the most recent indent that matches the given
+    indent_title, co_id and branch_id.  Returns the detail rows joined with
+    item/group/uom/make/dept metadata (same shape as get_indent_detail_by_id_query).
+    """
+    sql = """
+    SELECT
+        pid.indent_dtl_id,
+        pid.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
+        pid.qty,
+        pid.uom_id,
+        um.uom_name,
+        pid.item_make_id,
+        imk.item_make_name,
+        pid.dept_id,
+        dm.dept_desc AS dept_name,
+        pid.remarks
+    FROM proc_indent_dtl pid
+    INNER JOIN proc_indent pi ON pi.indent_id = pid.indent_id
+    INNER JOIN branch_mst bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN item_mst im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN uom_mst um ON um.uom_id = pid.uom_id
+    LEFT JOIN item_make imk ON imk.item_make_id = pid.item_make_id
+    LEFT JOIN dept_mst dm ON dm.dept_id = pid.dept_id
+    WHERE pi.indent_title = :indent_title
+      AND bm.co_id = :co_id
+      AND pi.branch_id = :branch_id
+      AND pi.active = 1
+      AND pid.active = 1
+    ORDER BY pi.indent_id DESC, pid.indent_dtl_id ASC;
     """
     return text(sql)

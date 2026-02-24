@@ -228,6 +228,240 @@ class VwProcIndentOutstanding(Base):
 
 
 # =============================================================================
+# NEW INDENT OUTSTANDING VIEW
+# =============================================================================
+
+class VwProcIndentOutstandingNew(Base):
+    """
+    Read-only model for vw_proc_indent_outstanding_new view.
+
+    Provides outstanding indent quantities per detail line for approved/closed
+    indents (status_id IN 3, 5). Joins proc_indent → proc_indent_dtl with
+    cancellation and PO consumption adjustments.
+
+    Key behaviour:
+    - For 'Open' indent types: bal_ind_qty = indent_qty (full qty always
+      outstanding since open indents are recurring/flexible).
+    - For Regular/BOM types: bal_ind_qty = indent_qty − cancelled_qty − PO consumed qty
+      (only POs in status 3 or 5 are counted as consumed).
+    - Includes item_name, uom_name, and expense_type_name via joins.
+
+    Used by the validation layer (Indent Logic 1/2, PO Logic 1/2) to look up
+    outstanding indent quantities per branch+item without running ad-hoc queries.
+    """
+    __tablename__ = "vw_proc_indent_outstanding_new"
+    __table_args__ = {"extend_existing": True}
+
+    # PK for ORM (view has no real PK; indent_dtl_id is unique per row)
+    indent_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    indent_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    indent_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_ind_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    expense_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    indent_type_id: Mapped[Optional[str]] = mapped_column(String(25), nullable=True)
+    expense_type_name: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+
+
+# =============================================================================
+# NEW PO OUTSTANDING VIEW
+# =============================================================================
+
+class VwProcPoOutstandingNew(Base):
+    """
+    Read-only model for vw_proc_po_outstanding_new view.
+
+    Provides outstanding PO quantities per PO detail line. Joins proc_po →
+    proc_po_dtl with inward receipt and debit/credit note adjustments.
+
+    Key columns:
+    - bal_po_qty = po_qty − inward_qty + drcr_qty  (balance remaining on PO line)
+    - po_type: 'Regular' or 'Open' (from proc_po.po_type)
+    - maxqty, minqty, min_order_qty: from item_minmax_mst for the item
+    - item_code, uom_name, expense_type_name: via joins for display
+
+    Used by the validation layer (PO Logic 1/2, Open PO from indent) to look up
+    outstanding PO quantities per branch+item without running ad-hoc queries.
+    Also participates in the aggregate view vw_item_balance_qty_by_branch_new.
+    """
+    __tablename__ = "vw_proc_po_outstanding_new"
+    __table_args__ = {"extend_existing": True}
+
+    # PK for ORM (view has no real PK; po_dtl_id is unique per row)
+    po_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    po_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    po_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    po_approve_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    po_type: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    po_no: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    expense_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    expense_type_name: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    maxqty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    minqty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    min_order_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_po_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+
+
+# =============================================================================
+# ITEM BALANCE QTY BY BRANCH VIEW (AGGREGATE)
+# =============================================================================
+
+class VwItemBalanceQtyByBranchNew(Base):
+    """
+    Read-only model for vw_item_balance_qty_by_branch_new view.
+
+    Aggregate view that consolidates, per branch+item, the total outstanding
+    indent quantities, outstanding PO quantities, item min/max/reorder settings,
+    and current stock. This is the **primary view for min/max validation** on
+    both Indent and PO creation screens.
+
+    Driving table: ``item_minmax_mst`` — every item with a min/max configuration
+    record appears in this view, even when it has zero indent outstanding, zero
+    PO outstanding, and zero stock. The outstanding and stock tables are
+    LEFT JOINed on top, so their columns default to 0 when no data exists.
+
+    Columns — raw aggregates:
+    - bal_tot_ind_qty: Total outstanding indent qty across all indent types
+      (Regular + BOM + Open + Capital/Maintenance) for the branch+item.
+    - open_bal_ind_tot_qty: Outstanding indent qty from Open-type indents only.
+    - capital_maintance_bal_ind_tot_qty: Outstanding indent qty from
+      Capital/Maintenance-type indents only. (Note: production typo "maintance".)
+    - bal_qty_ind_to_validate: bal_tot_ind_qty − open_bal_ind_tot_qty.
+      This is the outstanding indent qty from Regular/BOM indents (the portion
+      that counts toward validation in Logic 1).
+    - bal_tot_po_qty: Total outstanding PO qty across all PO types for the
+      branch+item.
+    - open_bal_tot_po_qty: Outstanding PO qty from Open-type POs only.
+    - capital_maintainance_bal_tot_po_qty: Outstanding PO qty from
+      Capital/Maintenance-type POs only. (Note: production spelling "maintainance".)
+    - bal_qty_po_to_validate: PO equivalent of bal_qty_ind_to_validate — the
+      outstanding PO qty used in validation (excludes Open/Capital POs).
+    - maxqty: Max stock qty from item_minmax_mst (0 if not set).
+    - minqty: Reorder point from item_minmax_mst (0 if not set).
+    - min_order_qty: Minimum order batch size from item_minmax_mst (0 if not set).
+    - cur_stock: Current stock at the branch, computed as:
+      inward_qty − drcr_qty − issue_qty.
+
+    Columns — pre-computed validation limits (added 2026-02-24):
+    - max_indent_qty: Maximum indent qty allowed. Sentinel values:
+        -2 = Open indent outstanding > 0 (UI: show warning)
+        -1 = No min/max configured (UI: allow free entry)
+        >= 0 = CEIL((maxqty - cur_stock - ind_outstanding - reg_po_outstanding)
+               / min_order_qty) * min_order_qty
+    - min_indent_qty: Minimum indent qty. Same sentinels as above.
+        >= 0 = LEAST(CEIL(minqty / min_order_qty) * min_order_qty, max_indent_qty)
+               i.e. minqty rounded UP to the nearest min_order_qty multiple,
+               capped at max_indent_qty so min never exceeds max.
+               If min_order_qty = 0: returned as raw minqty (no rounding).
+    - max_po_qty: Maximum PO qty allowed. Sentinel values:
+        -2 = Open PO outstanding > 0 (UI: show warning)
+        -1 = No min/max configured (UI: allow free entry)
+        >= 0 = Same formula as max_indent_qty
+    - min_po_qty: Minimum PO qty. Same sentinels as above.
+        >= 0 = LEAST(CEIL(minqty / min_order_qty) * min_order_qty, max_po_qty)
+               Same rounding logic as min_indent_qty, capped at max_po_qty.
+
+    Sentinel value reference:
+    | Value | Meaning                           | UI action                    |
+    |-------|-----------------------------------|------------------------------|
+    | -2    | Open outstanding exists            | Display warning to user      |
+    | -1    | No min/max configured              | Allow any quantity           |
+    | >= 0  | Computed limit                     | Enforce min/max range        |
+
+    Validation formula mapping (Indent Logic 1):
+      outstanding_indent_qty  →  bal_qty_ind_to_validate
+      branch_stock            →  cur_stock
+      max_qty                 →  maxqty
+      min_qty                 →  minqty
+      reorder_qty             →  min_order_qty
+      max_indent_allowed      →  max_indent_qty (pre-computed)
+      min_indent_allowed      →  min_indent_qty (pre-computed)
+
+    Validation formula mapping (Direct PO Logic 1):
+      outstanding_indent_qty  →  bal_qty_ind_to_validate
+      outstanding_po_qty      →  bal_tot_po_qty − open_bal_tot_po_qty
+      branch_stock            →  cur_stock
+      max_qty                 →  maxqty
+      min_qty                 →  minqty
+      reorder_qty             →  min_order_qty
+      max_po_allowed          →  max_po_qty (pre-computed)
+      min_po_allowed          →  min_po_qty (pre-computed)
+
+    Source data:
+    - Indent outstanding: aggregated from vw_proc_indent_outstanding_new
+    - PO outstanding: aggregated from vw_proc_po_outstanding_new
+    - Min/Max/Reorder: joined from item_minmax_mst
+    - Current stock: computed from proc_inward_dtl − drcr_note_dtl − issue_li
+    """
+    __tablename__ = "vw_item_balance_qty_by_branch_new"
+    __table_args__ = {"extend_existing": True}
+
+    # Composite PK for ORM (view has no real PK; branch_id+item_id is unique)
+    branch_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    bal_tot_ind_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    open_bal_ind_tot_qty: Mapped[Optional[float]] = mapped_column(
+        "open_bal_Ind_tot_qty", Double, nullable=True
+    )
+    # Capital/maintenance outstanding indent qty (separate from Open/Regular/BOM breakdown)
+    capital_maintance_bal_ind_tot_qty: Mapped[Optional[float]] = mapped_column(
+        "capital_maintance_bal_Ind_tot_qty", Double, nullable=True
+    )
+    bal_qty_ind_to_validate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    open_bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    # Capital/maintenance outstanding PO qty (separate from Open/Regular breakdown)
+    capital_maintainance_bal_tot_po_qty: Mapped[Optional[float]] = mapped_column(
+        Double, nullable=True
+    )
+    # PO equivalent of bal_qty_ind_to_validate: outstanding PO qty used for validation
+    bal_qty_po_to_validate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    maxqty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    minqty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    min_order_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    cur_stock: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+
+    # --- Pre-computed validation columns (added 2026-02-24) ---
+    # Sentinel values:
+    #   -2 = Warning: open outstanding exists for this item+branch
+    #        (open indent for indent cols, open PO for PO cols).
+    #        UI should display a warning to the user.
+    #   -1 = No min/max configured (maxqty = 0 or NULL).
+    #        User may enter any quantity freely.
+    #   >= 0 = Computed validation limit.
+    #
+    # Formula (when >= 0):
+    #   regular_po_outstanding = bal_tot_po_qty − open_bal_tot_po_qty
+    #   available = maxqty − cur_stock − bal_qty_ind_to_validate − regular_po_outstanding
+    #   max = CEIL(GREATEST(available, 0) / min_order_qty) * min_order_qty
+    #   min = LEAST(CEIL(minqty / min_order_qty) * min_order_qty, max)
+    #         i.e. minqty rounded UP to nearest min_order_qty multiple, capped at max.
+    #
+    # If min_order_qty is 0: max = raw available, min = raw minqty (no rounding).
+
+    max_indent_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    min_indent_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    max_po_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    min_po_qty: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+
+
+# =============================================================================
 # INWARD MODELS
 # =============================================================================
 
@@ -711,6 +945,9 @@ class DrcrNoteDtl(Base):
     __tablename__ = "drcr_note_dtl"
 
     drcr_note_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    debit_credit_note_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("drcr_note.debit_credit_note_id"), nullable=False, index=True
+    )
     inward_dtl_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("proc_inward_dtl.inward_dtl_id"), nullable=True, index=True
     )
@@ -727,7 +964,7 @@ class DrcrNoteDtl(Base):
 
     # Relationships
     drcr_note: Mapped[Optional["DrcrNote"]] = relationship(
-        "DrcrNote", back_populates="details", foreign_keys="DrcrNoteDtl.inward_dtl_id"
+        "DrcrNote", back_populates="details", foreign_keys="DrcrNoteDtl.debit_credit_note_id"
     )
     inward_dtl: Mapped[Optional["ProcInwardDtl"]] = relationship(
         "ProcInwardDtl", back_populates="drcr_note_details"
@@ -771,8 +1008,12 @@ __all__ = [
     "ProcIndent",
     "ProcIndentDtl",
     "ProcIndentDtlCancel",
-    # Indent Outstanding View
+    # Indent Outstanding View (legacy)
     "VwProcIndentOutstanding",
+    # New Validation Views
+    "VwProcIndentOutstandingNew",
+    "VwProcPoOutstandingNew",
+    "VwItemBalanceQtyByBranchNew",
     # Inward
     "ProcInward",
     "ProcInwardDtl",

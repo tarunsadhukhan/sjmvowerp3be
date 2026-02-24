@@ -11,6 +11,7 @@ import pytest
 from datetime import date
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from src.main import app
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -270,9 +271,17 @@ class TestValidateItemEndpoint:
         vdata_row._mapping = {
             "branch_stock": 10,
             "outstanding_indent_qty": 5,
+            "regular_bom_outstanding": 0,
+            "open_indent_outstanding": 0,
+            "outstanding_po_qty": 0,
+            "open_po_outstanding": 0,
             "minqty": 20,
             "maxqty": 100,
             "min_order_qty": 10,
+            "max_indent_qty": 90,  # pre-computed by view: ceil((100-10-5)/10)*10 = 90
+            "min_indent_qty": 20,
+            "max_po_qty": 90,
+            "min_po_qty": 20,
         }
 
         # Call 3: no Open-type FY indent
@@ -288,7 +297,7 @@ class TestValidateItemEndpoint:
         assert data["validation_logic"] == 1
         assert data["has_minmax"] is True
         assert data["errors"] == []
-        assert data["max_indent_qty"] is not None
+        assert data["max_indent_qty"] == 90
 
     def test_logic1_blocks_when_open_type_indent_exists_in_fy(self):
         """Logic 1 should block a new Regular indent when an Open-type indent
@@ -357,3 +366,187 @@ class TestValidateItemEndpoint:
         assert data["has_open_indent"] is False
         # No blocking error
         assert not any("open" in e.lower() for e in data["errors"])
+
+
+class TestValidateItemEndpointLogic2:
+    """Tests for Logic 2 (Open indent) via GET /api/procurementIndent/validate_item_for_indent."""
+
+    def setup_method(self):
+        app.dependency_overrides[get_current_user_with_refresh] = _override_auth
+
+    def teardown_method(self):
+        app.dependency_overrides.pop(get_current_user_with_refresh, None)
+        app.dependency_overrides.pop(get_tenant_db, None)
+
+    def test_logic2_fy_indent_exists_blocks(self):
+        """Logic 2 should block when an Open indent already exists in the FY."""
+        mock_session = MagicMock()
+
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 20,
+            "outstanding_indent_qty": 10,
+            "regular_bom_outstanding": 5,
+            "open_indent_outstanding": 0,
+            "outstanding_po_qty": 0,
+            "minqty": 10,
+            "maxqty": 100,
+            "min_order_qty": 10,
+        }
+
+        fy_row = MagicMock()
+        fy_row._mapping = {"indent_id": 5, "indent_no": "IND/OPEN/001", "status_id": 3, "indent_date": "2025-06-01"}
+
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row, fy_row]
+        app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 2
+        assert data["fy_indent_exists"] is True
+        assert data["fy_indent_no"] == "IND/OPEN/001"
+        assert len(data["errors"]) > 0
+
+    def test_logic2_no_minmax_blocks(self):
+        """Logic 2 should block when no min/max is configured for the item."""
+        mock_session = MagicMock()
+
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 0,
+            "outstanding_indent_qty": 0,
+            "regular_bom_outstanding": 0,
+            "open_indent_outstanding": 0,
+            "outstanding_po_qty": 0,
+            "minqty": None,
+            "maxqty": None,
+            "min_order_qty": None,
+        }
+
+        # No FY indent
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row, None]
+        app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 2
+        assert data["has_minmax"] is False
+        assert any("max/min" in e.lower() for e in data["errors"])
+
+    def test_logic2_regular_bom_outstanding_warning(self):
+        """Logic 2 should give a warning (not error) when Regular/BOM outstanding exists."""
+        mock_session = MagicMock()
+
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 10,
+            "outstanding_indent_qty": 5,
+            "regular_bom_outstanding": 30,
+            "open_indent_outstanding": 0,
+            "outstanding_po_qty": 0,
+            "minqty": 10,
+            "maxqty": 200,
+            "min_order_qty": 10,
+        }
+
+        # No FY indent
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row, None]
+        app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 2
+        assert data["has_minmax"] is True
+        assert data["regular_bom_outstanding"] == 30
+        assert len(data["warnings"]) > 0
+        assert any("regular/bom" in w.lower() for w in data["warnings"])
+        # Forced qty should be maxqty
+        assert data["forced_qty"] == 200
+
+    def test_logic2_clean_path_forces_qty_to_maxqty(self):
+        """Logic 2 should set forced_qty to maxqty when all checks pass."""
+        mock_session = MagicMock()
+
+        expense_row = MagicMock()
+        expense_row._mapping = {"expense_type_name": "General"}
+
+        vdata_row = MagicMock()
+        vdata_row._mapping = {
+            "branch_stock": 10,
+            "outstanding_indent_qty": 0,
+            "regular_bom_outstanding": 0,
+            "open_indent_outstanding": 0,
+            "outstanding_po_qty": 0,
+            "minqty": 10,
+            "maxqty": 150,
+            "min_order_qty": 10,
+        }
+
+        mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row, None]
+        app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
+
+        response = client.get(
+            "/api/procurementIndent/validate_item_for_indent"
+            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["validation_logic"] == 2
+        assert data["errors"] == []
+        assert data["forced_qty"] == 150
+
+
+# ── V2 Query function tests ─────────────────────────────────────────
+
+class TestV2QueryFunctions:
+    """Tests for v2 SQL query functions (bind parameters and return type)."""
+
+    def test_get_item_validation_data_v2_returns_text(self):
+        from src.procurement.query import get_item_validation_data_v2
+        result = get_item_validation_data_v2()
+        assert isinstance(result, type(text("")))
+
+    def test_get_item_validation_data_v2_has_required_binds(self):
+        from src.procurement.query import get_item_validation_data_v2
+        sql = str(get_item_validation_data_v2())
+        assert ":branch_id" in sql
+        assert ":item_id" in sql
+
+    def test_get_item_fy_indent_check_v2_has_required_binds(self):
+        from src.procurement.query import get_item_fy_indent_check_v2
+        sql = str(get_item_fy_indent_check_v2())
+        assert ":branch_id" in sql
+        assert ":item_id" in sql
+        assert ":fy_start" in sql
+        assert ":fy_end" in sql
+
+    def test_get_item_validation_data_v2_references_new_view(self):
+        from src.procurement.query import get_item_validation_data_v2
+        sql = str(get_item_validation_data_v2())
+        assert "vw_item_balance_qty_by_branch_new" in sql
+
+    def test_get_item_fy_indent_check_v2_checks_open_type(self):
+        from src.procurement.query import get_item_fy_indent_check_v2
+        sql = str(get_item_fy_indent_check_v2())
+        assert "'Open'" in sql
