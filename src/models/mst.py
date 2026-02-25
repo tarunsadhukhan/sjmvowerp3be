@@ -53,7 +53,6 @@ class BranchMst(Base):
     branch_address2 = Column(String(255), nullable=True)
     branch_zipcode = Column(Integer, nullable=True)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=True, index=True)
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"), nullable=True, index=True)
     state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=True, index=True)
     gst_no = Column(String(25), nullable=True)
     contact_no = Column(Integer, nullable=True)
@@ -64,18 +63,6 @@ class BranchMst(Base):
     updated_date_time = Column(DateTime, nullable=False)
     updated_by = Column(Integer, nullable=False)
     branch_prefix = Column(String(100), nullable=True)
-
-
-# =============================================================================
-# CITY MASTER
-# =============================================================================
-class CityMst(Base):
-    """City master - list of cities with state reference."""
-    __tablename__ = "city_mst"
-
-    city_id = Column(Integer, primary_key=True, autoincrement=True)
-    city_name = Column(String(255), nullable=True)
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=True, index=True)
 
 
 # =============================================================================
@@ -93,7 +80,6 @@ class CoMst(Base):
     co_zipcode = Column(Integer, nullable=False)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False, index=True)
     state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=False, index=True)
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"), nullable=False, index=True)
     co_logo = Column(String(255), nullable=True)
     auto_datetime_insert = Column(DateTime, nullable=True)
     created_by_con_user = Column(Integer, nullable=True)
@@ -343,7 +329,7 @@ class PartyBranchMst(Base):
     address = Column(String(255), nullable=True)
     address_additional = Column(String(255), nullable=True)
     zip_code = Column(Integer, nullable=True)
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"), nullable=True, index=True)
+    state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=True, index=True)
     contact_no = Column(String(25), nullable=True)
     contact_person = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)

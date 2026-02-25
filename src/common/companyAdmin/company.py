@@ -7,7 +7,7 @@ from src.authorization.utils import verify_access_token
 from src.common.ctrldskAdmin.schemas import MenuResponse, OrgCreate
 from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster, CoMst, CoConfig, CurrencyMst
 from src.common.companyAdmin.query import get_co_all_query, get_co_all_count_query, get_co_by_id_query, get_co_config_by_id_query
-from src.common.companyAdmin.query import get_country_query, get_state_query, get_city_query
+from src.common.companyAdmin.query import get_country_query, get_state_query
 from src.common.companyAdmin.schemas import CoCreate, CoConfigCreate
 from typing import Optional, List
 from pydantic import BaseModel
@@ -76,12 +76,10 @@ async def get_org_data_by_id(
             org_details = db.execute(query, {"co_id": co_id}).fetchone()
             countries   = db.execute(get_country_query()).fetchall()
             states      = db.execute(get_state_query()).fetchall()
-            cities    = db.execute(get_city_query()).fetchall()
             return {
                 "data": dict(org_details._mapping),
                 "countries":       [dict(c._mapping) for c in countries],
                 "states":          [dict(s._mapping) for s in states],
-                "cities":          [dict(c._mapping) for c in cities],
             }
     except HTTPException:
         raise
@@ -101,11 +99,9 @@ async def create_org_setup_data(
         with Session(default_engine) as session:
             countries   = db.execute(get_country_query()).fetchall()
             states      = db.execute(get_state_query()).fetchall()
-            cities  = db.execute(get_city_query()).fetchall()
             return {
                 "countries":       [dict(c._mapping) for c in countries],
                 "states":          [dict(s._mapping) for s in states],
-                "cities":       [dict(ct._mapping) for ct in cities],
             }
     except HTTPException:
         raise
@@ -133,7 +129,6 @@ async def create_org_data(
             co_zipcode=payload.co_zipcode,
             country_id=payload.country_id,
             state_id=payload.state_id,
-            city_id=payload.city_id,
             co_logo=payload.co_logo,
             co_cin_no=payload.co_cin_no,
             co_email_id=payload.co_email_id,
@@ -193,7 +188,6 @@ async def edit_co_data(
         company.co_zipcode = payload.co_zipcode
         company.country_id = payload.country_id
         company.state_id = payload.state_id
-        company.city_id = payload.city_id
         company.co_logo = payload.co_logo
         company.co_cin_no = payload.co_cin_no
         company.co_email_id = payload.co_email_id

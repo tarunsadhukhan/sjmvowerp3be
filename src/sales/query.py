@@ -43,13 +43,12 @@ def get_customer_branches_bulk(co_id: int = None):
         pbm.party_id,
         COALESCE(pbm.address, '') AS party_branch_name,
         pbm.address,
-        cm.state_id,
+        pbm.state_id,
         sm.state AS state_name,
         pbm.gst_no
     FROM party_branch_mst pbm
     LEFT JOIN party_mst pm ON pm.party_id = pbm.party_id
-    LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
-    LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+    LEFT JOIN state_mst sm ON sm.state_id = pbm.state_id
     WHERE pbm.active = 1
         AND FIND_IN_SET("2", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         AND (:co_id IS NULL OR pm.co_id = :co_id)
@@ -297,11 +296,11 @@ def get_quotation_by_id_query():
         sq.shipping_address_id,
         pbill.address AS billing_address_text,
         pbill.party_mst_branch_id AS billing_party_branch_id,
-        pbill_city.state_id AS billing_state_id,
+        pbill.state_id AS billing_state_id,
         sbill.state AS billing_state_name,
         pship.address AS shipping_address_text,
         pship.party_mst_branch_id AS shipping_party_branch_id,
-        pship_city.state_id AS shipping_state_id,
+        pship.state_id AS shipping_state_id,
         sship.state AS shipping_state_name,
         sq.footer_notes,
         sq.brokerage_percentage,
@@ -329,11 +328,9 @@ def get_quotation_by_id_query():
     LEFT JOIN party_mst AS brkr ON brkr.party_id = sq.sales_broker_id
     LEFT JOIN status_mst AS sm ON sm.status_id = sq.status_id
     LEFT JOIN party_branch_mst AS pbill ON pbill.party_mst_branch_id = sq.billing_address_id
-    LEFT JOIN city_mst AS pbill_city ON pbill_city.city_id = pbill.city_id
-    LEFT JOIN state_mst AS sbill ON sbill.state_id = pbill_city.state_id
+    LEFT JOIN state_mst AS sbill ON sbill.state_id = pbill.state_id
     LEFT JOIN party_branch_mst AS pship ON pship.party_mst_branch_id = sq.shipping_address_id
-    LEFT JOIN city_mst AS pship_city ON pship_city.city_id = pship.city_id
-    LEFT JOIN state_mst AS sship ON sship.state_id = pship_city.state_id
+    LEFT JOIN state_mst AS sship ON sship.state_id = pship.state_id
     WHERE sq.sales_quotation_id = :sales_quotation_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)

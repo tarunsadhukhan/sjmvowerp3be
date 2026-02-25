@@ -644,17 +644,14 @@ def get_supplier_branches(party_id: int):
         pbm.party_id,
         pbm.address AS branch_address1,
         pbm.address_additional AS branch_address2,
-        pbm.city_id,
-        cim.city_name,
-        cim.state_id,
+        pbm.state_id,
         sm.state AS state,
         pbm.zip_code,
         pbm.contact_person,
         pbm.contact_no,
         pbm.gst_no
     FROM party_branch_mst pbm
-    LEFT JOIN city_mst cim ON cim.city_id = pbm.city_id
-    LEFT JOIN state_mst sm ON sm.state_id = cim.state_id
+    LEFT JOIN state_mst sm ON sm.state_id = pbm.state_id
     WHERE pbm.party_id = :party_id
         AND pbm.active = 1
     ORDER BY pbm.party_mst_branch_id;"""
@@ -670,9 +667,7 @@ def get_all_supplier_branches_bulk(co_id: int = None):
         pbm.party_id,
         pbm.address AS branch_address1,
         pbm.address_additional AS branch_address2,
-        pbm.city_id,
-        cim.city_name,
-        cim.state_id,
+        pbm.state_id,
         sm.state AS state,
         pbm.zip_code,
         pbm.contact_person,
@@ -680,8 +675,7 @@ def get_all_supplier_branches_bulk(co_id: int = None):
         pbm.gst_no
     FROM party_branch_mst pbm
     INNER JOIN party_mst pm ON pm.party_id = pbm.party_id
-    LEFT JOIN city_mst cim ON cim.city_id = pbm.city_id
-    LEFT JOIN state_mst sm ON sm.state_id = cim.state_id
+    LEFT JOIN state_mst sm ON sm.state_id = pbm.state_id
     WHERE pbm.active = 1
         AND pm.active = 1
         AND FIND_IN_SET("1", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
@@ -1732,8 +1726,7 @@ def get_inward_for_sr_query():
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
     LEFT JOIN party_branch_mst AS pbm ON pbm.party_id = pm.party_id
-    LEFT JOIN city_mst AS sup_city ON sup_city.city_id = pbm.city_id
-    LEFT JOIN state_mst AS sup_state ON sup_state.state_id = sup_city.state_id
+    LEFT JOIN state_mst AS sup_state ON sup_state.state_id = pbm.state_id
     LEFT JOIN branch_mst AS bb ON bb.branch_id = pi.bill_branch_id
     LEFT JOIN state_mst AS bill_state ON bill_state.state_id = bb.state_id
     LEFT JOIN branch_mst AS sb ON sb.branch_id = pi.ship_branch_id

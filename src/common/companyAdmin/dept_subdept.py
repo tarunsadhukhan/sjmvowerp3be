@@ -5,7 +5,7 @@ from src.config.db import get_db_names,default_engine, get_tenant_db
 from src.authorization.utils import verify_access_token
 from src.common.companyAdmin.models import DeptMst, BranchMst
 from src.common.companyAdmin.query import get_department_all_query, get_department_all_count_query, get_branch_by_id_query
-from src.common.companyAdmin.query import get_country_query, get_state_query, get_city_query, get_co_all_query_nosearch,get_branch_query_nosearch
+from src.common.companyAdmin.query import get_country_query, get_state_query, get_co_all_query_nosearch,get_branch_query_nosearch
 from src.common.companyAdmin.query import get_department_by_id_query,get_subdepartment_all_query,get_subdepartment_all_count_query
 from src.common.companyAdmin.schemas import DeptCreate, BranchCreate
 from typing import Optional, List
@@ -117,12 +117,10 @@ async def get_branch_data_by_id(
             branch_details = db.execute(query, {"branch_id": branch_id}).fetchone()
             countries   = db.execute(get_country_query()).fetchall()
             states      = db.execute(get_state_query()).fetchall()
-            cities    = db.execute(get_city_query()).fetchall()
             return {
                 "data": dict(branch_details._mapping),
                 "countries":       [dict(c._mapping) for c in countries],
                 "states":          [dict(s._mapping) for s in states],
-                "cities":          [dict(c._mapping) for c in cities],
             }
     except HTTPException:
         raise
@@ -164,13 +162,11 @@ async def create_branch_setup_data(
             branch = db.execute(get_branch_query_nosearch()).fetchall()
             countries   = db.execute(get_country_query()).fetchall()
             states      = db.execute(get_state_query()).fetchall()
-            cities  = db.execute(get_city_query()).fetchall()
             return {
                 "company": [dict(co._mapping) for co in company],
                 "branches":    [dict(b._mapping) for b in branch],
                 "countries":    [dict(c._mapping) for c in countries],
                 "states":       [dict(s._mapping) for s in states],
-                "cities":       [dict(ct._mapping) for ct in cities],
             }
     except HTTPException:
         raise

@@ -25,7 +25,6 @@ class CoCreate(BaseModel):
     co_zipcode: int
     country_id: int
     state_id: int
-    city_id: int
     co_logo: Optional[str] = None
     co_cin_no: Optional[str] = None
     co_email_id: Optional[str] = None
@@ -45,7 +44,6 @@ class BranchCreate(BaseModel):
     branch_zipcode: int
     country_id: int
     state_id: int
-    city_id: int
     gst_no: Optional[str] = None
     contact_no: Optional[int] = None
     contact_person: Optional[str] = None

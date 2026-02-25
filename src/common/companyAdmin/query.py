@@ -28,7 +28,7 @@ def get_co_all_count_query(search: str = None):
 
 def get_co_by_id_query(co_id: int):
     sql = f"""select cm.co_id, cm.co_name, cm.co_prefix, cm.co_address1 , cm.co_address2, cm.co_zipcode , 
-cm.country_id, cm.state_id, cm.city_id, cm.co_cin_no, cm.co_email_id , cm.co_pan_no , cm.alert_email_id
+cm.country_id, cm.state_id, cm.co_cin_no, cm.co_email_id , cm.co_pan_no , cm.alert_email_id
 from co_mst cm
     WHERE cm.co_id = :co_id;"""
     query = text(sql)
@@ -43,12 +43,6 @@ def get_state_query():
     sql = f"""select sm.state_id, sm.state, sm.country_id from state_mst sm;"""
     query = text(sql)
     return query
-
-def get_city_query():
-    sql = f"""select cm.city_id, cm.city_name, cm.state_id from city_mst cm;"""
-    query = text(sql)
-    return query
-
 
 
 
@@ -130,7 +124,6 @@ bm.branch_address2 ,
 bm.branch_zipcode, 
 bm.country_id , 
 bm.state_id, 
-bm.city_id, 
 bm.gst_no, 
 bm.contact_no , 
 bm.contact_person, 
