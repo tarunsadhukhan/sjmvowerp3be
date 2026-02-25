@@ -21,8 +21,6 @@ from src.masters.query import (
 from datetime import datetime
 import json
 import re
-from urllib.parse import unquote, urlparse, parse_qs
-import ast
 router = APIRouter()
 
 
@@ -131,54 +129,34 @@ async def project_master_create_setup(
     search: str = None
 ):
     try:
-        co_id = request.query_params.get("co_id")   
-        print("ENTER project_master_create_setup", flush=True)
-        # parse branch ids (accept CSV, JSON-array, repeated params)
-        print('request', request, response)
-        url = str(request.url)
-        print("Request URL:", url, flush=True)
-        parsed_url = urlparse(url)
-        raw_query = parsed_url.query              # e.g. "%5B1,2,3%5D="
-#        print("Raw query string:", raw_query, flush=True)
-        # Decode to text like "[1,2,3]" or "[4]"
-        decoded = unquote(raw_query)              # e.g. "[1,2,3]="
-        if decoded.endswith("="):                 # our case puts the array in the key
-            decoded = decoded[:-1]                # -> "[1,2,3]"
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
 
-        # Safely convert to Python list
-        try:
-            ids = ast.literal_eval(decoded)       # -> [1, 2, 3] or [4]
-            if not isinstance(ids, list):
-                ids = [ids]
-        except Exception:
-            ids = []  # fallback if someone sends junk
+        # Parse branch_id from query param (supports JSON array "[1,2]", CSV "1,2", or single "1")
+        raw_branch_ids = request.query_params.get("branch_id") or request.query_params.get("branchids")
+        branch_ids = parse_branch_ids(raw_branch_ids)
 
-        print("IDs:", ids)
-        branch_ids = ids  # existing helper expected to return list[int] or None
-        print("parsed branch_ids:", branch_ids, flush=True)
-
-        search_param = f"%{search}%" if search else None
-
-        # Branches
-        q_br = get_branch_list(branch_ids=branch_ids)
-        params_br = {}
+        # Branches — filter by co_id and optionally by sidebar-selected branch_ids
+        # get_branch_list already applies bindparams(expanding=True) when branch_ids is provided
+        q_br = get_branch_list(co_id=int(co_id), branch_ids=branch_ids)
+        params_br: dict = {"co_id": int(co_id)}
         if branch_ids:
-            q_br = q_br.bindparams(sa_bindparam("branch_ids", expanding=True))
             params_br["branch_ids"] = branch_ids
-            print('branch selected', q_br, params_br)
         rows_br = db.execute(q_br, params_br).fetchall()
         branchs = [dict(r._mapping) for r in rows_br]
 
-        # Departments
-        q_dept = get_dept_list( branch_ids=branch_ids)
-        params_dept = {}
+        # Departments — filtered by the same branch scope
+        q_dept = get_dept_list(branch_ids=branch_ids)
+        params_dept: dict = {}
         if branch_ids:
             params_dept["branch_ids"] = branch_ids
         rows_dept = db.execute(q_dept, params_dept).fetchall()
         departments = [dict(r._mapping) for r in rows_dept]
 
-        q_prj_party = get_proj_party_list( co_id=co_id)
-        params_prj_party = {}
+        # Parties
+        q_prj_party = get_proj_party_list(co_id=co_id)
+        params_prj_party: dict = {}
         if co_id:
             params_prj_party["co_id"] = co_id
         rows_prj_party = db.execute(q_prj_party, params_prj_party).fetchall()
@@ -188,8 +166,7 @@ async def project_master_create_setup(
     except HTTPException:
         raise
     except Exception as e:
-        print("project_master_create_setup error:", str(e), flush=True)
-        raise HTTPException(status_code=500, detail=str(e))# ...existing code...
+        raise HTTPException(status_code=500, detail=str(e))
   
   
 @router.post("/project_master_create")

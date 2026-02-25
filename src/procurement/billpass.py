@@ -3,12 +3,14 @@ Bill Pass API endpoints.
 Consolidates SR and DRCR Notes for final payment processing.
 Shows net payable amount after all adjustments.
 
-Bill Pass is a read-only computed view - no creation/editing workflow.
-It appears automatically when SR is approved.
+Bill Pass appears automatically when SR is approved.
+Editable (invoice details) until marked complete (billpass_status = 1).
 """
 import logging
-from datetime import datetime
+from datetime import date, datetime
+from typing import Optional
 from fastapi import Depends, Request, HTTPException, APIRouter
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -21,12 +23,28 @@ from src.procurement.query import (
     get_bill_pass_sr_lines_query,
     get_bill_pass_drcr_notes_query,
     get_bill_pass_drcr_note_lines_query,
+    update_bill_pass_query,
 )
 from src.procurement.inward import format_inward_no
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# =============================================================================
+# SCHEMAS
+# =============================================================================
+
+class BillPassUpdate(BaseModel):
+    """Request body for updating bill pass fields."""
+    invoice_date: Optional[str] = None  # YYYY-MM-DD
+    invoice_amount: Optional[float] = None
+    invoice_recvd_date: Optional[str] = None  # YYYY-MM-DD
+    invoice_due_date: Optional[str] = None  # YYYY-MM-DD
+    round_off_value: Optional[float] = None
+    sr_remarks: Optional[str] = None
+    bill_pass_complete: Optional[int] = None  # 1 = complete
 
 
 # =============================================================================
@@ -62,6 +80,16 @@ def format_date_iso(date_obj) -> str | None:
     return str(date_obj)
 
 
+def parse_date(date_str: str | None):
+    """Parse YYYY-MM-DD string to date object, or return None."""
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+    except (ValueError, AttributeError):
+        return None
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
@@ -78,7 +106,7 @@ async def get_bill_pass_list(
 ):
     """
     Return paginated list of Bill Pass entries.
-    
+
     Bill Pass shows approved SRs with DRCR adjustments computed.
     Each row contains:
     - SR info (bill_pass_no, date, inward reference)
@@ -86,6 +114,7 @@ async def get_bill_pass_list(
     - DR total (sum of approved debit notes)
     - CR total (sum of approved credit notes)
     - Net payable (SR - DR + CR)
+    - billpass_status (NULL/0 = editable, 1 = complete)
     """
     try:
         page = max(page, 1)
@@ -107,21 +136,21 @@ async def get_bill_pass_list(
         data = []
         for row in rows:
             mapped = dict(row._mapping)
-            
+
             # Format GRN/Inward number
-            raw_inward_no = mapped.get("inward_no")
+            raw_inward_seq = mapped.get("inward_sequence_no")
             inward_date_obj = mapped.get("inward_date")
-            formatted_inward_no = raw_inward_no
-            if raw_inward_no and isinstance(raw_inward_no, int):
+            formatted_inward_no = raw_inward_seq
+            if raw_inward_seq and isinstance(raw_inward_seq, int):
                 try:
                     formatted_inward_no = format_inward_no(
-                        inward_sequence_no=int(raw_inward_no),
+                        inward_sequence_no=int(raw_inward_seq),
                         co_prefix=mapped.get("co_prefix"),
                         branch_prefix=mapped.get("branch_prefix"),
                         inward_date=inward_date_obj,
                     )
                 except Exception:
-                    formatted_inward_no = str(raw_inward_no)
+                    formatted_inward_no = str(raw_inward_seq)
 
             data.append({
                 "id": mapped.get("inward_id"),
@@ -132,10 +161,10 @@ async def get_bill_pass_list(
                 "inward_date": format_date_iso(inward_date_obj),
                 "supplier_id": mapped.get("supplier_id"),
                 "supplier_name": mapped.get("supplier_name") or "",
-                "invoice_no": mapped.get("invoice_no") or "",
                 "invoice_date": format_date_iso(mapped.get("invoice_date")),
                 "branch_name": mapped.get("branch_name") or "",
                 "sr_status_name": mapped.get("sr_status_name") or "Approved",
+                "billpass_status": int(mapped.get("billpass_status") or 0),
                 # Totals
                 "sr_total": safe_float(mapped.get("sr_total")),
                 "sr_taxable": safe_float(mapped.get("sr_taxable")),
@@ -177,12 +206,14 @@ async def get_bill_pass_by_id(
 ):
     """
     Get Bill Pass detail by inward_id.
-    
+
     Returns:
     - Header info (bill_pass_no, dates, supplier, invoice)
     - Summary totals (sr_total, dr_total, cr_total, net_payable)
     - SR line items
     - DRCR notes with their line items
+    - billpass_status for edit/view mode
+    - Invoice fields for editing
     """
     try:
         params = {"inward_id": inward_id}
@@ -200,24 +231,24 @@ async def get_bill_pass_by_id(
         sr_status = mapped.get("sr_status")
         if sr_status != 3:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Bill Pass is only available for approved SRs. Current SR status: {mapped.get('sr_status_name', sr_status)}"
             )
 
         # Format GRN/Inward number
-        raw_inward_no = mapped.get("inward_no")
+        raw_inward_seq = mapped.get("inward_sequence_no")
         inward_date_obj = mapped.get("inward_date")
-        formatted_inward_no = raw_inward_no
-        if raw_inward_no and isinstance(raw_inward_no, int):
+        formatted_inward_no = raw_inward_seq
+        if raw_inward_seq and isinstance(raw_inward_seq, int):
             try:
                 formatted_inward_no = format_inward_no(
-                    inward_sequence_no=int(raw_inward_no),
+                    inward_sequence_no=int(raw_inward_seq),
                     co_prefix=mapped.get("co_prefix"),
                     branch_prefix=mapped.get("branch_prefix"),
                     inward_date=inward_date_obj,
                 )
             except Exception:
-                formatted_inward_no = str(raw_inward_no)
+                formatted_inward_no = str(raw_inward_seq)
 
         # Get SR line items
         sr_lines_query = get_bill_pass_sr_lines_query()
@@ -251,7 +282,7 @@ async def get_bill_pass_by_id(
         # Get DRCR notes
         drcr_notes_query = get_bill_pass_drcr_notes_query()
         drcr_notes_rows = db.execute(drcr_notes_query, params).fetchall()
-        
+
         debit_notes = []
         credit_notes = []
         for note_row in drcr_notes_rows:
@@ -275,7 +306,7 @@ async def get_bill_pass_by_id(
         # Get DRCR note line items
         drcr_lines_query = get_bill_pass_drcr_note_lines_query()
         drcr_lines_rows = db.execute(drcr_lines_query, params).fetchall()
-        
+
         drcr_lines_by_note = {}
         for line_row in drcr_lines_rows:
             line = dict(line_row._mapping)
@@ -283,7 +314,7 @@ async def get_bill_pass_by_id(
             if note_id not in drcr_lines_by_note:
                 drcr_lines_by_note[note_id] = []
             drcr_lines_by_note[note_id].append({
-                "drcr_note_dtl_id": line.get("debit_credit_note_dtl_id"),
+                "drcr_note_dtl_id": line.get("drcr_note_dtl_id"),
                 "inward_dtl_id": line.get("inward_dtl_id"),
                 "adjustment_reason": line.get("adjustment_reason") or "",
                 "debitnote_type": line.get("debitnote_type"),
@@ -309,15 +340,17 @@ async def get_bill_pass_by_id(
             "inward_date": format_date_iso(inward_date_obj),
             "supplier_id": mapped.get("supplier_id"),
             "supplier_name": mapped.get("supplier_name") or "",
-            "invoice_no": mapped.get("invoice_no") or "",
             "invoice_date": format_date_iso(mapped.get("invoice_date")),
-            "invoice_amt": safe_float(mapped.get("invoice_amt")),
+            "invoice_amount": safe_float(mapped.get("invoice_amount")),
+            "invoice_recvd_date": format_date_iso(mapped.get("invoice_recvd_date")),
+            "invoice_due_date": format_date_iso(mapped.get("invoice_due_date")),
             "branch_name": mapped.get("branch_name") or "",
             "sr_status_name": mapped.get("sr_status_name") or "Approved",
             "sr_remarks": mapped.get("sr_remarks") or "",
             "challan_no": mapped.get("challan_no") or "",
             "challan_date": format_date_iso(mapped.get("challan_date")),
-            "freight": safe_float(mapped.get("freight")),
+            "round_off_value": safe_float(mapped.get("round_off_value")),
+            "billpass_status": int(mapped.get("billpass_status") or 0),
             # Summary totals
             "summary": {
                 "sr_taxable": safe_float(mapped.get("sr_taxable")),
@@ -346,3 +379,83 @@ async def get_bill_pass_by_id(
     except Exception as e:
         logger.error(f"Error fetching bill pass detail: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching bill pass detail: {str(e)}")
+
+
+@router.put("/update_bill_pass/{inward_id}")
+async def update_bill_pass(
+    inward_id: int,
+    body: BillPassUpdate,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Update bill pass fields (invoice details, remarks, round off).
+
+    Two modes:
+    - Save: update fields without completing (bill_pass_complete = None or 0)
+    - Complete: validate required fields and set billpass_status = 1
+
+    Once billpass_status = 1, no further updates are allowed.
+    """
+    try:
+        user_id = token_data.get("user_id")
+
+        # Verify the inward exists and SR is approved
+        check_sql = text("""
+            SELECT inward_id, sr_status, billpass_status
+            FROM proc_inward
+            WHERE inward_id = :inward_id
+        """)
+        row = db.execute(check_sql, {"inward_id": inward_id}).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Inward not found: {inward_id}")
+
+        mapped = dict(row._mapping)
+        if mapped.get("sr_status") != 3:
+            raise HTTPException(status_code=400, detail="Bill Pass is only available for approved SRs")
+
+        if int(mapped.get("billpass_status") or 0) == 1:
+            raise HTTPException(status_code=400, detail="Bill Pass is already complete and cannot be modified")
+
+        # Determine if this is a complete action
+        is_complete = body.bill_pass_complete == 1
+
+        # Validate required fields on complete
+        if is_complete:
+            if not body.invoice_date:
+                raise HTTPException(status_code=400, detail="Invoice Date is required to complete bill pass")
+            if body.invoice_amount is None:
+                raise HTTPException(status_code=400, detail="Invoice Amount is required to complete bill pass")
+
+        # Build update params
+        params = {
+            "inward_id": inward_id,
+            "invoice_date": parse_date(body.invoice_date),
+            "invoice_amount": round(body.invoice_amount, 2) if body.invoice_amount is not None else None,
+            "invoice_recvd_date": parse_date(body.invoice_recvd_date),
+            "invoice_due_date": parse_date(body.invoice_due_date),
+            "round_off_value": round(body.round_off_value, 2) if body.round_off_value is not None else None,
+            "sr_remarks": body.sr_remarks,
+            "billpass_status": 1 if is_complete else None,
+            "billpass_date": date.today() if is_complete else None,
+            "updated_by": user_id,
+        }
+
+        query = update_bill_pass_query()
+        db.execute(query, params)
+        db.commit()
+
+        return {
+            "message": "Bill Pass completed successfully" if is_complete else "Bill Pass saved successfully",
+            "inward_id": inward_id,
+            "billpass_status": 1 if is_complete else 0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating bill pass: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating bill pass: {str(e)}")

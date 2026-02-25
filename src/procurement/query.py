@@ -2036,12 +2036,12 @@ def get_bill_pass_list_query():
     sql = """
     SELECT
         pi.inward_id,
-        pi.inward_no,
+        pi.inward_sequence_no,
         pi.inward_date,
         pi.sr_no AS bill_pass_no,
         pi.sr_date AS bill_pass_date,
-        pi.invoice_no,
         pi.invoice_date,
+        pi.invoice_amount,
         pi.supplier_id,
         pm.supp_name AS supplier_name,
         pi.branch_id,
@@ -2050,6 +2050,7 @@ def get_bill_pass_list_query():
         bm.co_id,
         cm.co_prefix,
         pi.sr_status,
+        pi.billpass_status,
         sm.status_name AS sr_status_name,
         -- SR Total (sum from proc_inward_dtl - amount after discount + tax)
         COALESCE(sr_totals.sr_total, 0) AS sr_total,
@@ -2070,7 +2071,7 @@ def get_bill_pass_list_query():
     LEFT JOIN status_mst sm ON sm.status_id = pi.sr_status
     -- SR totals from inward detail lines + proc_gst for tax
     LEFT JOIN (
-        SELECT 
+        SELECT
             pid.inward_id,
             SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
             SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
@@ -2084,8 +2085,8 @@ def get_bill_pass_list_query():
     ) sr_totals ON sr_totals.inward_id = pi.inward_id
     -- Debit Note totals (adjustment_type = 1, status_id = 3 approved)
     LEFT JOIN (
-        SELECT 
-            inward_id, 
+        SELECT
+            inward_id,
             SUM(COALESCE(net_amount, gross_amount, 0)) AS dr_total,
             COUNT(*) AS dr_count
         FROM drcr_note
@@ -2094,8 +2095,8 @@ def get_bill_pass_list_query():
     ) dr_totals ON dr_totals.inward_id = pi.inward_id
     -- Credit Note totals (adjustment_type = 2, status_id = 3 approved)
     LEFT JOIN (
-        SELECT 
-            inward_id, 
+        SELECT
+            inward_id,
             SUM(COALESCE(net_amount, gross_amount, 0)) AS cr_total,
             COUNT(*) AS cr_count
         FROM drcr_note
@@ -2107,9 +2108,8 @@ def get_bill_pass_list_query():
         AND (
             :search_like IS NULL
             OR pi.sr_no LIKE :search_like
-            OR pi.inward_no LIKE :search_like
+            OR CAST(pi.inward_sequence_no AS CHAR) LIKE :search_like
             OR pm.supp_name LIKE :search_like
-            OR pi.invoice_no LIKE :search_like
         )
     ORDER BY pi.sr_date DESC, pi.inward_id DESC
     LIMIT :limit OFFSET :offset;
@@ -2129,9 +2129,8 @@ def get_bill_pass_count_query():
         AND (
             :search_like IS NULL
             OR pi.sr_no LIKE :search_like
-            OR pi.inward_no LIKE :search_like
+            OR CAST(pi.inward_sequence_no AS CHAR) LIKE :search_like
             OR pm.supp_name LIKE :search_like
-            OR pi.invoice_no LIKE :search_like
         );
     """
     return text(sql)
@@ -2145,13 +2144,14 @@ def get_bill_pass_by_id_query():
     sql = """
     SELECT
         pi.inward_id,
-        pi.inward_no,
+        pi.inward_sequence_no,
         pi.inward_date,
         pi.sr_no AS bill_pass_no,
         pi.sr_date AS bill_pass_date,
-        pi.invoice_no,
         pi.invoice_date,
-        pi.invoice_amt,
+        pi.invoice_amount,
+        pi.invoice_recvd_date,
+        pi.invoice_due_date,
         pi.supplier_id,
         pm.supp_name AS supplier_name,
         pi.branch_id,
@@ -2160,11 +2160,14 @@ def get_bill_pass_by_id_query():
         bm.co_id,
         cm.co_prefix,
         pi.sr_status,
+        pi.billpass_status,
         sm.status_name AS sr_status_name,
         pi.sr_remarks,
         pi.challan_no,
         pi.challan_date,
-        pi.freight,
+        pi.round_off_value,
+        pi.gross_amount,
+        pi.net_amount,
         -- SR totals
         COALESCE(sr_totals.sr_taxable, 0) AS sr_taxable,
         COALESCE(sr_totals.sr_tax, 0) AS sr_tax,
@@ -2297,7 +2300,7 @@ def get_bill_pass_drcr_note_lines_query():
     """Get DRCR note line items for Bill Pass detail view."""
     sql = """
     SELECT
-        dnd.debit_credit_note_dtl_id,
+        dnd.drcr_note_dtl_id,
         dnd.debit_credit_note_id,
         dnd.inward_dtl_id,
         dnd.debitnote_type,
@@ -2323,7 +2326,31 @@ def get_bill_pass_drcr_note_lines_query():
         FROM drcr_note 
         WHERE inward_id = :inward_id AND status_id = 3
     )
-    ORDER BY dnd.debit_credit_note_id, dnd.debit_credit_note_dtl_id;
+    ORDER BY dnd.debit_credit_note_id, dnd.drcr_note_dtl_id;
+    """
+    return text(sql)
+
+
+def update_bill_pass_query():
+    """
+    Update bill pass fields on proc_inward.
+    Only updates non-NULL parameters (dynamic update pattern).
+    """
+    sql = """
+    UPDATE proc_inward
+    SET
+        invoice_date = COALESCE(:invoice_date, invoice_date),
+        invoice_amount = COALESCE(:invoice_amount, invoice_amount),
+        invoice_recvd_date = COALESCE(:invoice_recvd_date, invoice_recvd_date),
+        invoice_due_date = COALESCE(:invoice_due_date, invoice_due_date),
+        round_off_value = COALESCE(:round_off_value, round_off_value),
+        sr_remarks = COALESCE(:sr_remarks, sr_remarks),
+        billpass_status = COALESCE(:billpass_status, billpass_status),
+        billpass_date = COALESCE(:billpass_date, billpass_date),
+        updated_by = :updated_by,
+        updated_date_time = NOW()
+    WHERE inward_id = :inward_id
+        AND sr_status = 3;
     """
     return text(sql)
 

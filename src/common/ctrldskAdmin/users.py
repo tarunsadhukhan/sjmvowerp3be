@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import  func
 from sqlalchemy.sql import text
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Path
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from src.config.db import default_engine, extract_subdomain_from_request
 from src.authorization.utils import verify_access_token, get_password_hash
 from src.common.query import (get_users_tenant_admin_query, get_users_ctrldesk_admin_query)
-from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap, ConOrgMaster, ConUserRoleMapping
+from .models import Base, ConUser, conRoleMaster, ConRoleMenuMap, ConOrgMaster, ConUserRoleMapping, ConMenuMaster
 
 
 router = APIRouter()
@@ -364,8 +364,264 @@ async def edit_user_tenant_admin(
         )
 
 
+# ─── Portal Admin User Management ─────────────────────────────────────────────
+
+@router.get("/get_orgs_dropdown_portal_user")
+async def get_orgs_dropdown_portal_user(
+    token_data: dict = Depends(verify_access_token),
+):
+    """
+    Get list of active organisations for portal user creation dropdown.
+    Returns con_org_id and con_org_shortname.
+    """
+    try:
+        with Session(default_engine) as session:
+            query = text(
+                "SELECT con_org_id, con_org_shortname, con_org_name "
+                "FROM con_org_master "
+                "WHERE con_org_master_status = 3 AND active = 1 "
+                "ORDER BY con_org_shortname"
+            )
+            result = session.execute(query).fetchall()
+            orgs = [dict(r._mapping) for r in result]
+            return {"data": orgs}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
+class CreatePortalAdminUser(BaseModel):
+    org_id: int
+    email: str
+    name: str
+    password: str = "vowjute@1234"
+
+
+@router.post("/create_portal_admin_user")
+async def create_portal_admin_user(
+    request: Request,
+    user_data: CreatePortalAdminUser,
+    token_data: dict = Depends(verify_access_token),
+):
+    """
+    Create a full-access admin user for an organisation's portal (dashboardportal).
+
+    Steps:
+    1. Validate org exists
+    2. Check for duplicate email within the org
+    3. Create (or reuse) a 'superadmin' role for the org
+    4. Map ALL con_menu_master menus to that role
+    5. Create the user in con_user_master
+    6. Create user-role mapping in con_user_role_mapping
+    """
+    try:
+        creator_id = token_data.get("user_id")
+        if not creator_id:
+            raise HTTPException(status_code=403, detail="User ID not found in token")
+
+        with Session(default_engine) as session:
+            # 1. Validate org exists
+            org = session.query(ConOrgMaster).filter(
+                ConOrgMaster.con_org_id == user_data.org_id,
+                ConOrgMaster.active == 1
+            ).first()
+            if not org:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Organisation with id {user_data.org_id} not found or inactive"
+                )
+
+            # 2. Check duplicate email within this org
+            existing_user = session.query(ConUser).filter(
+                ConUser.con_org_id == user_data.org_id,
+                ConUser.con_user_login_email_id == user_data.email
+            ).first()
+            if existing_user:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"A user with email '{user_data.email}' already exists for this organisation"
+                )
+
+            # 3. Create or reuse 'superadmin' role for the org
+            superadmin_role = session.query(conRoleMaster).filter(
+                conRoleMaster.con_org_id == user_data.org_id,
+                conRoleMaster.con_role_name == "superadmin"
+            ).first()
+
+            if not superadmin_role:
+                superadmin_role = conRoleMaster(
+                    con_role_name="superadmin",
+                    con_org_id=user_data.org_id,
+                    status=1,
+                    is_enable=1,
+                    created_by=creator_id,
+                    created_date_time=datetime.utcnow()
+                )
+                session.add(superadmin_role)
+                session.flush()  # get the role id
+
+                # 4. Map ALL menus from con_menu_master to this role
+                all_menus = session.query(ConMenuMaster).filter(
+                    ConMenuMaster.active == 1
+                ).all()
+
+                for menu in all_menus:
+                    mapping = ConRoleMenuMap(
+                        con_role_id=superadmin_role.con_role_id,
+                        con_menu_id=menu.con_menu_id
+                    )
+                    session.add(mapping)
+
+                session.flush()
+            else:
+                # Role exists – ensure all menus are mapped (idempotent)
+                existing_menu_ids = {
+                    m.con_menu_id for m in session.query(ConRoleMenuMap).filter(
+                        ConRoleMenuMap.con_role_id == superadmin_role.con_role_id
+                    ).all()
+                }
+                all_menus = session.query(ConMenuMaster).filter(
+                    ConMenuMaster.active == 1
+                ).all()
+
+                for menu in all_menus:
+                    if menu.con_menu_id not in existing_menu_ids:
+                        mapping = ConRoleMenuMap(
+                            con_role_id=superadmin_role.con_role_id,
+                            con_menu_id=menu.con_menu_id
+                        )
+                        session.add(mapping)
+
+                session.flush()
+
+            # 5. Create the user in con_user_master
+            hashed_password = get_password_hash(user_data.password)
+            new_user = ConUser(
+                con_org_id=user_data.org_id,
+                con_user_login_email_id=user_data.email,
+                con_user_login_password=hashed_password,
+                con_user_name=user_data.name,
+                con_user_type=1,  # tenant admin type
+                created_by=creator_id,
+                active=1,
+                refresh_token=None
+            )
+            session.add(new_user)
+            session.flush()
+
+            # 6. Create user-role mapping
+            user_role_map = ConUserRoleMapping(
+                con_role_id=superadmin_role.con_role_id,
+                con_user_id=new_user.con_user_id,
+                created_by=creator_id,
+                created_date_time=datetime.utcnow()
+            )
+            session.add(user_role_map)
+
+            session.commit()
+
+            return {
+                "message": "Portal admin user created successfully",
+                "data": {
+                    "user_id": new_user.con_user_id,
+                    "email": new_user.con_user_login_email_id,
+                    "org_id": user_data.org_id,
+                    "org_shortname": org.con_org_shortname,
+                    "role_id": superadmin_role.con_role_id,
+                    "role_name": superadmin_role.con_role_name,
+                }
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.get("/get_portal_admin_users")
+async def get_portal_admin_users(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1),
+    search: Optional[str] = None,
+    token_data: dict = Depends(verify_access_token),
+):
+    """
+    Get list of portal admin users (con_user_type=1, con_org_id IS NOT NULL).
+    """
+    try:
+        offset = (page - 1) * limit
+
+        with Session(default_engine) as session:
+            count_query = text("""
+                SELECT COUNT(*) as total
+                FROM con_user_master cum
+                JOIN con_org_master com ON cum.con_org_id = com.con_org_id
+                WHERE cum.con_org_id IS NOT NULL
+                AND cum.con_user_type = 1
+                AND (:search IS NULL OR
+                    cum.con_user_name LIKE :search OR
+                    cum.con_user_login_email_id LIKE :search OR
+                    com.con_org_shortname LIKE :search)
+            """)
+
+            search_param = f"%{search}%" if search else None
+            total_count = session.execute(count_query, {"search": search_param}).scalar()
+
+            data_query = text("""
+                SELECT
+                    cum.con_user_id,
+                    cum.con_user_name,
+                    cum.con_user_login_email_id,
+                    cum.con_org_id,
+                    com.con_org_shortname,
+                    com.con_org_name,
+                    cum.active,
+                    crm.con_role_id,
+                    crm.con_role_name
+                FROM con_user_master cum
+                JOIN con_org_master com ON cum.con_org_id = com.con_org_id
+                LEFT JOIN con_user_role_mapping curm ON cum.con_user_id = curm.con_user_id
+                LEFT JOIN con_role_master crm ON curm.con_role_id = crm.con_role_id
+                WHERE cum.con_org_id IS NOT NULL
+                AND cum.con_user_type = 1
+                AND (:search IS NULL OR
+                    cum.con_user_name LIKE :search OR
+                    cum.con_user_login_email_id LIKE :search OR
+                    com.con_org_shortname LIKE :search)
+                ORDER BY cum.con_user_id DESC
+                LIMIT :limit OFFSET :offset
+            """)
+
+            result = session.execute(data_query, {
+                "search": search_param,
+                "limit": limit,
+                "offset": offset
+            }).fetchall()
+
+            users = [dict(r._mapping) for r in result]
+
+            return {"data": users, "total": total_count}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 
