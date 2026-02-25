@@ -40,8 +40,8 @@ class TestCoInvoiceTypeMapSetup:
             _mock_row({"co_id": 2, "co_name": "Company B"}),
         ]
         types = [
-            _mock_row({"invoice_type_id": 1, "invoice_type_name": "GST Invoice", "invoice_type_code": "GST"}),
-            _mock_row({"invoice_type_id": 2, "invoice_type_name": "Bill of Supply", "invoice_type_code": "BOS"}),
+            _mock_row({"invoice_type_id": 1, "invoice_type_name": "GST Invoice"}),
+            _mock_row({"invoice_type_id": 2, "invoice_type_name": "Bill of Supply"}),
         ]
         mappings = [
             _mock_row({"co_id": 1, "invoice_type_id": 1}),

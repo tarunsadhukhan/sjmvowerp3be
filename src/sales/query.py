@@ -57,13 +57,13 @@ def get_customer_branches_bulk(co_id: int = None):
 
 
 def get_brokers_for_sales(co_id: int = None):
-    """Get brokers (party_type_id contains 3) for sales."""
+    """Get brokers (party_type_id contains 4) for sales."""
     sql = """SELECT
         pm.party_id AS broker_id,
         pm.supp_name AS broker_name,
         pm.supp_code AS broker_code
     FROM party_mst pm
-    WHERE FIND_IN_SET("3", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+    WHERE FIND_IN_SET("4", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         AND (:co_id IS NULL OR pm.co_id = :co_id)
         AND pm.active = 1
     ORDER BY pm.supp_name;"""
@@ -103,15 +103,23 @@ def get_item_by_group_id_saleable(item_group_id: int):
 
 def get_item_uom_by_group_id_saleable(item_group_id: int):
     """Get UOM mappings for saleable items in a given item group."""
-    sql = """SELECT uimm.item_id, uimm.map_to_id, um.uom_name
+    sql = """SELECT uimm.item_id,
+       uimm.map_from_id,
+       um_from.uom_name AS map_from_name,
+       uimm.map_to_id,
+       um_to.uom_name AS uom_name,
+       uimm.relation_value,
+       uimm.rounding
     FROM uom_item_map_mst AS uimm
     JOIN item_mst AS im
       ON im.item_id = uimm.item_id
      AND im.item_grp_id = :item_group_id
      AND im.saleable = 1
      AND im.active = 1
-    LEFT JOIN uom_mst AS um
-      ON um.uom_id = uimm.map_to_id;"""
+    LEFT JOIN uom_mst AS um_to
+      ON um_to.uom_id = uimm.map_to_id
+    LEFT JOIN uom_mst AS um_from
+      ON um_from.uom_id = uimm.map_from_id;"""
     return text(sql)
 
 

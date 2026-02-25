@@ -188,12 +188,6 @@ class InvoiceTypeMst(Base):
 
     invoice_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     invoice_type_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    invoice_type_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    updated_date_time: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.current_timestamp()
-    )
 
     # Relationships
     company_mappings: Mapped[List["InvoiceTypeCoMap"]] = relationship(

@@ -27,6 +27,7 @@ from src.sales.quotation import (
 from src.sales.query import (
     get_customers_for_sales,
     get_customer_branches_bulk,
+    get_brokers_for_sales,
     get_transporters_for_sales,
     get_approved_delivery_orders_query,
     get_delivery_order_lines_for_invoice,
@@ -106,6 +107,11 @@ async def get_sales_invoice_setup_1(
         for cust in customers:
             cust["branches"] = branches_by_party.get(cust.get("party_id"), [])
 
+        # Brokers
+        broker_query = get_brokers_for_sales(co_id=co_id)
+        broker_result = db.execute(broker_query, {"co_id": co_id}).fetchall()
+        brokers = [dict(r._mapping) for r in broker_result]
+
         # Transporters
         transporter_query = get_transporters_for_sales(co_id=co_id)
         transporter_result = db.execute(transporter_query, {"co_id": co_id}).fetchall()
@@ -143,12 +149,27 @@ async def get_sales_invoice_setup_1(
         itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
         item_groups = [dict(r._mapping) for r in itemgrp_result]
 
+        # Invoice types mapped to company
+        invoice_types_result = db.execute(
+            text("""
+                SELECT itm.invoice_type_id, itm.invoice_type_name
+                FROM invoice_type_co_map itcm
+                JOIN invoice_type_mst itm ON itm.invoice_type_id = itcm.invoice_type_id
+                WHERE itcm.co_id = :co_id AND itcm.active = 1
+                ORDER BY itm.invoice_type_name
+            """),
+            {"co_id": co_id},
+        ).fetchall()
+        invoice_types = [dict(r._mapping) for r in invoice_types_result]
+
         return {
             "branches": branches,
             "customers": customers,
+            "brokers": brokers,
             "transporters": transporters,
             "approved_delivery_orders": approved_delivery_orders,
             "item_groups": item_groups,
+            "invoice_types": invoice_types,
         }
     except HTTPException:
         raise

@@ -10,7 +10,17 @@
       "Bash(npx tsc:*)",
       "Bash(git status:*)",
       "Bash(source .venv/Scripts/activate)",
-      "Bash(python -m pytest src/test/test_jute_sqc_morrah_weight.py -v)"
+      "Bash(python -m pytest src/test/test_jute_sqc_morrah_weight.py -v)",
+      "Bash(pytest src/test/test_co_invoice_type_map.py src/test/test_models_sales_invoice_type.py -v)",
+      "Bash(python -m pytest src/test/test_co_invoice_type_map.py src/test/test_models_sales_invoice_type.py -v)",
+      "Bash(curl -s http://localhost:8000/api/companyAdmin/co_invoice_type_map_setup)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(python -m pytest src/test/test_sales_order_setup_invoice_types.py -v)",
+      "Bash(python -m pytest src/test/test_co_invoice_type_map.py src/test/test_models_sales_invoice_type.py src/test/test_sales_order_setup_invoice_types.py -v)",
+      "Bash(python -m pytest src/test/test_delivery_order_setup_invoice_types.py src/test/test_sales_invoice_setup_invoice_types.py src/test/test_sales_order_setup_invoice_types.py -v)",
+      "Bash(/c/code/vowerp3be/.venv/Scripts/python \"c:/code/vowerp3ui/_fix_rate_column.py\")",
+      "Bash(python -m pytest src/test/ -v --tb=short)"
     ]
   }
 }

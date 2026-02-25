@@ -165,6 +165,19 @@ async def get_sales_order_setup_1(
             itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
             item_groups = [dict(r._mapping) for r in itemgrp_result]
 
+        # Invoice types mapped to this company
+        invoice_types_result = db.execute(
+            text("""
+                SELECT itm.invoice_type_id, itm.invoice_type_name
+                FROM invoice_type_co_map itcm
+                JOIN invoice_type_mst itm ON itm.invoice_type_id = itcm.invoice_type_id
+                WHERE itcm.co_id = :co_id AND itcm.active = 1
+                ORDER BY itm.invoice_type_name
+            """),
+            {"co_id": co_id},
+        ).fetchall()
+        invoice_types = [dict(r._mapping) for r in invoice_types_result]
+
         return {
             "branches": branches,
             "customers": customers,
@@ -173,6 +186,7 @@ async def get_sales_order_setup_1(
             "co_config": co_config,
             "approved_quotations": approved_quotations,
             "item_groups": item_groups,
+            "invoice_types": invoice_types,
         }
     except HTTPException:
         raise
