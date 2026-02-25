@@ -372,13 +372,23 @@ async def subdept_master_create(
         if not branch_id or not subdept_name or not subdept_code:
             raise HTTPException(status_code=400, detail="Branch ID, subdepartment code, and subdepartment name are required")
 
+        # order_by is mandatory and must be a valid positive integer
+        if order_by is None or str(order_by).strip() == "":
+            raise HTTPException(status_code=400, detail="Order By (order_by) is required")
+        try:
+            order_by_int = int(order_by)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Order By (order_by) must be a valid integer")
+        if order_by_int < 0:
+            raise HTTPException(status_code=400, detail="Order By (order_by) must be a non-negative integer")
+
         new_subdept_master = SubDeptMst(
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
             sub_dept_code=subdept_code,
             sub_dept_desc=subdept_name,
             dept_id=dept_id,
             updated_date_time=datetime.utcnow(),
-            order_no=order_by,
+            order_no=order_by_int,
         )
         print(f"New SubDeptMst object: {new_subdept_master}", flush=True)
         db.add(new_subdept_master)
