@@ -831,3 +831,36 @@ class JuteBatchDailyAssign(Base):
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
+
+
+# =============================================================================
+# JUTE SQC MORRAH WEIGHT QC
+# =============================================================================
+
+class JuteSqcMorrahWt(Base):
+    __tablename__ = "jute_sqc_morrah_wt"
+    __table_args__ = {"extend_existing": True}
+
+    morrah_wt_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    co_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    branch_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    entry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    inspector_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    dept_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    trolley_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    avg_mr_pct: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    weights: Mapped[str] = mapped_column(String(500), nullable=False)
+    calc_avg_weight: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    calc_max_weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    calc_min_weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    calc_range: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    calc_cv_pct: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    count_lt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    count_ok: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    count_hy: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=func.current_timestamp()
+    )

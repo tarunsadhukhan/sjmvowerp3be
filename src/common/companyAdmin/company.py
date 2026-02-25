@@ -15,6 +15,11 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
+
+class CoInvoiceTypeMapSavePayload(BaseModel):
+    co_id: int
+    invoice_type_ids: List[int] = []
+
 @router.get("/get_co_data_all")
 async def getOrgsFull(
     request: Request,
@@ -334,6 +339,129 @@ async def create_update_company_config(
     except Exception as exc:
         print(f"Unexpected error in create_update_company_config: {exc}")
         import traceback; traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
+
+@router.get("/co_invoice_type_map_setup")
+async def get_co_invoice_type_map_setup(
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    """Return companies, invoice types, and current company-to-invoice-type mappings."""
+    try:
+        companies = db.execute(
+            text(
+                """
+                SELECT co_id, co_name
+                FROM co_mst
+                ORDER BY co_name
+                """
+            )
+        ).fetchall()
+
+        invoice_types = db.execute(
+            text(
+                """
+                SELECT invoice_type_id, invoice_type_name, invoice_type_code
+                FROM invoice_type_mst
+                WHERE active = 1
+                ORDER BY invoice_type_name
+                """
+            )
+        ).fetchall()
+
+        mappings = db.execute(
+            text(
+                """
+                SELECT co_id, invoice_type_id
+                FROM invoice_type_co_map
+                WHERE active = 1
+                """
+            )
+        ).fetchall()
+
+        return {
+            "companies": [dict(row._mapping) for row in companies],
+            "invoice_types": [dict(row._mapping) for row in invoice_types],
+            "mappings": [dict(row._mapping) for row in mappings],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in get_co_invoice_type_map_setup: {exc}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
+
+@router.post("/co_invoice_type_map_save")
+async def save_co_invoice_type_map(
+    payload: CoInvoiceTypeMapSavePayload,
+    token_data: dict = Depends(verify_access_token),
+    db: Session = Depends(get_tenant_db),
+):
+    """Replace company-to-invoice-type mappings for a given company."""
+    try:
+        co_exists = db.execute(
+            text("SELECT co_id FROM co_mst WHERE co_id = :co_id LIMIT 1"),
+            {"co_id": payload.co_id},
+        ).fetchone()
+        if not co_exists:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        valid_invoice_type_ids = db.execute(
+            text(
+                """
+                SELECT invoice_type_id
+                FROM invoice_type_mst
+                WHERE active = 1
+                """
+            )
+        ).fetchall()
+        allowed_ids = {int(row._mapping["invoice_type_id"]) for row in valid_invoice_type_ids}
+
+        requested_ids = sorted({int(value) for value in payload.invoice_type_ids})
+        invalid_ids = [value for value in requested_ids if value not in allowed_ids]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid invoice_type_ids: {invalid_ids}",
+            )
+
+        db.execute(
+            text("DELETE FROM invoice_type_co_map WHERE co_id = :co_id"),
+            {"co_id": payload.co_id},
+        )
+
+        user_id = token_data.get("user_id") if isinstance(token_data, dict) else None
+        for invoice_type_id in requested_ids:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO invoice_type_co_map (co_id, invoice_type_id, active, updated_by, updated_date_time)
+                    VALUES (:co_id, :invoice_type_id, 1, :updated_by, CURRENT_TIMESTAMP)
+                    """
+                ),
+                {
+                    "co_id": payload.co_id,
+                    "invoice_type_id": invoice_type_id,
+                    "updated_by": user_id,
+                },
+            )
+
+        db.commit()
+        return {
+            "message": "Invoice type mappings saved successfully",
+            "co_id": payload.co_id,
+            "invoice_type_ids": requested_ids,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Unexpected error in save_co_invoice_type_map: {exc}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
 

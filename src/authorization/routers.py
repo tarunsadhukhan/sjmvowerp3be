@@ -12,7 +12,7 @@ from src.authorization.utils import (
     ALGORITHM
 )
 from src.authorization.auth import login_user, login_user_console
-from src.config.db import default_engine
+from src.config.db import default_engine, extract_subdomain_from_request
 from datetime import datetime
 import jwt
 
@@ -57,8 +57,9 @@ def login_console_route(request: Request, login_data: LoginRequest):
     """Login Route (calls login_user_console from auth.py)"""
     print("Login User")
 
-    # ✅ Extract `X-Subdomain` before calling `login_user()`
-    subdomain = request.headers.get("X-Subdomain", "default")
+    # For console login, prefer frontend-provided subdomain from browser hostname; fallback to request extraction.
+    header_subdomain = (request.headers.get("X-Subdomain") or "").strip().lower()
+    subdomain = header_subdomain if header_subdomain else extract_subdomain_from_request(request)
     print(f"DEBUG: Extracted Subdomain = {subdomain}")  # Debugging
     print('hhhsub=====',subdomain)
     return login_user_console(
@@ -87,6 +88,7 @@ async def verify_session(request: Request):
     """
     Verify session validity.
     Returns 200 { ok: true } if valid, 401 if not.
+    Also validates that the user's org matches the current subdomain.
     """
     try:
         access_token = request.cookies.get("access_token")
@@ -95,6 +97,26 @@ async def verify_session(request: Request):
         if access_token:
             try:
                 payload = verify_access_token(access_token)
+
+                # --- Org/subdomain validation for console sessions ---
+                token_subdomain = payload.get("subdomain")
+                token_org_id = payload.get("con_org_id")
+                # Only validate org if the token was issued for a console session
+                # (portal tokens have "type": "portal" and no "subdomain")
+                if token_subdomain is not None:
+                    # Resolve current subdomain from request
+                    current_subdomain = extract_subdomain_from_request(request).strip().lower()
+                    # Also check X-Subdomain header (frontend sends browser hostname)
+                    header_sub = (request.headers.get("X-Subdomain") or "").strip().lower()
+                    resolved_current = header_sub if header_sub and header_sub != "default" else current_subdomain
+                    if not resolved_current or resolved_current == "default":
+                        resolved_current = "default"
+
+                    # If the token was issued for a specific subdomain, verify it matches
+                    if token_subdomain != resolved_current:
+                        print(f"Session org mismatch: token={token_subdomain}, current={resolved_current}")
+                        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Session not valid for this organization")
+
                 return {"ok": True}
             except HTTPException as he:
                 if he.status_code != 401:
@@ -108,6 +130,16 @@ async def verify_session(request: Request):
 
                     if not user_id:
                         raise HTTPException(status_code=HTTP_401_UNAUTHORIZED)
+
+                    # --- Validate org/subdomain even for expired tokens ---
+                    token_subdomain = expired_payload.get("subdomain")
+                    if token_subdomain is not None:
+                        current_sub = (request.headers.get("X-Subdomain") or "").strip().lower()
+                        if not current_sub or current_sub == "default":
+                            current_sub = extract_subdomain_from_request(request).strip().lower()
+                        if token_subdomain != current_sub:
+                            print(f"Refresh org mismatch: token={token_subdomain}, current={current_sub}")
+                            raise HTTPException(status_code=HTTP_401_UNAUTHORIZED)
 
                     # Get refresh token from database
                     with Session(default_engine) as session:
@@ -133,8 +165,17 @@ async def verify_session(request: Request):
                         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
                             raise HTTPException(status_code=HTTP_401_UNAUTHORIZED)
 
+                        # Preserve org context in refreshed token
+                        new_token_data = {"user_id": user_id}
+                        if expired_payload.get("con_org_id") is not None:
+                            new_token_data["con_org_id"] = expired_payload["con_org_id"]
+                        if expired_payload.get("subdomain") is not None:
+                            new_token_data["subdomain"] = expired_payload["subdomain"]
+                        if expired_payload.get("type") is not None:
+                            new_token_data["type"] = expired_payload["type"]
+
                         # Create new access token
-                        new_access_token = create_access_token({"user_id": user_id})
+                        new_access_token = create_access_token(new_token_data)
 
                         # Create response with just ok:true
                         response = JSONResponse(content={"ok": True})

@@ -4,7 +4,10 @@ from sqlalchemy.sql import text
 from sqlalchemy import create_engine
 from src.config.db import get_db_names, default_engine, Session, extract_subdomain_from_request
 from fastapi.responses import JSONResponse
-from src.authorization.query import get_admin_login_query, get_company_admin_login_query
+from src.authorization.query import (
+    get_admin_login_query,
+    get_company_admin_login_query,
+)
 import os
 
 def login_user_console(
@@ -17,21 +20,48 @@ def login_user_console(
     """Login logic - Queries user table where username, password, and subdomain match"""
     try:
         with Session(default_engine) as session:
-            # Get appropriate query based on subdomain
-            query = get_admin_login_query() if subdomain == 'admin' else get_company_admin_login_query()
-            
+            request_subdomain = extract_subdomain_from_request(request).strip().lower()
+            header_subdomain = (subdomain or "").strip().lower()
+            resolved_subdomain = request_subdomain if request_subdomain and request_subdomain != "default" else header_subdomain
+
+            if not resolved_subdomain:
+                resolved_subdomain = "default"
+
+            # Get appropriate query and bind params based on subdomain
+            if resolved_subdomain == "admin":
+                query = get_admin_login_query()
+                query_params = {"username": username}
+            else:
+                query = get_company_admin_login_query()
+                query_params = {
+                    "username": username,
+                    "subdomain": resolved_subdomain,
+                }
+
             # Execute query and get user
-            result = session.execute(query, {"username": username})
+            result = session.execute(query, query_params)
             user = result.fetchone() if result else None
-            
-            # Validate user exists and password matches
-            if not user or not hasattr(user, 'con_user_login_password') or not verify_password(password, user.con_user_login_password):
+
+            # Validate user exists
+            if not user or not hasattr(user, 'con_user_login_password'):
                 return JSONResponse(
                     content={
                         "access_token": "",
                         "token_type": "",
                         "status": 401,
-                        "message": "Invalid username or password",
+                        "message": "User is not registered",
+                    },
+                    status_code=401,
+                )
+
+            # Validate password
+            if not verify_password(password, user.con_user_login_password):
+                return JSONResponse(
+                    content={
+                        "access_token": "",
+                        "token_type": "",
+                        "status": 401,
+                        "message": "Wrong password entered",
                     },
                     status_code=401,
                 )
@@ -41,11 +71,19 @@ def login_user_console(
             if not user_id:
                 raise HTTPException(status_code=500, detail="User ID not found in database")
 
+            # Build token payload with org context for session validation
+            con_org_id = getattr(user, 'con_org_id', None)
+            token_payload = {
+                "user_id": user_id,
+                "con_org_id": con_org_id,
+                "subdomain": resolved_subdomain,
+            }
+
             # Create access token for frontend
-            token = create_access_token({"user_id": user_id})
+            token = create_access_token(token_payload)
             
             # Create refresh token (stored only in DB)
-            refresh_token = create_refresh_token({"user_id": user_id})
+            refresh_token = create_refresh_token(token_payload)
             
             # Update refresh token in DB only
             try:
