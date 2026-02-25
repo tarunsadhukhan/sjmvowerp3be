@@ -660,7 +660,7 @@ async def jute_gate_entry_update(
         # Get existing jute_mr record
         existing = db.execute(
             text("""
-                SELECT jm.jute_mr_id, jm.status_id, jm.in_time, jm.jute_gate_entry_date
+                SELECT jm.jute_mr_id, jm.status_id, jm.in_time, jm.jute_gate_entry_date, jm.qc_check
                 FROM jute_mr jm
                 INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
                 WHERE jm.jute_mr_id = :id AND bm.co_id = :co_id
@@ -671,8 +671,33 @@ async def jute_gate_entry_update(
         if not existing:
             raise HTTPException(status_code=404, detail="Jute Gate Entry not found")
         
+        # QC checkpoint: tare_weight, variable_shortage, out_time require QC completion
+        qc_complete = existing.qc_check == 1 if existing.qc_check is not None else False
+        
+        if not qc_complete:
+            if payload.tare_weight is not None and payload.tare_weight > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Tare Weight cannot be entered until Quality Check (QC) is completed"
+                )
+            if payload.variable_shortage is not None and payload.variable_shortage > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Variable Shortage cannot be entered until Quality Check (QC) is completed"
+                )
+            if payload.out_time is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Out Time cannot be recorded until Quality Check (QC) is completed"
+                )
+        
         # Handle OUT action
         if payload.action and payload.action.upper() == "OUT":
+            if not qc_complete:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Vehicle cannot be marked as OUT until Quality Check (QC) is completed"
+                )
             if not payload.out_time:
                 raise HTTPException(status_code=400, detail="out_time is required for OUT action")
             
