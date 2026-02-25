@@ -38,15 +38,23 @@ def get_item_make_by_group_id(item_group_id: int):
     return query
 
 def get_item_uom_by_group_id(item_group_id: int):
-    sql = f"""SELECT uimm.item_id, uimm.map_to_id, um.uom_name
+    sql = """SELECT uimm.item_id,
+       uimm.map_from_id,
+       um_from.uom_name AS map_from_name,
+       uimm.map_to_id,
+       um_to.uom_name AS uom_name,
+       uimm.relation_value,
+       uimm.rounding
 FROM uom_item_map_mst AS uimm
 JOIN item_mst AS im
   ON im.item_id = uimm.item_id
  AND im.item_grp_id = :item_group_id
  AND im.purchaseable = 1
  AND im.active = 1
-LEFT JOIN uom_mst AS um
-  ON um.uom_id = uimm.map_to_id;"""
+LEFT JOIN uom_mst AS um_to
+  ON um_to.uom_id = uimm.map_to_id
+LEFT JOIN uom_mst AS um_from
+  ON um_from.uom_id = uimm.map_from_id;"""
     query = text(sql)
     return query
 
@@ -1686,7 +1694,7 @@ def get_inward_for_sr_query():
         cm.co_prefix,
         pi.supplier_id,
         pm.supp_name AS supplier_name,
-        sup_city.state_id AS supplier_state_id,
+        pbm.state_id AS supplier_state_id,
         sup_state.state AS supplier_state_name,
         pi.bill_branch_id,
         bb.branch_name AS billing_branch_name,

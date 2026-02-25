@@ -41,8 +41,9 @@ def get_customer_branches_bulk(co_id: int = None):
     sql = """SELECT
         pbm.party_mst_branch_id,
         pbm.party_id,
-        COALESCE(pbm.address, '') AS party_branch_name,
-        pbm.address,
+        COALESCE(pbm.address, '') AS address,
+        COALESCE(pbm.address_additional, '') AS address_additional,
+        COALESCE(pbm.zip_code, '') AS zip_code,
         pbm.state_id,
         sm.state AS state_name,
         pbm.gst_no
@@ -57,13 +58,13 @@ def get_customer_branches_bulk(co_id: int = None):
 
 
 def get_brokers_for_sales(co_id: int = None):
-    """Get brokers (party_type_id contains 3) for sales."""
+    """Get brokers (party_type_id contains 4) for sales."""
     sql = """SELECT
         pm.party_id AS broker_id,
         pm.supp_name AS broker_name,
         pm.supp_code AS broker_code
     FROM party_mst pm
-    WHERE FIND_IN_SET("3", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+    WHERE FIND_IN_SET("4", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         AND (:co_id IS NULL OR pm.co_id = :co_id)
         AND pm.active = 1
     ORDER BY pm.supp_name;"""
@@ -71,13 +72,13 @@ def get_brokers_for_sales(co_id: int = None):
 
 
 def get_transporters_for_sales(co_id: int = None):
-    """Get transporters (party_type_id contains 4) for sales."""
+    """Get transporters (party_type_id contains 5) for sales."""
     sql = """SELECT
         pm.party_id AS transporter_id,
         pm.supp_name AS transporter_name,
         pm.supp_code AS transporter_code
     FROM party_mst pm
-    WHERE FIND_IN_SET("4", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
+    WHERE FIND_IN_SET("5", REPLACE(REPLACE(pm.party_type_id, "{", ""), "}", "")) > 0
         AND (:co_id IS NULL OR pm.co_id = :co_id)
         AND pm.active = 1
     ORDER BY pm.supp_name;"""
@@ -103,15 +104,23 @@ def get_item_by_group_id_saleable(item_group_id: int):
 
 def get_item_uom_by_group_id_saleable(item_group_id: int):
     """Get UOM mappings for saleable items in a given item group."""
-    sql = """SELECT uimm.item_id, uimm.map_to_id, um.uom_name
+    sql = """SELECT uimm.item_id,
+       uimm.map_from_id,
+       um_from.uom_name AS map_from_name,
+       uimm.map_to_id,
+       um_to.uom_name AS uom_name,
+       uimm.relation_value,
+       uimm.rounding
     FROM uom_item_map_mst AS uimm
     JOIN item_mst AS im
       ON im.item_id = uimm.item_id
      AND im.item_grp_id = :item_group_id
      AND im.saleable = 1
      AND im.active = 1
-    LEFT JOIN uom_mst AS um
-      ON um.uom_id = uimm.map_to_id;"""
+    LEFT JOIN uom_mst AS um_to
+      ON um_to.uom_id = uimm.map_to_id
+    LEFT JOIN uom_mst AS um_from
+      ON um_from.uom_id = uimm.map_from_id;"""
     return text(sql)
 
 
@@ -493,7 +502,7 @@ def insert_sales_order():
     sql = """INSERT INTO sales_order (
         updated_by, updated_date_time,
         sales_order_date, sales_no, invoice_type,
-        branch_id, quotation_id, party_id, party_branch_id,
+        branch_id, quotation_id, party_id,
         broker_id, billing_to_id, shipping_to_id, transporter_id,
         sales_order_expiry_date, broker_commission_percent,
         footer_note, terms_conditions, internal_note,
@@ -503,7 +512,7 @@ def insert_sales_order():
     ) VALUES (
         :updated_by, :updated_date_time,
         :sales_order_date, :sales_no, :invoice_type,
-        :branch_id, :quotation_id, :party_id, :party_branch_id,
+        :branch_id, :quotation_id, :party_id,
         :broker_id, :billing_to_id, :shipping_to_id, :transporter_id,
         :sales_order_expiry_date, :broker_commission_percent,
         :footer_note, :terms_conditions, :internal_note,
@@ -559,7 +568,6 @@ def update_sales_order():
         branch_id = :branch_id,
         quotation_id = :quotation_id,
         party_id = :party_id,
-        party_branch_id = :party_branch_id,
         broker_id = :broker_id,
         billing_to_id = :billing_to_id,
         shipping_to_id = :shipping_to_id,
@@ -597,6 +605,47 @@ def delete_sales_order_dtl_gst():
         SELECT sales_order_dtl_id FROM sales_order_dtl
         WHERE sales_order_id = :sales_order_id
     );"""
+    return text(sql)
+
+
+def insert_sales_order_dtl_hessian():
+    sql = """INSERT INTO sales_order_dtl_hessian (
+        sales_order_dtl_id,
+        qty_bales, rate_per_bale,
+        billing_rate_mt, billing_rate_bale,
+        updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_dtl_id,
+        :qty_bales, :rate_per_bale,
+        :billing_rate_mt, :billing_rate_bale,
+        :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_dtl_hessian():
+    sql = """DELETE FROM sales_order_dtl_hessian
+    WHERE sales_order_dtl_id IN (
+        SELECT sales_order_dtl_id FROM sales_order_dtl
+        WHERE sales_order_id = :sales_order_id
+    );"""
+    return text(sql)
+
+
+def get_sales_order_hessian_by_id_query():
+    sql = """SELECT
+        soh.sales_order_dtl_hessian_id,
+        soh.sales_order_dtl_id,
+        soh.qty_bales,
+        soh.rate_per_bale,
+        soh.billing_rate_mt,
+        soh.billing_rate_bale
+    FROM sales_order_dtl_hessian AS soh
+    WHERE soh.sales_order_dtl_id IN (
+        SELECT sales_order_dtl_id FROM sales_order_dtl
+        WHERE sales_order_id = :sales_order_id AND active = 1
+    )
+    ORDER BY soh.sales_order_dtl_id;"""
     return text(sql)
 
 
@@ -673,7 +722,6 @@ def get_sales_order_by_id_query():
         sq.quotation_no,
         so.party_id,
         pm.supp_name AS party_name,
-        so.party_branch_id,
         so.broker_id,
         brkr.supp_name AS broker_name,
         so.billing_to_id,
@@ -727,7 +775,7 @@ def get_sales_order_dtl_by_id_query():
         imk.item_make_name,
         sod.quantity,
         sod.uom_id,
-        um.uom_name,
+        qum.uom_name AS uom_name,
         sod.rate,
         sod.discount_type,
         sod.discounted_rate,
@@ -739,7 +787,7 @@ def get_sales_order_dtl_by_id_query():
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
-    LEFT JOIN uom_mst AS um ON um.uom_id = sod.uom_id
+    LEFT JOIN uom_mst AS qum ON qum.uom_id = sod.uom_id
     WHERE sod.sales_order_id = :sales_order_id
         AND sod.active = 1
     ORDER BY sod.sales_order_dtl_id;"""
@@ -843,7 +891,7 @@ def get_sales_order_lines_for_delivery():
         imk.item_make_name,
         sod.quantity,
         sod.uom_id,
-        um.uom_name,
+        qum.uom_name AS uom_name,
         sod.rate,
         sod.discount_type,
         sod.discounted_rate,
@@ -854,7 +902,7 @@ def get_sales_order_lines_for_delivery():
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
-    LEFT JOIN uom_mst AS um ON um.uom_id = sod.uom_id
+    LEFT JOIN uom_mst AS qum ON qum.uom_id = sod.uom_id
     WHERE sod.sales_order_id = :sales_order_id
         AND sod.active = 1
     ORDER BY sod.sales_order_dtl_id;"""
@@ -869,20 +917,20 @@ def insert_sales_delivery_order():
     sql = """INSERT INTO sales_delivery_order (
         updated_by, updated_date_time,
         delivery_order_date, delivery_order_no,
-        branch_id, sales_order_id, party_id, party_branch_id,
+        branch_id, sales_order_id, party_id,
         billing_to_id, shipping_to_id, transporter_id,
         vehicle_no, driver_name, driver_contact,
-        eway_bill_no, eway_bill_date, expected_delivery_date,
+        expected_delivery_date,
         footer_note, internal_note,
         gross_amount, net_amount, freight_charges, round_off_value,
         status_id, approval_level, active
     ) VALUES (
         :updated_by, :updated_date_time,
         :delivery_order_date, :delivery_order_no,
-        :branch_id, :sales_order_id, :party_id, :party_branch_id,
+        :branch_id, :sales_order_id, :party_id,
         :billing_to_id, :shipping_to_id, :transporter_id,
         :vehicle_no, :driver_name, :driver_contact,
-        :eway_bill_no, :eway_bill_date, :expected_delivery_date,
+        :expected_delivery_date,
         :footer_note, :internal_note,
         :gross_amount, :net_amount, :freight_charges, :round_off_value,
         :status_id, :approval_level, :active
@@ -934,15 +982,12 @@ def update_sales_delivery_order():
         branch_id = :branch_id,
         sales_order_id = :sales_order_id,
         party_id = :party_id,
-        party_branch_id = :party_branch_id,
         billing_to_id = :billing_to_id,
         shipping_to_id = :shipping_to_id,
         transporter_id = :transporter_id,
         vehicle_no = :vehicle_no,
         driver_name = :driver_name,
         driver_contact = :driver_contact,
-        eway_bill_no = :eway_bill_no,
-        eway_bill_date = :eway_bill_date,
         expected_delivery_date = :expected_delivery_date,
         footer_note = :footer_note,
         internal_note = :internal_note,
@@ -1047,7 +1092,6 @@ def get_delivery_order_by_id_query():
         so.sales_no,
         sdo.party_id,
         pm.supp_name AS party_name,
-        sdo.party_branch_id,
         sdo.billing_to_id,
         sdo.shipping_to_id,
         sdo.transporter_id,
@@ -1055,8 +1099,6 @@ def get_delivery_order_by_id_query():
         sdo.vehicle_no,
         sdo.driver_name,
         sdo.driver_contact,
-        sdo.eway_bill_no,
-        sdo.eway_bill_date,
         sdo.footer_note,
         sdo.internal_note,
         sdo.gross_amount,
@@ -1244,8 +1286,7 @@ def get_delivery_order_lines_for_invoice():
 def get_invoice_table_query():
     sql = """SELECT
         si.invoice_id,
-        si.invoice_unique_no,
-        si.invoice_no_string,
+        si.invoice_no,
         si.invoice_date,
         si.branch_id,
         bm.branch_name,
@@ -1254,22 +1295,20 @@ def get_invoice_table_query():
         cm.co_prefix,
         si.party_id,
         pm.supp_name AS party_name,
-        si.del_order_no,
+        si.sales_delivery_order_id,
         si.invoice_amount,
-        si.grand_total,
-        si.status,
+        si.status_id,
         sm.status_name
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
-    LEFT JOIN status_mst AS sm ON sm.status_id = si.status
+    LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
     WHERE (si.is_active = 1 OR si.is_active IS NULL)
         AND (:co_id IS NULL OR bm.co_id = :co_id)
         AND (
             :search_like IS NULL
-            OR si.invoice_no_string LIKE :search_like
-            OR CAST(si.invoice_unique_no AS CHAR) LIKE :search_like
+            OR CAST(si.invoice_no AS CHAR) LIKE :search_like
             OR pm.supp_name LIKE :search_like
             OR bm.branch_name LIKE :search_like
         )
@@ -1287,8 +1326,7 @@ def get_invoice_table_count_query():
         AND (:co_id IS NULL OR bm.co_id = :co_id)
         AND (
             :search_like IS NULL
-            OR si.invoice_no_string LIKE :search_like
-            OR CAST(si.invoice_unique_no AS CHAR) LIKE :search_like
+            OR CAST(si.invoice_no AS CHAR) LIKE :search_like
             OR pm.supp_name LIKE :search_like
             OR bm.branch_name LIKE :search_like
         );"""
@@ -1298,8 +1336,7 @@ def get_invoice_table_count_query():
 def get_invoice_by_id_query():
     sql = """SELECT
         si.invoice_id,
-        si.invoice_unique_no,
-        si.invoice_no_string,
+        si.invoice_no,
         si.invoice_date,
         si.challan_no,
         si.challan_date,
@@ -1310,12 +1347,9 @@ def get_invoice_by_id_query():
         cm.co_prefix,
         si.party_id,
         pm.supp_name AS party_name,
-        si.del_order_no,
-        si.del_order_date,
-        si.sale_no,
-        si.shipping_address,
+        si.sales_delivery_order_id,
+        si.broker_id,
         si.shipping_state_code,
-        si.shipping_state_name,
         si.transporter_id,
         trns.supp_name AS transporter_name,
         si.vehicle_no,
@@ -1326,23 +1360,21 @@ def get_invoice_by_id_query():
         si.terms,
         si.terms_conditions,
         si.invoice_amount,
-        si.grand_total,
         si.tax_amount,
+        si.tax_payable,
         si.freight_charges,
         si.round_off,
-        si.tcs_percentage,
-        si.tcs_amount,
-        si.status,
+        si.status_id,
         sm.status_name,
         si.updated_by,
-        si.updated_date,
+        si.updated_date_time,
         si.intra_inter_state
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN party_mst AS trns ON trns.party_id = si.transporter_id
-    LEFT JOIN status_mst AS sm ON sm.status_id = si.status
+    LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
     WHERE si.invoice_id = :invoice_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)
@@ -1372,7 +1404,9 @@ def get_invoice_dtl_by_id_query():
         ili.sgst_per,
         ili.igst_amt,
         ili.igst_per,
-        ili.item_description
+        ili.item_description,
+        ili.qty_2,
+        ili.uom_2
     FROM sales_invoice_dtl AS ili
     LEFT JOIN item_mst AS im ON CAST(im.item_id AS CHAR) = ili.item_id
     LEFT JOIN uom_mst AS um ON um.uom_name = ili.uom
@@ -1384,57 +1418,57 @@ def get_invoice_dtl_by_id_query():
 
 def insert_sales_invoice():
     sql = """INSERT INTO sales_invoice (
-        invoice_date, invoice_unique_no, invoice_no_string,
-        branch_id, co_id, party_id,
-        del_order_no, del_order_date,
+        invoice_date, invoice_no,
+        branch_id, party_id,
+        sales_delivery_order_id, broker_id,
         challan_no, challan_date,
         transporter_id, vehicle_no,
         eway_bill_no, eway_bill_date,
         invoice_type, footer_notes, terms, terms_conditions,
-        invoice_amount, grand_total, tax_amount,
+        invoice_amount, tax_amount, tax_payable,
         freight_charges, round_off,
-        tcs_percentage, tcs_amount,
-        shipping_address, shipping_state_code, shipping_state_name,
+        shipping_state_code,
         intra_inter_state,
-        status, is_active,
-        created_by, created_date, updated_by, updated_date
+        status_id, is_active,
+        updated_by, updated_date_time
     ) VALUES (
-        :invoice_date, :invoice_unique_no, :invoice_no_string,
-        :branch_id, :co_id, :party_id,
-        :del_order_no, :del_order_date,
+        :invoice_date, :invoice_no,
+        :branch_id, :party_id,
+        :sales_delivery_order_id, :broker_id,
         :challan_no, :challan_date,
         :transporter_id, :vehicle_no,
         :eway_bill_no, :eway_bill_date,
         :invoice_type, :footer_notes, :terms, :terms_conditions,
-        :invoice_amount, :grand_total, :tax_amount,
+        :invoice_amount, :tax_amount, :tax_payable,
         :freight_charges, :round_off,
-        :tcs_percentage, :tcs_amount,
-        :shipping_address, :shipping_state_code, :shipping_state_name,
+        :shipping_state_code,
         :intra_inter_state,
-        :status, 1,
-        :created_by, NOW(), :updated_by, CURDATE()
+        :status_id, 1,
+        :updated_by, NOW()
     );"""
     return text(sql)
 
 
 def insert_invoice_line_item():
     sql = """INSERT INTO sales_invoice_dtl (
-        invoice_id, co_id, delivery_line_id,
+        invoice_id, delivery_line_id,
         hsn_code, item_id, item_name, item_group, item_description, make,
         quantity, uom, rate,
         amount_without_tax, tax_amount, total_amount,
         cgst_amt, cgst_per, sgst_amt, sgst_per,
         igst_amt, igst_per,
         claim_rate,
+        qty_2, uom_2,
         is_active
     ) VALUES (
-        :invoice_id, :co_id, :delivery_line_id,
+        :invoice_id, :delivery_line_id,
         :hsn_code, :item_id, :item_name, :item_group, :item_description, :make,
         :quantity, :uom, :rate,
         :amount_without_tax, :tax_amount, :total_amount,
         :cgst_amt, :cgst_per, :sgst_amt, :sgst_per,
         :igst_amt, :igst_per,
         :claim_rate,
+        :qty_2, :uom_2,
         1
     );"""
     return text(sql)
@@ -1445,8 +1479,8 @@ def update_sales_invoice():
         invoice_date = :invoice_date,
         branch_id = :branch_id,
         party_id = :party_id,
-        del_order_no = :del_order_no,
-        del_order_date = :del_order_date,
+        sales_delivery_order_id = :sales_delivery_order_id,
+        broker_id = :broker_id,
         challan_no = :challan_no,
         challan_date = :challan_date,
         transporter_id = :transporter_id,
@@ -1458,14 +1492,12 @@ def update_sales_invoice():
         terms = :terms,
         terms_conditions = :terms_conditions,
         invoice_amount = :invoice_amount,
-        grand_total = :grand_total,
         tax_amount = :tax_amount,
+        tax_payable = :tax_payable,
         freight_charges = :freight_charges,
         round_off = :round_off,
-        tcs_percentage = :tcs_percentage,
-        tcs_amount = :tcs_amount,
         updated_by = :updated_by,
-        updated_date = CURDATE()
+        updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
     return text(sql)
 
@@ -1478,17 +1510,13 @@ def delete_invoice_line_items():
 
 def update_invoice_status():
     sql = """UPDATE sales_invoice SET
-        status = :status_id,
-        invoice_unique_no = CASE
-            WHEN :invoice_unique_no IS NOT NULL THEN :invoice_unique_no
-            ELSE invoice_unique_no
-        END,
-        invoice_no_string = CASE
-            WHEN :invoice_no_string IS NOT NULL THEN :invoice_no_string
-            ELSE invoice_no_string
+        status_id = :status_id,
+        invoice_no = CASE
+            WHEN :invoice_no IS NOT NULL THEN :invoice_no
+            ELSE invoice_no
         END,
         updated_by = :updated_by,
-        updated_date = CURDATE()
+        updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
     return text(sql)
 
@@ -1496,13 +1524,11 @@ def update_invoice_status():
 def get_invoice_with_approval_info():
     sql = """SELECT
         si.invoice_id,
-        si.status,
-        si.invoice_unique_no,
-        si.invoice_no_string,
+        si.status_id,
+        si.invoice_no,
         si.branch_id,
         si.invoice_date,
         si.invoice_amount,
-        si.grand_total,
         bm.co_id
     FROM sales_invoice si
     LEFT JOIN branch_mst bm ON bm.branch_id = si.branch_id
@@ -1511,10 +1537,65 @@ def get_invoice_with_approval_info():
 
 
 def get_max_invoice_no_for_branch_fy():
-    sql = """SELECT COALESCE(MAX(si.invoice_unique_no), 0) AS max_doc_no
+    sql = """SELECT COALESCE(MAX(si.invoice_no), 0) AS max_doc_no
     FROM sales_invoice si
     WHERE si.branch_id = :branch_id
         AND si.invoice_date >= :fy_start_date
         AND si.invoice_date <= :fy_end_date
-        AND si.invoice_unique_no IS NOT NULL;"""
+        AND si.invoice_no IS NOT NULL;"""
+    return text(sql)
+
+
+# =============================================================================
+# JUTE INVOICE QUERIES
+# =============================================================================
+
+
+def get_mukam_list():
+    """Get all mukam entries for dropdown."""
+    sql = """SELECT mukam_id, mukam_name
+    FROM jute_mukam_mst
+    ORDER BY mukam_name;"""
+    return text(sql)
+
+
+def insert_sale_invoice_jute():
+    """Insert jute-specific data for a sales invoice."""
+    sql = """INSERT INTO sale_invoice_jute (
+        invoice_id, mr_no, mr_id,
+        claim_amount, other_reference, unit_conversion,
+        despatch_doc_no, despatched_through, mukam_id, claim_note
+    ) VALUES (
+        :invoice_id, :mr_no, :mr_id,
+        :claim_amount, :other_reference, :unit_conversion,
+        :despatch_doc_no, :despatched_through, :mukam_id, :claim_note
+    );"""
+    return text(sql)
+
+
+def delete_sale_invoice_jute():
+    """Delete jute-specific data for a sales invoice (used in delete-reinsert on update)."""
+    sql = """DELETE FROM sale_invoice_jute
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sale_invoice_jute_by_id():
+    """Get jute-specific data for a sales invoice, including mukam name."""
+    sql = """SELECT
+        sij.sale_invoice_jute_id,
+        sij.invoice_id,
+        sij.mr_no,
+        sij.mr_id,
+        sij.claim_amount,
+        sij.other_reference,
+        sij.unit_conversion,
+        sij.despatch_doc_no,
+        sij.despatched_through,
+        sij.mukam_id,
+        jm.mukam_name,
+        sij.claim_note
+    FROM sale_invoice_jute AS sij
+    LEFT JOIN jute_mukam_mst AS jm ON jm.mukam_id = sij.mukam_id
+    WHERE sij.invoice_id = :invoice_id;"""
     return text(sql)

@@ -51,6 +51,7 @@ from src.masters.query import (
 	get_dept_list_by_branch_id,
 	get_item_group_drodown,
 )
+from src.sales.query import get_brokers_for_sales
 from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import (
 	format_indent_no,
@@ -166,6 +167,11 @@ async def get_po_setup_1(
 			supplier_id = supplier.get("party_id")
 			supplier["branches"] = branches_by_party.get(supplier_id, [])
 
+		# Brokers
+		broker_query = get_brokers_for_sales(co_id=co_id)
+		broker_result = db.execute(broker_query, {"co_id": co_id}).fetchall()
+		brokers = [dict(r._mapping) for r in broker_result]
+
 		# Additional charges master list
 		additional_charges_query = get_additional_charges_mst_list()
 		additional_charges_result = db.execute(additional_charges_query).fetchall()
@@ -174,6 +180,7 @@ async def get_po_setup_1(
 		return {
 			"branches": branches,
 			"suppliers": suppliers,  # Now includes full supplier details and their branch addresses
+			"brokers": brokers,
 			"projects": projects,
 			"expense_types": expense_types,
 			"co_config": co_config,

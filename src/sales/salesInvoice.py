@@ -27,6 +27,7 @@ from src.sales.quotation import (
 from src.sales.query import (
     get_customers_for_sales,
     get_customer_branches_bulk,
+    get_brokers_for_sales,
     get_transporters_for_sales,
     get_approved_delivery_orders_query,
     get_delivery_order_lines_for_invoice,
@@ -41,6 +42,10 @@ from src.sales.query import (
     update_invoice_status,
     get_invoice_with_approval_info,
     get_max_invoice_no_for_branch_fy,
+    get_mukam_list,
+    insert_sale_invoice_jute,
+    delete_sale_invoice_jute,
+    get_sale_invoice_jute_by_id,
 )
 from src.sales.constants import SALES_DOC_TYPES
 
@@ -106,6 +111,11 @@ async def get_sales_invoice_setup_1(
         for cust in customers:
             cust["branches"] = branches_by_party.get(cust.get("party_id"), [])
 
+        # Brokers
+        broker_query = get_brokers_for_sales(co_id=co_id)
+        broker_result = db.execute(broker_query, {"co_id": co_id}).fetchall()
+        brokers = [dict(r._mapping) for r in broker_result]
+
         # Transporters
         transporter_query = get_transporters_for_sales(co_id=co_id)
         transporter_result = db.execute(transporter_query, {"co_id": co_id}).fetchall()
@@ -143,12 +153,33 @@ async def get_sales_invoice_setup_1(
         itemgrp_result = db.execute(itemgrp_query, {"co_id": co_id}).fetchall()
         item_groups = [dict(r._mapping) for r in itemgrp_result]
 
+        # Invoice types mapped to company
+        invoice_types_result = db.execute(
+            text("""
+                SELECT itm.invoice_type_id, itm.invoice_type_name
+                FROM invoice_type_co_map itcm
+                JOIN invoice_type_mst itm ON itm.invoice_type_id = itcm.invoice_type_id
+                WHERE itcm.co_id = :co_id AND itcm.active = 1
+                ORDER BY itm.invoice_type_name
+            """),
+            {"co_id": co_id},
+        ).fetchall()
+        invoice_types = [dict(r._mapping) for r in invoice_types_result]
+
+        # Mukam list (for jute invoices)
+        mukam_query = get_mukam_list()
+        mukam_result = db.execute(mukam_query).fetchall()
+        mukam_list = [dict(r._mapping) for r in mukam_result]
+
         return {
             "branches": branches,
             "customers": customers,
+            "brokers": brokers,
             "transporters": transporters,
             "approved_delivery_orders": approved_delivery_orders,
             "item_groups": item_groups,
+            "invoice_types": invoice_types,
+            "mukam_list": mukam_list,
         }
     except HTTPException:
         raise
@@ -245,9 +276,9 @@ async def get_sales_invoice_table(
         data = []
         for row in rows:
             mapped = dict(row._mapping)
-            raw_no = mapped.get("invoice_unique_no")
-            formatted_no = mapped.get("invoice_no_string") or ""
-            if not formatted_no and raw_no is not None:
+            raw_no = mapped.get("invoice_no")
+            formatted_no = ""
+            if raw_no is not None:
                 try:
                     formatted_no = format_indent_no(
                         indent_no=int(raw_no) if raw_no else None,
@@ -266,11 +297,10 @@ async def get_sales_invoice_table(
                 "branch_id": mapped.get("branch_id"),
                 "branch_name": mapped.get("branch_name"),
                 "party_name": mapped.get("party_name"),
-                "del_order_no": mapped.get("del_order_no"),
+                "sales_delivery_order_id": mapped.get("sales_delivery_order_id"),
                 "invoice_amount": mapped.get("invoice_amount"),
-                "grand_total": mapped.get("grand_total"),
                 "status": mapped.get("status_name"),
-                "status_id": mapped.get("status"),
+                "status_id": mapped.get("status_id"),
             })
 
         count_query = get_invoice_table_count_query()
@@ -319,9 +349,9 @@ async def get_sales_invoice_by_id(
         details = [dict(r._mapping) for r in detail_results]
 
         # Format invoice number
-        raw_no = header.get("invoice_unique_no")
-        formatted_no = header.get("invoice_no_string") or ""
-        if not formatted_no and raw_no is not None:
+        raw_no = header.get("invoice_no")
+        formatted_no = ""
+        if raw_no is not None:
             try:
                 formatted_no = format_indent_no(
                     indent_no=int(raw_no) if raw_no else None,
@@ -333,7 +363,7 @@ async def get_sales_invoice_by_id(
             except Exception:
                 formatted_no = str(raw_no) if raw_no else ""
 
-        status_id = header.get("status")
+        status_id = header.get("status_id")
         branch_id = header.get("branch_id")
 
         # Permissions
@@ -359,13 +389,11 @@ async def get_sales_invoice_by_id(
             "challanNo": header.get("challan_no"),
             "challanDate": format_date(header.get("challan_date")),
             "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
-            "deliveryOrder": str(header.get("del_order_no", "")) if header.get("del_order_no") else None,
-            "saleNo": header.get("sale_no"),
+            "salesDeliveryOrderId": header.get("sales_delivery_order_id"),
+            "brokerId": header.get("broker_id"),
             "party": str(header.get("party_id", "")) if header.get("party_id") else "",
             "partyName": header.get("party_name"),
-            "shippingAddress": header.get("shipping_address"),
             "shippingStateCode": header.get("shipping_state_code"),
-            "shippingStateName": header.get("shipping_state_name"),
             "transporter": str(header.get("transporter_id", "")) if header.get("transporter_id") else None,
             "transporterName": header.get("transporter_name"),
             "vehicleNo": header.get("vehicle_no"),
@@ -375,21 +403,38 @@ async def get_sales_invoice_by_id(
             "footerNote": header.get("footer_notes"),
             "termsConditions": header.get("terms_conditions"),
             "grossAmount": header.get("invoice_amount"),
-            "netAmount": header.get("grand_total"),
+            "taxAmount": header.get("tax_amount"),
+            "taxPayable": header.get("tax_payable"),
             "freightCharges": header.get("freight_charges"),
             "roundOff": header.get("round_off"),
-            "tcsPercentage": header.get("tcs_percentage"),
-            "tcsAmount": header.get("tcs_amount"),
             "intraInterState": header.get("intra_inter_state"),
             "status": header.get("status_name"),
             "statusId": status_id,
             "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
-            "updatedAt": format_date(header.get("updated_date")),
+            "updatedAt": str(header.get("updated_date_time")) if header.get("updated_date_time") else None,
             "lines": [],
         }
 
         if permissions is not None:
             response["permissions"] = permissions
+
+        # Fetch jute-specific data if present
+        jute_query = get_sale_invoice_jute_by_id()
+        jute_result = db.execute(jute_query, {"invoice_id": invoice_id}).fetchone()
+        if jute_result:
+            jute = dict(jute_result._mapping)
+            response["jute"] = {
+                "mrNo": jute.get("mr_no"),
+                "mrId": jute.get("mr_id"),
+                "claimAmount": float(jute["claim_amount"]) if jute.get("claim_amount") is not None else None,
+                "otherReference": jute.get("other_reference"),
+                "unitConversion": jute.get("unit_conversion"),
+                "despatchDocNo": jute.get("despatch_doc_no"),
+                "despatchedThrough": jute.get("despatched_through"),
+                "mukamId": jute.get("mukam_id"),
+                "mukamName": jute.get("mukam_name"),
+                "claimNote": jute.get("claim_note"),
+            }
 
         for detail in details:
             line = {
@@ -407,6 +452,8 @@ async def get_sales_invoice_by_id(
                 "netAmount": detail.get("amount_without_tax"),
                 "totalAmount": detail.get("total_amount"),
                 "remarks": detail.get("item_description"),
+                "qty2": float(detail["qty_2"]) if detail.get("qty_2") is not None else None,
+                "uom2": detail.get("uom_2"),
                 "gst": {
                     "igstAmount": detail.get("igst_amt"),
                     "igstPercent": detail.get("igst_per"),
@@ -454,28 +501,19 @@ async def create_sales_invoice(
 
         # Optional fields
         transporter_id = to_int(payload.get("transporter"), "transporter")
-        delivery_order = payload.get("delivery_order")
-        del_order_no = str(delivery_order).strip() if delivery_order else None
+        sales_delivery_order_id = to_int(payload.get("sales_delivery_order_id"), "sales_delivery_order_id")
+        broker_id = to_int(payload.get("broker_id"), "broker_id")
 
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
-        net_amount = to_float(payload.get("net_amount"), "net_amount")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
         round_off = to_float(payload.get("round_off"), "round_off")
-        tcs_percentage = to_float(payload.get("tcs_percentage"), "tcs_percentage")
-        tcs_amount = to_float(payload.get("tcs_amount"), "tcs_amount")
         tax_amount = to_float(payload.get("tax_amount"), "tax_amount")
+        tax_payable = to_float(payload.get("tax_payable"), "tax_payable")
 
         challan_date = None
         if payload.get("challan_date"):
             try:
                 challan_date = datetime.strptime(str(payload["challan_date"]), "%Y-%m-%d").date()
-            except ValueError:
-                pass
-
-        del_order_date = None
-        if payload.get("del_order_date"):
-            try:
-                del_order_date = datetime.strptime(str(payload["del_order_date"]), "%Y-%m-%d").date()
             except ValueError:
                 pass
 
@@ -580,42 +618,47 @@ async def create_sales_invoice(
                 "sgst_per": sgst_per,
                 "igst_amt": igst_amt,
                 "igst_per": igst_per,
+                "qty_2": to_float(item.get("qty_2"), f"items[{idx}].qty_2"),
+                "uom_2": item.get("uom_2"),
             })
+
+        # Jute-specific: extract fields and adjust invoice_amount for claim deduction
+        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
+        jute_data = payload.get("jute") or {}
+        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
+
+        # For jute invoices, invoice_amount = gross_amount - claim_amount
+        effective_amount = gross_amount or 0
+        if invoice_type and jute_data and claim_amount:
+            effective_amount = round((gross_amount or 0) - claim_amount, 2)
 
         # Insert header
         insert_hdr = insert_sales_invoice()
         header_params = {
             "invoice_date": invoice_date,
-            "invoice_unique_no": None,
-            "invoice_no_string": None,
+            "invoice_no": None,
             "branch_id": branch_id,
-            "co_id": co_id,
             "party_id": party_id,
-            "del_order_no": del_order_no,
-            "del_order_date": del_order_date,
+            "sales_delivery_order_id": sales_delivery_order_id,
+            "broker_id": broker_id,
             "challan_no": payload.get("challan_no"),
             "challan_date": challan_date,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
             "eway_bill_no": payload.get("eway_bill_no"),
             "eway_bill_date": eway_bill_date,
-            "invoice_type": payload.get("invoice_type"),
+            "invoice_type": invoice_type,
             "footer_notes": payload.get("footer_note"),
             "terms": payload.get("terms"),
             "terms_conditions": payload.get("terms_conditions"),
-            "invoice_amount": gross_amount or 0,
-            "grand_total": net_amount or 0,
+            "invoice_amount": effective_amount,
             "tax_amount": tax_amount or 0,
+            "tax_payable": tax_payable,
             "freight_charges": freight_charges or 0,
             "round_off": round_off or 0,
-            "tcs_percentage": tcs_percentage or 0,
-            "tcs_amount": tcs_amount or 0,
-            "shipping_address": payload.get("shipping_address"),
-            "shipping_state_code": payload.get("shipping_state_code"),
-            "shipping_state_name": payload.get("shipping_state_name"),
+            "shipping_state_code": to_int(payload.get("shipping_state_code"), "shipping_state_code"),
             "intra_inter_state": payload.get("intra_inter_state"),
-            "status": 21,
-            "created_by": user_id,
+            "status_id": 21,
             "updated_by": user_id,
         }
 
@@ -629,7 +672,6 @@ async def create_sales_invoice(
         for item in normalized_items:
             db.execute(line_query, {
                 "invoice_id": invoice_id,
-                "co_id": co_id,
                 "delivery_line_id": item["delivery_line_id"],
                 "hsn_code": item["hsn_code"],
                 "item_id": item["item_id"],
@@ -650,6 +692,24 @@ async def create_sales_invoice(
                 "igst_amt": item["igst_amt"] or 0,
                 "igst_per": item["igst_per"] or 0,
                 "claim_rate": 0,
+                "qty_2": item["qty_2"],
+                "uom_2": item["uom_2"],
+            })
+
+        # Insert jute extension data if jute fields are provided
+        if jute_data:
+            jute_insert = insert_sale_invoice_jute()
+            db.execute(jute_insert, {
+                "invoice_id": invoice_id,
+                "mr_no": jute_data.get("mr_no"),
+                "mr_id": to_int(jute_data.get("mr_id"), "mr_id"),
+                "claim_amount": claim_amount,
+                "other_reference": jute_data.get("other_reference"),
+                "unit_conversion": jute_data.get("unit_conversion"),
+                "despatch_doc_no": jute_data.get("despatch_doc_no"),
+                "despatched_through": jute_data.get("despatched_through"),
+                "mukam_id": to_int(jute_data.get("mukam_id"), "mukam_id"),
+                "claim_note": jute_data.get("claim_note"),
             })
 
         db.commit()
@@ -688,7 +748,7 @@ async def update_sales_invoice_endpoint(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         # Verify exists
-        check_query = text("SELECT invoice_id, status, is_active FROM sales_invoice WHERE invoice_id = :id AND (is_active = 1 OR is_active IS NULL)")
+        check_query = text("SELECT invoice_id, status_id, is_active FROM sales_invoice WHERE invoice_id = :id AND (is_active = 1 OR is_active IS NULL)")
         check_result = db.execute(check_query, {"id": invoice_id}).fetchone()
         if not check_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found or inactive")
@@ -696,16 +756,14 @@ async def update_sales_invoice_endpoint(
         user_id = to_int(token_data.get("user_id"), "user_id")
 
         transporter_id = to_int(payload.get("transporter"), "transporter")
-        delivery_order = payload.get("delivery_order")
-        del_order_no = str(delivery_order).strip() if delivery_order else None
+        sales_delivery_order_id = to_int(payload.get("sales_delivery_order_id"), "sales_delivery_order_id")
+        broker_id = to_int(payload.get("broker_id"), "broker_id")
 
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
-        net_amount = to_float(payload.get("net_amount"), "net_amount")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
         round_off = to_float(payload.get("round_off"), "round_off")
-        tcs_percentage = to_float(payload.get("tcs_percentage"), "tcs_percentage")
-        tcs_amount = to_float(payload.get("tcs_amount"), "tcs_amount")
         tax_amount = to_float(payload.get("tax_amount"), "tax_amount")
+        tax_payable = to_float(payload.get("tax_payable"), "tax_payable")
 
         challan_date = None
         if payload.get("challan_date"):
@@ -721,6 +779,16 @@ async def update_sales_invoice_endpoint(
             except ValueError:
                 pass
 
+        # Jute-specific: extract fields and adjust invoice_amount for claim deduction
+        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
+        jute_data = payload.get("jute") or {}
+        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
+
+        # For jute invoices, invoice_amount = gross_amount - claim_amount
+        effective_amount = gross_amount or 0
+        if invoice_type and jute_data and claim_amount:
+            effective_amount = round((gross_amount or 0) - claim_amount, 2)
+
         # Update header
         update_hdr = update_sales_invoice()
         db.execute(update_hdr, {
@@ -728,38 +796,29 @@ async def update_sales_invoice_endpoint(
             "invoice_date": invoice_date,
             "branch_id": branch_id,
             "party_id": party_id,
-            "del_order_no": del_order_no,
-            "del_order_date": None,
+            "sales_delivery_order_id": sales_delivery_order_id,
+            "broker_id": broker_id,
             "challan_no": payload.get("challan_no"),
             "challan_date": challan_date,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
             "eway_bill_no": payload.get("eway_bill_no"),
             "eway_bill_date": eway_bill_date,
-            "invoice_type": payload.get("invoice_type"),
+            "invoice_type": invoice_type,
             "footer_notes": payload.get("footer_note"),
             "terms": payload.get("terms"),
             "terms_conditions": payload.get("terms_conditions"),
-            "invoice_amount": gross_amount or 0,
-            "grand_total": net_amount or 0,
+            "invoice_amount": effective_amount,
             "tax_amount": tax_amount or 0,
+            "tax_payable": tax_payable,
             "freight_charges": freight_charges or 0,
             "round_off": round_off or 0,
-            "tcs_percentage": tcs_percentage or 0,
-            "tcs_amount": tcs_amount or 0,
             "updated_by": user_id,
         })
 
         # Soft-delete old line items
         delete_q = delete_invoice_line_items()
         db.execute(delete_q, {"invoice_id": invoice_id})
-
-        # Look up co_id
-        branch_row = db.execute(
-            text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id"),
-            {"branch_id": branch_id},
-        ).fetchone()
-        co_id = dict(branch_row._mapping).get("co_id") if branch_row else None
 
         # Re-insert line items
         line_query = insert_invoice_line_item()
@@ -826,7 +885,6 @@ async def update_sales_invoice_endpoint(
 
             db.execute(line_query, {
                 "invoice_id": invoice_id,
-                "co_id": co_id,
                 "delivery_line_id": to_int(item.get("delivery_order_dtl_id"), "delivery_order_dtl_id"),
                 "hsn_code": item.get("hsn_code"),
                 "item_id": str(item_val),
@@ -847,6 +905,26 @@ async def update_sales_invoice_endpoint(
                 "igst_amt": igst_amt,
                 "igst_per": igst_per,
                 "claim_rate": 0,
+                "qty_2": to_float(item.get("qty_2"), f"items[{idx}].qty_2"),
+                "uom_2": item.get("uom_2"),
+            })
+
+        # Delete-reinsert jute extension data
+        jute_del = delete_sale_invoice_jute()
+        db.execute(jute_del, {"invoice_id": invoice_id})
+        if jute_data:
+            jute_insert = insert_sale_invoice_jute()
+            db.execute(jute_insert, {
+                "invoice_id": invoice_id,
+                "mr_no": jute_data.get("mr_no"),
+                "mr_id": to_int(jute_data.get("mr_id"), "mr_id"),
+                "claim_amount": claim_amount,
+                "other_reference": jute_data.get("other_reference"),
+                "unit_conversion": jute_data.get("unit_conversion"),
+                "despatch_doc_no": jute_data.get("despatch_doc_no"),
+                "despatched_through": jute_data.get("despatched_through"),
+                "mukam_id": to_int(jute_data.get("mukam_id"), "mukam_id"),
+                "claim_note": jute_data.get("claim_note"),
             })
 
         db.commit()
@@ -883,14 +961,14 @@ async def open_sales_invoice(
             raise HTTPException(status_code=404, detail="Sales invoice not found")
         doc = dict(doc_result._mapping)
 
-        if doc.get("status") != 21:
-            raise HTTPException(status_code=400, detail=f"Cannot open invoice with status {doc.get('status')}. Expected 21 (Draft).")
+        if doc.get("status_id") != 21:
+            raise HTTPException(status_code=400, detail=f"Cannot open invoice with status {doc.get('status_id')}. Expected 21 (Draft).")
 
         invoice_date = doc.get("invoice_date")
         if not invoice_date:
             raise HTTPException(status_code=400, detail="Invoice date is required to generate document number.")
 
-        current_no = doc.get("invoice_unique_no")
+        current_no = doc.get("invoice_no")
         new_no = None
         new_no_string = None
         if current_no is None or current_no == "" or current_no == 0:
@@ -922,8 +1000,7 @@ async def open_sales_invoice(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 1,
-            "invoice_unique_no": new_no,
-            "invoice_no_string": new_no_string,
+            "invoice_no": new_no,
             "updated_by": user_id,
         })
         db.commit()
@@ -958,15 +1035,14 @@ async def cancel_draft_sales_invoice(
         doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
         if not doc_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found")
-        if dict(doc_result._mapping).get("status") != 21:
+        if dict(doc_result._mapping).get("status_id") != 21:
             raise HTTPException(status_code=400, detail="Cannot cancel. Expected status 21 (Draft).")
 
         update_q = update_invoice_status()
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 6,
-            "invoice_unique_no": None,
-            "invoice_no_string": None,
+            "invoice_no": None,
             "updated_by": user_id,
         })
         db.commit()
@@ -994,15 +1070,14 @@ async def send_sales_invoice_for_approval(
         doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
         if not doc_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found")
-        if dict(doc_result._mapping).get("status") != 1:
+        if dict(doc_result._mapping).get("status_id") != 1:
             raise HTTPException(status_code=400, detail="Cannot send for approval. Expected status 1 (Open).")
 
         update_q = update_invoice_status()
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 20,
-            "invoice_unique_no": None,
-            "invoice_no_string": None,
+            "invoice_no": None,
             "updated_by": user_id,
         })
         db.commit()
@@ -1031,7 +1106,7 @@ async def approve_sales_invoice(
         doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
         if not doc_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found")
-        document_amount = float(dict(doc_result._mapping).get("grand_total", 0) or 0)
+        document_amount = float(dict(doc_result._mapping).get("invoice_amount", 0) or 0)
 
         result = process_sales_approval(
             doc_id=invoice_id, user_id=user_id, menu_id=menu_id,
@@ -1062,15 +1137,14 @@ async def reject_sales_invoice(
         doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
         if not doc_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found")
-        if dict(doc_result._mapping).get("status") != 20:
+        if dict(doc_result._mapping).get("status_id") != 20:
             raise HTTPException(status_code=400, detail="Cannot reject. Expected status 20 (Pending Approval).")
 
         update_q = update_invoice_status()
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 4,
-            "invoice_unique_no": None,
-            "invoice_no_string": None,
+            "invoice_no": None,
             "updated_by": user_id,
         })
         db.commit()
@@ -1098,7 +1172,7 @@ async def reopen_sales_invoice(
         doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
         if not doc_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found")
-        current_status = dict(doc_result._mapping).get("status")
+        current_status = dict(doc_result._mapping).get("status_id")
 
         if current_status == 6:
             new_status_id = 21
@@ -1111,8 +1185,7 @@ async def reopen_sales_invoice(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": new_status_id,
-            "invoice_unique_no": None,
-            "invoice_no_string": None,
+            "invoice_no": None,
             "updated_by": user_id,
         })
         db.commit()
