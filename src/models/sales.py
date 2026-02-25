@@ -182,6 +182,46 @@ class InvoiceLineItem(Base):
     )
 
 
+class InvoiceTypeMst(Base):
+    """Invoice type master table."""
+    __tablename__ = "invoice_type_mst"
+
+    invoice_type_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_type_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    invoice_type_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    company_mappings: Mapped[List["InvoiceTypeCoMap"]] = relationship(
+        "InvoiceTypeCoMap", back_populates="invoice_type"
+    )
+
+
+class InvoiceTypeCoMap(Base):
+    """Mapping table between invoice type and company."""
+    __tablename__ = "invoice_type_co_map"
+
+    invoice_type_co_map_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    co_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    invoice_type_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("invoice_type_mst.invoice_type_id"), nullable=False, index=True
+    )
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+
+    # Relationships
+    invoice_type: Mapped["InvoiceTypeMst"] = relationship(
+        "InvoiceTypeMst", back_populates="company_mappings"
+    )
+
+
 # =============================================================================
 # SALES QUOTATION MODELS
 # =============================================================================

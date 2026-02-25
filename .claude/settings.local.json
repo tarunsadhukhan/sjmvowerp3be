@@ -8,7 +8,9 @@
       "Bash(ls:*)",
       "Bash(npx next build:*)",
       "Bash(npx tsc:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(source .venv/Scripts/activate)",
+      "Bash(python -m pytest src/test/test_jute_sqc_morrah_weight.py -v)"
     ]
   }
 }
