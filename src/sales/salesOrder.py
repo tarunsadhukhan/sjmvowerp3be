@@ -12,9 +12,11 @@ from src.procurement.indent import (
     calculate_approval_permissions,
 )
 from src.procurement.query import (
-    get_item_by_group_id_purchaseable,
     get_item_make_by_group_id,
-    get_item_uom_by_group_id,
+)
+from src.sales.query import (
+    get_item_by_group_id_saleable,
+    get_item_uom_by_group_id_saleable,
 )
 from src.sales.quotation import (
     to_int,
@@ -34,6 +36,9 @@ from src.sales.query import (
     insert_sales_order,
     insert_sales_order_dtl,
     insert_sales_order_dtl_gst,
+    insert_sales_order_dtl_hessian,
+    delete_sales_order_dtl_hessian,
+    get_sales_order_hessian_by_id_query,
     update_sales_order,
     delete_sales_order_dtl,
     delete_sales_order_dtl_gst,
@@ -212,7 +217,7 @@ async def get_sales_order_setup_2(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid item_group")
 
-        items_query = get_item_by_group_id_purchaseable(item_group_id=item_group_id)
+        items_query = get_item_by_group_id_saleable(item_group_id=item_group_id)
         items_result = db.execute(items_query, {"item_group_id": item_group_id}).fetchall()
         items = [dict(r._mapping) for r in items_result]
 
@@ -220,7 +225,7 @@ async def get_sales_order_setup_2(
         makes_result = db.execute(makes_query, {"item_group_id": item_group_id}).fetchall()
         makes = [dict(r._mapping) for r in makes_result]
 
-        uoms_query = get_item_uom_by_group_id(item_group_id=item_group_id)
+        uoms_query = get_item_uom_by_group_id_saleable(item_group_id=item_group_id)
         uoms_result = db.execute(uoms_query, {"item_group_id": item_group_id}).fetchall()
         uoms = [dict(r._mapping) for r in uoms_result]
 
@@ -360,6 +365,15 @@ async def get_sales_order_by_id(
             gd = dict(g._mapping)
             gst_map[gd.get("sales_order_dtl_id")] = gd
 
+        # Hessian extension data (invoice_type=2)
+        hessian_map: dict[int, dict] = {}
+        if header.get("invoice_type") == 2:
+            hessian_query = get_sales_order_hessian_by_id_query()
+            hessian_results = db.execute(hessian_query, {"sales_order_id": sales_order_id}).fetchall()
+            for h in hessian_results:
+                hd = dict(h._mapping)
+                hessian_map[hd.get("sales_order_dtl_id")] = hd
+
         # Format sales_no
         raw_no = header.get("sales_no")
         formatted_no = ""
@@ -412,7 +426,6 @@ async def get_sales_order_by_id(
             "quotationNo": header.get("quotation_no"),
             "party": str(header.get("party_id", "")) if header.get("party_id") else "",
             "partyName": header.get("party_name"),
-            "partyBranch": str(header.get("party_branch_id", "")) if header.get("party_branch_id") else None,
             "broker": str(header.get("broker_id", "")) if header.get("broker_id") else None,
             "brokerName": header.get("broker_name"),
             "billingTo": str(header.get("billing_to_id", "")) if header.get("billing_to_id") else None,
@@ -443,6 +456,7 @@ async def get_sales_order_by_id(
         for detail in details:
             dtl_id = detail.get("sales_order_dtl_id")
             gst = gst_map.get(dtl_id, {})
+            hessian = hessian_map.get(dtl_id, {})
             line = {
                 "id": str(dtl_id) if dtl_id else "",
                 "quotationLineitemId": detail.get("quotation_lineitem_id"),
@@ -452,8 +466,8 @@ async def get_sales_order_by_id(
                 "itemName": detail.get("item_name"),
                 "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
-                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
-                "uomName": detail.get("uom_name"),
+                "qtyUom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+                "qtyUomName": detail.get("uom_name"),
                 "rate": detail.get("rate"),
                 "discountType": detail.get("discount_type"),
                 "discountedRate": detail.get("discounted_rate"),
@@ -470,6 +484,12 @@ async def get_sales_order_by_id(
                     "sgstPercent": gst.get("sgst_percent"),
                     "gstTotal": gst.get("gst_total"),
                 } if gst else None,
+                "hessian": {
+                    "qtyBales": hessian.get("qty_bales"),
+                    "ratePerBale": hessian.get("rate_per_bale"),
+                    "billingRateMt": hessian.get("billing_rate_mt"),
+                    "billingRateBale": hessian.get("billing_rate_bale"),
+                } if hessian else None,
             }
             response["lines"].append(line)
 
@@ -508,7 +528,6 @@ async def create_sales_order(
         created_at = datetime.utcnow()
 
         quotation_id = to_int(payload.get("quotation"), "quotation")
-        party_branch_id = to_int(payload.get("party_branch"), "party_branch")
         broker_id = to_int(payload.get("broker"), "broker")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
@@ -533,7 +552,7 @@ async def create_sales_order(
         for idx, item in enumerate(raw_items, start=1):
             item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
             quantity = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
-            uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+            uom_id = to_int(item.get("qty_uom"), f"items[{idx}].qty_uom", required=True)
             normalized_items.append({
                 "item_id": item_id,
                 "item_make_id": to_int(item.get("item_make"), f"items[{idx}].item_make"),
@@ -549,6 +568,8 @@ async def create_sales_order(
                 "total_amount": to_float(item.get("total_amount"), f"items[{idx}].total_amount"),
                 "remarks": str(item.get("remarks", "")).strip()[:255] if item.get("remarks") else None,
                 "gst": item.get("gst"),
+                # Hessian-specific fields (invoice_type=2)
+                "hessian": item.get("hessian"),
             })
 
         # Insert header
@@ -562,7 +583,6 @@ async def create_sales_order(
             "branch_id": branch_id,
             "quotation_id": quotation_id,
             "party_id": party_id,
-            "party_branch_id": party_branch_id,
             "broker_id": broker_id,
             "billing_to_id": billing_to_id,
             "shipping_to_id": shipping_to_id,
@@ -591,6 +611,7 @@ async def create_sales_order(
         # Insert details and GST
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
+        hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
         for item in normalized_items:
             dtl_result = db.execute(dtl_query, {
                 "updated_by": updated_by,
@@ -624,6 +645,19 @@ async def create_sales_order(
                     "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
                     "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
                     "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                })
+
+            # Insert hessian extension row for invoice_type=2
+            hessian_data = item.get("hessian")
+            if hessian_query is not None and hessian_data and isinstance(hessian_data, dict) and dtl_id:
+                db.execute(hessian_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "qty_bales": to_float(hessian_data.get("qty_bales"), "qty_bales"),
+                    "rate_per_bale": to_float(hessian_data.get("rate_per_bale"), "rate_per_bale"),
+                    "billing_rate_mt": to_float(hessian_data.get("billing_rate_mt"), "billing_rate_mt"),
+                    "billing_rate_bale": to_float(hessian_data.get("billing_rate_bale"), "billing_rate_bale"),
+                    "updated_by": updated_by,
+                    "updated_date_time": created_at,
                 })
 
         db.commit()
@@ -672,7 +706,6 @@ async def update_sales_order_endpoint(
         updated_at = datetime.utcnow()
 
         quotation_id = to_int(payload.get("quotation"), "quotation")
-        party_branch_id = to_int(payload.get("party_branch"), "party_branch")
         broker_id = to_int(payload.get("broker"), "broker")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
@@ -697,7 +730,7 @@ async def update_sales_order_endpoint(
         for idx, item in enumerate(raw_items, start=1):
             item_id = to_int(item.get("item"), f"items[{idx}].item", required=True)
             quantity = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
-            uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
+            uom_id = to_int(item.get("qty_uom"), f"items[{idx}].qty_uom", required=True)
             normalized_items.append({
                 "item_id": item_id,
                 "item_make_id": to_int(item.get("item_make"), f"items[{idx}].item_make"),
@@ -713,6 +746,8 @@ async def update_sales_order_endpoint(
                 "total_amount": to_float(item.get("total_amount"), f"items[{idx}].total_amount"),
                 "remarks": str(item.get("remarks", "")).strip()[:255] if item.get("remarks") else None,
                 "gst": item.get("gst"),
+                # Hessian-specific fields (invoice_type=2)
+                "hessian": item.get("hessian"),
             })
 
         # Update header
@@ -726,7 +761,6 @@ async def update_sales_order_endpoint(
             "branch_id": branch_id,
             "quotation_id": quotation_id,
             "party_id": party_id,
-            "party_branch_id": party_branch_id,
             "broker_id": broker_id,
             "billing_to_id": billing_to_id,
             "shipping_to_id": shipping_to_id,
@@ -747,7 +781,10 @@ async def update_sales_order_endpoint(
             "status_id": existing.get("status_id"),
         })
 
-        # Delete old GST then soft-delete old details
+        # Delete old hessian, GST, then soft-delete old details
+        delete_hessian_q = delete_sales_order_dtl_hessian()
+        db.execute(delete_hessian_q, {"sales_order_id": sales_order_id})
+
         delete_gst_q = delete_sales_order_dtl_gst()
         db.execute(delete_gst_q, {"sales_order_id": sales_order_id})
 
@@ -758,9 +795,10 @@ async def update_sales_order_endpoint(
             "updated_date_time": updated_at,
         })
 
-        # Re-insert details and GST
+        # Re-insert details, GST, and hessian
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
+        hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
         for item in normalized_items:
             dtl_result = db.execute(dtl_query, {
                 "updated_by": updated_by,
@@ -794,6 +832,19 @@ async def update_sales_order_endpoint(
                     "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
                     "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
                     "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                })
+
+            # Insert hessian extension row for invoice_type=2
+            hessian_data = item.get("hessian")
+            if hessian_query is not None and hessian_data and isinstance(hessian_data, dict) and dtl_id:
+                db.execute(hessian_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "qty_bales": to_float(hessian_data.get("qty_bales"), "qty_bales"),
+                    "rate_per_bale": to_float(hessian_data.get("rate_per_bale"), "rate_per_bale"),
+                    "billing_rate_mt": to_float(hessian_data.get("billing_rate_mt"), "billing_rate_mt"),
+                    "billing_rate_bale": to_float(hessian_data.get("billing_rate_bale"), "billing_rate_bale"),
+                    "updated_by": updated_by,
+                    "updated_date_time": updated_at,
                 })
 
         db.commit()

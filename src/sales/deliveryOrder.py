@@ -396,7 +396,6 @@ async def get_delivery_order_by_id(
             "salesNo": header.get("sales_no"),
             "party": str(header.get("party_id", "")) if header.get("party_id") else "",
             "partyName": header.get("party_name"),
-            "partyBranch": str(header.get("party_branch_id", "")) if header.get("party_branch_id") else None,
             "billingTo": str(header.get("billing_to_id", "")) if header.get("billing_to_id") else None,
             "shippingTo": str(header.get("shipping_to_id", "")) if header.get("shipping_to_id") else None,
             "transporter": str(header.get("transporter_id", "")) if header.get("transporter_id") else None,
@@ -404,8 +403,6 @@ async def get_delivery_order_by_id(
             "vehicleNo": header.get("vehicle_no"),
             "driverName": header.get("driver_name"),
             "driverContact": header.get("driver_contact"),
-            "ewayBillNo": header.get("eway_bill_no"),
-            "ewayBillDate": format_date(header.get("eway_bill_date")),
             "footerNote": header.get("footer_note"),
             "internalNote": header.get("internal_note"),
             "grossAmount": header.get("gross_amount"),
@@ -491,7 +488,6 @@ async def create_delivery_order(
         created_at = datetime.utcnow()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
-        party_branch_id = to_int(payload.get("party_branch"), "party_branch")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
@@ -505,14 +501,6 @@ async def create_delivery_order(
         if expected_delivery_str:
             try:
                 expected_delivery_date = datetime.strptime(str(expected_delivery_str), "%Y-%m-%d").date()
-            except ValueError:
-                pass
-
-        eway_bill_date_str = payload.get("eway_bill_date")
-        eway_bill_date = None
-        if eway_bill_date_str:
-            try:
-                eway_bill_date = datetime.strptime(str(eway_bill_date_str), "%Y-%m-%d").date()
             except ValueError:
                 pass
 
@@ -549,15 +537,12 @@ async def create_delivery_order(
             "branch_id": branch_id,
             "sales_order_id": sales_order_id,
             "party_id": party_id,
-            "party_branch_id": party_branch_id,
             "billing_to_id": billing_to_id,
             "shipping_to_id": shipping_to_id,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
             "driver_name": payload.get("driver_name"),
             "driver_contact": payload.get("driver_contact"),
-            "eway_bill_no": payload.get("eway_bill_no"),
-            "eway_bill_date": eway_bill_date,
             "expected_delivery_date": expected_delivery_date,
             "footer_note": payload.get("footer_note"),
             "internal_note": payload.get("internal_note"),
@@ -659,7 +644,6 @@ async def update_delivery_order_endpoint(
         updated_at = datetime.utcnow()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
-        party_branch_id = to_int(payload.get("party_branch"), "party_branch")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
@@ -673,14 +657,6 @@ async def update_delivery_order_endpoint(
         if expected_delivery_str:
             try:
                 expected_delivery_date = datetime.strptime(str(expected_delivery_str), "%Y-%m-%d").date()
-            except ValueError:
-                pass
-
-        eway_bill_date_str = payload.get("eway_bill_date")
-        eway_bill_date = None
-        if eway_bill_date_str:
-            try:
-                eway_bill_date = datetime.strptime(str(eway_bill_date_str), "%Y-%m-%d").date()
             except ValueError:
                 pass
 
@@ -717,15 +693,12 @@ async def update_delivery_order_endpoint(
             "branch_id": branch_id,
             "sales_order_id": sales_order_id,
             "party_id": party_id,
-            "party_branch_id": party_branch_id,
             "billing_to_id": billing_to_id,
             "shipping_to_id": shipping_to_id,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
             "driver_name": payload.get("driver_name"),
             "driver_contact": payload.get("driver_contact"),
-            "eway_bill_no": payload.get("eway_bill_no"),
-            "eway_bill_date": eway_bill_date,
             "expected_delivery_date": expected_delivery_date,
             "footer_note": payload.get("footer_note"),
             "internal_note": payload.get("internal_note"),

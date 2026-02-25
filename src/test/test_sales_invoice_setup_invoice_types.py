@@ -54,6 +54,8 @@ class TestSalesInvoiceSetupInvoiceTypes:
             _mock_row({"invoice_type_id": 2, "invoice_type_name": "Hessian"}),
         ]
 
+        mukam_list = []
+
         self._mock_session.execute.side_effect = [
             MagicMock(fetchall=lambda: branches),
             MagicMock(fetchall=lambda: customers),
@@ -63,6 +65,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: mukam_list),
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_setup_1?co_id=1&branch_id=1")
@@ -86,6 +89,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
         approved_dos = []
         item_groups = []
         invoice_types = []
+        mukam_list = []
 
         self._mock_session.execute.side_effect = [
             MagicMock(fetchall=lambda: branches),
@@ -96,6 +100,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: mukam_list),
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_setup_1?co_id=1&branch_id=1")

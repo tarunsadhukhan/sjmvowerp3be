@@ -169,7 +169,7 @@ def process_sales_approval(
                 "updated_date_time": updated_at,
             }
             # Add the doc_no param (set to None to keep existing)
-            for key in ["quotation_no", "sales_no", "delivery_order_no"]:
+            for key in ["quotation_no", "sales_no", "delivery_order_no", "invoice_no"]:
                 if key not in params:
                     params[key] = None
             db.execute(update_q, params)
@@ -241,7 +241,7 @@ def process_sales_approval(
             "updated_by": user_id,
             "updated_date_time": updated_at,
         }
-        for key in ["quotation_no", "sales_no", "delivery_order_no"]:
+        for key in ["quotation_no", "sales_no", "delivery_order_no", "invoice_no"]:
             if key not in params:
                 params[key] = None
         db.execute(update_q, params)

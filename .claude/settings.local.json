@@ -20,7 +20,9 @@
       "Bash(python -m pytest src/test/test_co_invoice_type_map.py src/test/test_models_sales_invoice_type.py src/test/test_sales_order_setup_invoice_types.py -v)",
       "Bash(python -m pytest src/test/test_delivery_order_setup_invoice_types.py src/test/test_sales_invoice_setup_invoice_types.py src/test/test_sales_order_setup_invoice_types.py -v)",
       "Bash(/c/code/vowerp3be/.venv/Scripts/python \"c:/code/vowerp3ui/_fix_rate_column.py\")",
-      "Bash(python -m pytest src/test/ -v --tb=short)"
+      "Bash(python -m pytest src/test/ -v --tb=short)",
+      "Bash(python -m pytest src/test/test_sales_invoice_setup_invoice_types.py src/test/test_models_sales_invoice_type.py -v)",
+      "Bash(python -m pytest src/test/test_sales_invoice_jute.py src/test/test_sales_invoice_setup_invoice_types.py -v)"
     ]
   }
 }
