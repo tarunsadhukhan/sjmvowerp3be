@@ -7,7 +7,7 @@ from src.authorization.utils import  get_current_user_with_refresh
 # from src.masters.schemas import MenuResponse
 from src.masters.models import ItemGrpMst, ItemTypeMaster, ItemMst, ItemMake, PartyMst, PartyBranchMst
 from src.masters.query import get_party_table, get_party_types, get_country_list, get_state_list
-from src.masters.query import get_city_list, get_entity_list, get_party_by_id, get_party_branch_by_party_id
+from src.masters.query import get_entity_list, get_party_by_id, get_party_branch_by_party_id
 from datetime import datetime
 
 router = APIRouter()
@@ -57,13 +57,10 @@ async def party_create_setup(
         querystate = get_state_list()
         resultstate = db.execute(querystate).fetchall()
         states = [dict(row._mapping) for row in resultstate]
-        querycity = get_city_list()
-        resultcity = db.execute(querycity).fetchall()
-        cities = [dict(row._mapping) for row in resultcity]
         queryentity = get_entity_list()
         resultentity = db.execute(queryentity).fetchall()
         entities = [dict(row._mapping) for row in resultentity]
-        return {"party_types": party_types, "countries": countries, "states": states, "cities": cities, "entities": entities}
+        return {"party_types": party_types, "countries": countries, "states": states, "entities": entities}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
@@ -111,10 +108,6 @@ async def party_edit_setup(
         resultstate = db.execute(querystate).fetchall()
         states = [dict(row._mapping) for row in resultstate]
 
-        querycity = get_city_list()
-        resultcity = db.execute(querycity).fetchall()
-        cities = [dict(row._mapping) for row in resultcity]
-
         queryentity = get_entity_list()
         resultentity = db.execute(queryentity).fetchall()
         entities = [dict(row._mapping) for row in resultentity]
@@ -125,7 +118,6 @@ async def party_edit_setup(
             "party_branches": party_branches,
             "countries": countries,
             "states": states,
-            "cities": cities,
             "entities": entities,
         }
     except HTTPException:
@@ -207,7 +199,7 @@ async def party_create(
                 address=b.get("address"),
                 address_additional=b.get("address_additional"),
                 zip_code=int(b.get("zip_code")) if b.get("zip_code") else None,
-                city_id=int(b.get("city")) if b.get("city") else None,
+                state_id=int(b.get("state")) if b.get("state") else None,
                 gst_no=b.get("gst_no"),
                 contact_no=b.get("contact_no"),
                 contact_person=b.get("contact_person"),
@@ -310,7 +302,7 @@ async def party_edit(
                 address=b.get("address"),
                 address_additional=b.get("address_additional"),
                 zip_code=int(b.get("zip_code")) if b.get("zip_code") else None,
-                city_id=int(b.get("city")) if b.get("city") else None,
+                state_id=int(b.get("state")) if b.get("state") else None,
                 gst_no=b.get("gst_no"),
                 contact_no=b.get("contact_no"),
                 contact_person=b.get("contact_person"),

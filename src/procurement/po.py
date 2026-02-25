@@ -808,9 +808,8 @@ async def create_po(
 		# Get supplier and shipping state IDs for GST calculation
 		supplier_branch_query = text(
 			"""
-			SELECT cm.state_id
+			SELECT pbm.state_id
 			FROM party_branch_mst pbm
-			LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
 			WHERE pbm.party_mst_branch_id = :branch_id
 			"""
 		)
@@ -1392,9 +1391,8 @@ async def update_po(
 		# Get supplier and shipping state IDs for GST calculation
 		supplier_branch_query = text(
 			"""
-			SELECT cm.state_id
+			SELECT pbm.state_id
 			FROM party_branch_mst pbm
-			LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
 			WHERE pbm.party_mst_branch_id = :branch_id
 			"""
 		)

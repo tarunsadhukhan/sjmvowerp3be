@@ -100,7 +100,6 @@ class CoMst(Base):
     co_zipcode = Column(Integer)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"))
     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
     co_cin_no = Column(String(25))
@@ -114,7 +113,6 @@ class CoMst(Base):
     # Relationships
     country = relationship("CountryMst", backref="companies")
     state = relationship("StateMst", backref="companies")
-    city = relationship("CityMst", backref="companies")
     def __repr__(self):
         return f"<CoMst(id={self.co_id}, name='{self.co_name}')>"
 
@@ -133,7 +131,6 @@ class BranchMst(Base):
     branch_zipcode = Column(Integer)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"))
     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     gst_no = Column(String(25))
     contact_no = Column(Integer)
     contact_person = Column(String(255))
@@ -167,19 +164,6 @@ class StateMst(Base):
     def __repr__(self):
         return f"<StateMst(id={self.state_id}, state='{self.state}', country_id={self.country_id})>"
 
-
-class CityMst(Base):
-    __tablename__ = "city_mst"
-
-    city_id = Column(Integer, primary_key=True, autoincrement=True)
-    city_name = Column(String(255))
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-
-    # Relationships
-    state = relationship("StateMst", backref="cities")
-
-    def __repr__(self):
-        return f"<CityMst(id={self.city_id}, city_name='{self.city_name}', state_id={self.state_id})>"
 
 class DeptMst(Base):
     __tablename__ = 'dept_mst'
