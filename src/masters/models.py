@@ -265,14 +265,13 @@ class PartyBranchMst(Base):
     address = Column(String(255), nullable=True)
     address_additional = Column(String(255), nullable=True)
     zip_code = Column(Integer, nullable=True)
-    city_id = Column(Integer, nullable=True)
+    state_id = Column(Integer, nullable=True)
     contact_no = Column(String(25), nullable=True)
     contact_person = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)
     updated_date_time = Column(DateTime, nullable=False, default=func.now())
 
     party = relationship("PartyMst", back_populates="branches")
-    # city = relationship("CityMst", foreign_keys=[city_id])
 
 
 class EntityTypeMst(Base):

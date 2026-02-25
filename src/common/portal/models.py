@@ -62,7 +62,6 @@ class CoMst(Base):
     co_zipcode = Column(Integer, nullable=False)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False)
     state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=False)
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"), nullable=False)
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, default=func.now())
     created_by_con_user = Column(Integer)
@@ -76,7 +75,6 @@ class CoMst(Base):
 
     country = relationship("CountryMst", foreign_keys=[country_id])
     state = relationship("StateMst", foreign_keys=[state_id])
-    city = relationship("CityMst", foreign_keys=[city_id])
 
 
 class BranchMst(Base):
@@ -90,7 +88,6 @@ class BranchMst(Base):
     branch_zipcode = Column(Integer)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"))
     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-    city_id = Column(Integer, ForeignKey("city_mst.city_id"))
     gst_no = Column(String(25))
     contact_no = Column(Integer)
     contact_person = Column(String(255))
@@ -100,7 +97,6 @@ class BranchMst(Base):
     co = relationship("CoMst", foreign_keys=[co_id])
     country = relationship("CountryMst", foreign_keys=[country_id])
     state  = relationship("StateMst",  foreign_keys=[state_id])
-    city   = relationship("CityMst",   foreign_keys=[city_id])
 
 
 class CountryMst(Base):
@@ -120,17 +116,7 @@ class StateMst(Base):
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False)
 
     country = relationship("CountryMst", back_populates="states")
-    cities = relationship("CityMst", back_populates="state")
 
-
-class CityMst(Base):
-    __tablename__ = "city_mst"
-
-    city_id = Column(Integer, primary_key=True, autoincrement=True)
-    city_name = Column(String(255))
-    state_id = Column(Integer, ForeignKey("state_mst.state_id"))
-
-    state = relationship("StateMst", back_populates="cities")
 
 class ApprovalMst(Base):
     __tablename__ = "approval_mst"

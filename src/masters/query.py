@@ -732,17 +732,6 @@ FROM state_mst sm
     query = text(sql)
     return query
 
-def get_city_list():
-    sql = """
-SELECT 
-  cm.city_id,
-  cm.city_name,
-  cm.state_id
-FROM city_mst cm
-"""
-    query = text(sql)
-    return query
-
 def get_entity_list():
     sql = """
 select etm.entity_type_id , etm.entity_type_name  from entity_type_mst etm ;
@@ -787,15 +776,12 @@ SELECT
   pbm.address,
   pbm.address_additional,
   pbm.zip_code,
-  pbm.city_id,
-  cm.city_name,
-  cm.state_id,
+  pbm.state_id,
   sm.state,
   pbm.contact_no,
   pbm.contact_person
 FROM party_branch_mst pbm
-LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
-LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+LEFT JOIN state_mst sm ON sm.state_id = pbm.state_id
 WHERE pbm.party_id = :party_id;
 """
     query = text(sql)
