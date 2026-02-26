@@ -1746,8 +1746,26 @@ def get_inward_for_sr_query():
 
 
 def get_inward_dtl_for_sr_query():
-    """Get inward line items for SR with rate and tax fields."""
-    sql = """SELECT
+    """Get inward line items for SR with rate, tax fields, and warehouse hierarchy path."""
+    sql = """WITH RECURSIVE warehouse_hierarchy AS (
+        SELECT
+            wm.warehouse_id,
+            wm.warehouse_name,
+            wm.parent_warehouse_id,
+            CAST(wm.warehouse_name AS CHAR) AS warehouse_path
+        FROM warehouse_mst wm
+        WHERE wm.parent_warehouse_id IS NULL
+        UNION ALL
+        SELECT
+            child.warehouse_id,
+            child.warehouse_name,
+            child.parent_warehouse_id,
+            CONCAT(parent.warehouse_path, '-', child.warehouse_name)
+        FROM warehouse_mst child
+        JOIN warehouse_hierarchy parent
+            ON child.parent_warehouse_id = parent.warehouse_id
+    )
+    SELECT
         pid.inward_dtl_id,
         pid.inward_id,
         pid.po_dtl_id,
@@ -1774,7 +1792,8 @@ def get_inward_dtl_for_sr_query():
         pid.discount_amount,
         pid.remarks,
         pid.warehouse_id,
-        wh.warehouse_name,
+        wh_hier.warehouse_name,
+        wh_hier.warehouse_path,
         ppd.rate AS po_rate,
         COALESCE(im.tax_percentage, 0) AS tax_percentage
     FROM proc_inward_dtl AS pid
@@ -1784,7 +1803,7 @@ def get_inward_dtl_for_sr_query():
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
-    LEFT JOIN warehouse_mst AS wh ON wh.warehouse_id = pid.warehouse_id
+    LEFT JOIN warehouse_hierarchy AS wh_hier ON wh_hier.warehouse_id = pid.warehouse_id
     WHERE pid.inward_id = :inward_id
         AND pid.active = 1
     ORDER BY pid.inward_dtl_id;"""

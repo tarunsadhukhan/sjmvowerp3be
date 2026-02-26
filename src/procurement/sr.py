@@ -277,18 +277,39 @@ async def get_sr_by_inward_id(
                 item["accepted_rate"] = item.get("po_rate") or item.get("rate") or 0
             line_items.append(item)
         
-        # Get warehouses for the branch
+        # Get warehouses for the branch — with recursive hierarchy path
         branch_id = header.get("branch_id")
         logger.info(f"Fetching warehouses for branch_id: {branch_id}")
         warehouse_query = text("""
-            SELECT warehouse_id, warehouse_name, branch_id
-            FROM warehouse_mst
-            WHERE (branch_id IS NULL OR branch_id = :branch_id)
-            ORDER BY warehouse_name
+            WITH RECURSIVE warehouse_hierarchy AS (
+                SELECT
+                    wm.warehouse_id,
+                    wm.branch_id,
+                    wm.warehouse_name,
+                    wm.parent_warehouse_id,
+                    CAST(wm.warehouse_name AS CHAR) AS warehouse_path
+                FROM warehouse_mst wm
+                WHERE wm.parent_warehouse_id IS NULL
+                    AND (wm.branch_id IS NULL OR wm.branch_id = :branch_id)
+                UNION ALL
+                SELECT
+                    child.warehouse_id,
+                    child.branch_id,
+                    child.warehouse_name,
+                    child.parent_warehouse_id,
+                    CONCAT(parent.warehouse_path, '-', child.warehouse_name)
+                FROM warehouse_mst child
+                JOIN warehouse_hierarchy parent
+                    ON child.parent_warehouse_id = parent.warehouse_id
+                WHERE (child.branch_id IS NULL OR child.branch_id = :branch_id)
+            )
+            SELECT warehouse_id, warehouse_name, warehouse_path, branch_id
+            FROM warehouse_hierarchy
+            ORDER BY warehouse_path
         """)
         warehouse_result = db.execute(warehouse_query, {"branch_id": branch_id}).fetchall()
         warehouses = [dict(row._mapping) for row in warehouse_result]
-        logger.info(f"Found {len(warehouses)} warehouses: {warehouses}")
+        logger.info(f"Found {len(warehouses)} warehouses")
         
         # Get additional charges master list
         addl_charges_mst_query = get_additional_charges_mst_list()

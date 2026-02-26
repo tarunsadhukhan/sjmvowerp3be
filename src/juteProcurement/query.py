@@ -1320,6 +1320,7 @@ def get_jute_mr_line_items_query():
             jmli.actual_item_id,
             im.item_name AS actual_quality_name,
             jmli.actual_qty,
+            jmli.challan_weight,
             jmli.actual_weight,
             jmli.actual_rate,
             jmli.allowable_moisture,
