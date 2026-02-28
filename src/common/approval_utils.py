@@ -117,70 +117,91 @@ def process_approval(
                 )
             )
 
-        # 5. Get user's approval level
-        user_level_query = get_user_approval_level()
-        user_level_result = db.execute(
-            user_level_query,
-            {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
+        # 5. Check if approval hierarchy exists for this menu/branch
+        approval_exists_query = check_approval_mst_exists()
+        approval_exists_result = db.execute(
+            approval_exists_query,
+            {"menu_id": menu_id, "branch_id": branch_id}
         ).fetchone()
+        approval_exists = False
+        if approval_exists_result:
+            approval_exists = (dict(approval_exists_result._mapping).get("count") or 0) > 0
 
-        # 6. No approval permission
-        if not user_level_result:
-            raise HTTPException(
-                status_code=403,
-                detail="User does not have approval permission for this menu and branch."
-            )
+        if approval_exists:
+            # 6a. Hierarchy exists — use level-based approval
+            user_level_query = get_user_approval_level()
+            user_level_result = db.execute(
+                user_level_query,
+                {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
+            ).fetchone()
 
-        user_data = dict(user_level_result._mapping)
-        user_approval_level = user_data.get("approval_level")
-
-        # 7. Level mismatch check
-        if user_approval_level != current_approval_level:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"User approval level ({user_approval_level}) does not match "
-                    f"current {doc_name} approval level ({current_approval_level})."
+            if not user_level_result:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User does not have approval permission for this menu and branch."
                 )
-            )
 
-        # 8. Value-based checks (only when document_amount is provided)
-        if document_amount is not None:
-            max_amount_single = user_data.get("max_amount_single")
-            if (
-                max_amount_single is not None
-                and max_amount_single > 0
-                and document_amount > max_amount_single
-            ):
+            user_data = dict(user_level_result._mapping)
+            user_approval_level = user_data.get("approval_level")
+
+            # 7. Level mismatch check
+            if user_approval_level != current_approval_level:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"Document amount ({document_amount}) exceeds maximum "
-                        f"single approval amount ({max_amount_single})."
+                        f"User approval level ({user_approval_level}) does not match "
+                        f"current {doc_name} approval level ({current_approval_level})."
                     )
                 )
 
-        # 9. Get max approval level for this menu/branch
-        max_level_query = get_max_approval_level()
-        max_level_result = db.execute(
-            max_level_query,
-            {"menu_id": menu_id, "branch_id": branch_id}
-        ).fetchone()
-        max_approval_level = (
-            dict(max_level_result._mapping).get("max_level")
-            if max_level_result
-            else user_approval_level
-        )
+            # 8. Value-based checks (only when document_amount is provided)
+            if document_amount is not None:
+                max_amount_single = user_data.get("max_amount_single")
+                if (
+                    max_amount_single is not None
+                    and max_amount_single > 0
+                    and document_amount > max_amount_single
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"Document amount ({document_amount}) exceeds maximum "
+                            f"single approval amount ({max_amount_single})."
+                        )
+                    )
 
-        # 10-11. Determine next status
-        if user_approval_level >= max_approval_level:
-            new_status_id = 3  # Approved (final)
-            new_approval_level = user_approval_level
-            message = f"{doc_name} approved (final level)."
+            # 9. Get max approval level for this menu/branch
+            max_level_query = get_max_approval_level()
+            max_level_result = db.execute(
+                max_level_query,
+                {"menu_id": menu_id, "branch_id": branch_id}
+            ).fetchone()
+            max_approval_level = (
+                dict(max_level_result._mapping).get("max_level")
+                if max_level_result
+                else user_approval_level
+            )
+
+            # 10-11. Determine next status
+            if user_approval_level >= max_approval_level:
+                new_status_id = 3  # Approved (final)
+                new_approval_level = user_approval_level
+                message = f"{doc_name} approved (final level)."
+            else:
+                new_status_id = 20  # Still Pending Approval
+                new_approval_level = current_approval_level + 1
+                message = f"{doc_name} moved to approval level {new_approval_level}."
         else:
-            new_status_id = 20  # Still Pending Approval
-            new_approval_level = current_approval_level + 1
-            message = f"{doc_name} moved to approval level {new_approval_level}."
+            # 6b. No hierarchy — fall back to edit-access check
+            if not _user_has_edit_access(user_id, branch_id, menu_id, db):
+                raise HTTPException(
+                    status_code=403,
+                    detail="User does not have approval permission for this menu and branch."
+                )
+            # Direct approval — no levels to traverse
+            new_status_id = 3  # Approved (final)
+            new_approval_level = current_approval_level
+            message = f"{doc_name} approved (no approval hierarchy configured)."
 
         # 12. Update document status
         updated_at = datetime.utcnow()
@@ -278,27 +299,46 @@ def process_rejection(
 
         # 2. If menu_id provided, verify user has approval permission at current level
         if menu_id is not None:
-            user_level_query = get_user_approval_level()
-            user_level_result = db.execute(
-                user_level_query,
-                {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
+            # Check if approval hierarchy exists for this menu/branch
+            approval_exists_query = check_approval_mst_exists()
+            approval_exists_result = db.execute(
+                approval_exists_query,
+                {"menu_id": menu_id, "branch_id": branch_id}
             ).fetchone()
+            approval_exists = False
+            if approval_exists_result:
+                approval_exists = (dict(approval_exists_result._mapping).get("count") or 0) > 0
 
-            if not user_level_result:
-                raise HTTPException(
-                    status_code=403,
-                    detail="User does not have approval permission for this menu and branch."
-                )
+            if approval_exists:
+                # Hierarchy exists — use level-based check
+                user_level_query = get_user_approval_level()
+                user_level_result = db.execute(
+                    user_level_query,
+                    {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
+                ).fetchone()
 
-            user_approval_level = dict(user_level_result._mapping).get("approval_level")
-            if user_approval_level != current_approval_level:
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"User approval level ({user_approval_level}) does not match "
-                        f"current {doc_name} approval level ({current_approval_level})."
+                if not user_level_result:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="User does not have approval permission for this menu and branch."
                     )
-                )
+
+                user_approval_level = dict(user_level_result._mapping).get("approval_level")
+                if user_approval_level != current_approval_level:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"User approval level ({user_approval_level}) does not match "
+                            f"current {doc_name} approval level ({current_approval_level})."
+                        )
+                    )
+            else:
+                # No hierarchy — fall back to edit-access check
+                if not _user_has_edit_access(user_id, branch_id, menu_id, db):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="User does not have rejection permission for this menu and branch."
+                    )
 
         # 3. Update status to Rejected (4), clear approval_level
         updated_at = datetime.utcnow()

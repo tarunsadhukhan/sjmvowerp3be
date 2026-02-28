@@ -70,16 +70,21 @@ def _update_status_fn():
     return text("UPDATE test_doc SET status_id = :status_id, approval_level = :approval_level WHERE doc_id = :doc_id")
 
 
-def _setup_db_for_approval(db, doc_status=20, doc_level=1, user_level=1, max_level=2, max_amount=None, doc_on_refresh=None):
+def _setup_db_for_approval(db, doc_status=20, doc_level=1, user_level=1, max_level=2, max_amount=None, doc_on_refresh=None, hierarchy_exists=True):
     """Set up mock DB responses for a standard approval flow."""
     doc_row = _mock_doc_row(status_id=doc_status, approval_level=doc_level)
+    count_row = _mock_count_row(count=2 if hierarchy_exists else 0)
     approval_row = _mock_approval_row(approval_level=user_level, max_amount_single=max_amount)
     max_level_row = _mock_max_level_row(max_level=max_level)
 
     # Build the side effects for db.execute().fetchone()
-    fetchone_results = [doc_row, approval_row, max_level_row]
+    # Sequence: doc, [refresh], count, [approval_row, max_level_row]
+    fetchone_results = [doc_row]
     if doc_on_refresh:
-        fetchone_results.insert(1, doc_on_refresh)
+        fetchone_results.append(doc_on_refresh)
+    fetchone_results.append(count_row)
+    if hierarchy_exists:
+        fetchone_results.extend([approval_row, max_level_row])
 
     execute_mock = MagicMock()
     execute_mock.return_value.fetchone = MagicMock(side_effect=fetchone_results)
@@ -99,12 +104,13 @@ class TestProcessApproval:
 
         doc_open = _mock_doc_row(status_id=1, approval_level=None)
         doc_pending = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        # Sequence: fetch doc (Open), refresh doc (after transition), user level, max level
+        # Sequence: fetch doc (Open), refresh doc (after transition), check hierarchy, user level, max level
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_open, doc_pending, approval_row, max_level_row]
+            side_effect=[doc_open, doc_pending, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -123,11 +129,12 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=3)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -146,11 +153,12 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=3)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=3)
         max_level_row = _mock_max_level_row(max_level=3)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -169,10 +177,11 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=2)  # User is level 2
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row]
+            side_effect=[doc_row, count_row, approval_row]
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -185,13 +194,14 @@ class TestProcessApproval:
         assert "level" in exc_info.value.detail.lower()
 
     def test_no_permission_forbidden(self):
-        """User with no approval_mst entry should get 403."""
+        """User with no approval_mst entry (but hierarchy exists) should get 403."""
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, None]  # No approval entry
+            side_effect=[doc_row, count_row, None]  # No approval entry for this user
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -227,10 +237,11 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=50000.0)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row]
+            side_effect=[doc_row, count_row, approval_row]
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -248,11 +259,12 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=100000.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -270,12 +282,13 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         # max_amount_single is 0 which would normally block, but should be ignored
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=0.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -293,12 +306,13 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         # max_amount_single is 0 - should NOT block
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=0.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -316,11 +330,12 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=None)
         max_level_row = _mock_max_level_row(max_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -365,11 +380,12 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row, max_level_row]
+            side_effect=[doc_row, count_row, approval_row, max_level_row]
         )
 
         result = process_approval(
@@ -386,13 +402,57 @@ class TestProcessApproval:
         assert "indent_no" in params
         assert params["indent_no"] is None
 
+    def test_no_hierarchy_with_edit_access_approves(self):
+        """No hierarchy configured + user has edit access → direct approval (status 3)."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=0)  # No hierarchy
+        edit_access_row = _mock_edit_access_row(max_access_type_id=4)
+
+        db.execute.return_value.fetchone = MagicMock(
+            side_effect=[doc_row, count_row, edit_access_row]
+        )
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="TestDoc",
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Direct approval
+        assert "no approval hierarchy" in result["message"].lower()
+
+    def test_no_hierarchy_without_edit_access_forbidden(self):
+        """No hierarchy configured + user lacks edit access → 403."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=0)  # No hierarchy
+        edit_access_row = _mock_edit_access_row(max_access_type_id=2)  # Read-only
+
+        db.execute.return_value.fetchone = MagicMock(
+            side_effect=[doc_row, count_row, edit_access_row]
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_approval(
+                doc_id=1, user_id=10, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="TestDoc",
+            )
+        assert exc_info.value.status_code == 403
+        assert "permission" in exc_info.value.detail.lower()
+
     def test_rollback_on_approval_failure(self):
         """DB should be rolled back when approval fails."""
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, None]  # No approval entry -> 403
+            side_effect=[doc_row, count_row, None]  # No approval entry for user -> 403
         )
 
         with pytest.raises(HTTPException):
@@ -434,10 +494,11 @@ class TestProcessRejection:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
         approval_row = _mock_approval_row(approval_level=1)
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row]
+            side_effect=[doc_row, count_row, approval_row]
         )
 
         result = process_rejection(
@@ -454,10 +515,11 @@ class TestProcessRejection:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=2)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
         approval_row = _mock_approval_row(approval_level=1)  # Wrong level
 
         db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, approval_row]
+            side_effect=[doc_row, count_row, approval_row]
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -512,6 +574,48 @@ class TestProcessRejection:
 
         assert result["status"] == "success"
         assert result["new_status_id"] == 4
+
+    def test_rejection_no_hierarchy_with_edit_access(self):
+        """No hierarchy + edit access → rejection allowed."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=0)  # No hierarchy
+        edit_access_row = _mock_edit_access_row(max_access_type_id=4)
+
+        db.execute.return_value.fetchone = MagicMock(
+            side_effect=[doc_row, count_row, edit_access_row]
+        )
+
+        result = process_rejection(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="TestDoc",
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 4
+
+    def test_rejection_no_hierarchy_without_edit_access(self):
+        """No hierarchy + no edit access → 403."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=0)  # No hierarchy
+        edit_access_row = _mock_edit_access_row(max_access_type_id=2)  # Read-only
+
+        db.execute.return_value.fetchone = MagicMock(
+            side_effect=[doc_row, count_row, edit_access_row]
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_rejection(
+                doc_id=1, user_id=10, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="TestDoc",
+            )
+        assert exc_info.value.status_code == 403
+        assert "permission" in exc_info.value.detail.lower()
 
 
 # ===========================================================================
