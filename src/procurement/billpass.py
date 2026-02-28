@@ -26,6 +26,7 @@ from src.procurement.query import (
     update_bill_pass_query,
 )
 from src.procurement.inward import format_inward_no
+from src.procurement.po import extract_formatted_po_no
 
 logger = logging.getLogger(__name__)
 
@@ -271,12 +272,13 @@ async def get_bill_pass_by_id(
                 "discount_amount": safe_float(line.get("discount_amount")),
                 "cgst_percent": safe_float(line.get("cgst_percent")),
                 "cgst_amount": safe_float(line.get("cgst_amount")),
-                "sgst_percent": safe_float(line.get("sgst_percent")),
+                "sgst_percent": safe_float(line.get("state_tax_percent")),
                 "sgst_amount": safe_float(line.get("sgst_amount")),
                 "igst_percent": safe_float(line.get("igst_percent")),
                 "igst_amount": safe_float(line.get("igst_amount")),
                 "tax_amount": safe_float(line.get("tax_amount")),
                 "line_total": safe_float(line.get("line_total")),
+                "po_no": extract_formatted_po_no(line) if line.get("po_no") else "",
             })
 
         # Get DRCR notes
@@ -324,6 +326,7 @@ async def get_bill_pass_by_id(
                 "line_amount": safe_float(line.get("line_amount")),
                 "item_name": line.get("item_name") or "",
                 "item_code": line.get("item_code") or "",
+                "po_no": extract_formatted_po_no(line) if line.get("po_no") else "",
             })
 
         # Attach lines to notes

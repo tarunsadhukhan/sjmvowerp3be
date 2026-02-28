@@ -1511,12 +1511,13 @@ def delete_invoice_line_items():
 def update_invoice_status():
     sql = """UPDATE sales_invoice SET
         status_id = :status_id,
+        approval_level = :approval_level,
         invoice_no = CASE
             WHEN :invoice_no IS NOT NULL THEN :invoice_no
             ELSE invoice_no
         END,
         updated_by = :updated_by,
-        updated_date_time = NOW()
+        updated_date_time = :updated_date_time
     WHERE invoice_id = :invoice_id;"""
     return text(sql)
 
@@ -1525,6 +1526,7 @@ def get_invoice_with_approval_info():
     sql = """SELECT
         si.invoice_id,
         si.status_id,
+        si.approval_level,
         si.invoice_no,
         si.branch_id,
         si.invoice_date,
