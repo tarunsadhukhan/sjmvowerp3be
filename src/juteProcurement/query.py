@@ -3,6 +3,8 @@ from sqlalchemy.sql import text
 from src.juteProcurement.formatters import (
     get_jute_po_number_sql_expression,
     get_jute_gate_entry_number_sql_expression,
+    get_jute_mr_number_sql_expression,
+    get_jute_bill_pass_number_sql_expression,
 )
 
 
@@ -1139,7 +1141,9 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
         co_prefix_column="cm.co_prefix",
         branch_prefix_column="bm.branch_prefix"
     )
-    
+    # Get the formatted MR number SQL expression
+    mr_num_expr = get_jute_mr_number_sql_expression()
+
     search_clause = ""
     if search:
         search_clause = """
@@ -1153,9 +1157,14 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
         """
 
     sql = f"""
-        SELECT 
+        SELECT
             jm.jute_mr_id,
             jm.branch_mr_no,
+            CASE
+                WHEN jm.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jm.jute_mr_date,
             jm.branch_id,
             bm.branch_name,
@@ -1240,10 +1249,17 @@ def get_jute_mr_by_id_query():
     Query to get a single jute MR by ID with all header details.
     Includes actual_weight from gate entry and party branch info from party_branch_mst.
     """
-    sql = """
-        SELECT 
+    mr_num_expr = get_jute_mr_number_sql_expression()
+
+    sql = f"""
+        SELECT
             jm.jute_mr_id,
             jm.branch_mr_no,
+            CASE
+                WHEN jm.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jm.jute_mr_date,
             jm.branch_id,
             bm.branch_name,
@@ -1273,6 +1289,7 @@ def get_jute_mr_by_id_query():
             jm.updated_date_time
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         LEFT JOIN party_branch_mst pbm ON pbm.party_mst_branch_id = jm.party_branch_id
@@ -1438,10 +1455,13 @@ def get_jute_bill_pass_table_query(co_id: int, search: str = None):
     """
     Query to get jute bill pass list with pagination support.
     Bill passes are approved MRs (status_id = 3) from jute_mr table.
-    
-    Returns columns: bill_pass_no, bill_pass_date, mr_no, supplier, party, 
+
+    Returns columns: bill_pass_no, bill_pass_date, mr_no, supplier, party,
                      invoice_no, invoice_date, amount (net_total)
     """
+    mr_num_expr = get_jute_mr_number_sql_expression()
+    bill_pass_num_expr = get_jute_bill_pass_number_sql_expression()
+
     search_clause = ""
     if search:
         search_clause = """
@@ -1455,12 +1475,22 @@ def get_jute_bill_pass_table_query(co_id: int, search: str = None):
         """
 
     sql = f"""
-        SELECT 
+        SELECT
             jm.jute_mr_id,
             jm.bill_pass_no,
+            CASE
+                WHEN jm.bill_pass_no IS NOT NULL
+                THEN {bill_pass_num_expr}
+                ELSE NULL
+            END AS bill_pass_num,
             jm.bill_pass_date,
             jm.bill_pass_complete,
             jm.branch_mr_no AS mr_no,
+            CASE
+                WHEN jm.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jm.jute_mr_date AS mr_date,
             jm.branch_id,
             bm.branch_name,
@@ -1482,6 +1512,7 @@ def get_jute_bill_pass_table_query(co_id: int, search: str = None):
             jm.updated_date_time
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
@@ -1528,13 +1559,26 @@ def get_jute_bill_pass_by_id_query():
     """
     Query to get a single jute bill pass (approved MR) by ID with all details.
     """
-    sql = """
-        SELECT 
+    mr_num_expr = get_jute_mr_number_sql_expression()
+    bill_pass_num_expr = get_jute_bill_pass_number_sql_expression()
+
+    sql = f"""
+        SELECT
             jm.jute_mr_id,
             jm.bill_pass_no,
+            CASE
+                WHEN jm.bill_pass_no IS NOT NULL
+                THEN {bill_pass_num_expr}
+                ELSE NULL
+            END AS bill_pass_num,
             jm.bill_pass_date,
             jm.bill_pass_complete,
             jm.branch_mr_no AS mr_no,
+            CASE
+                WHEN jm.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jm.jute_mr_date AS mr_date,
             jm.jute_gate_entry_no AS gate_entry_no,
             jm.jute_gate_entry_date AS gate_entry_date,
@@ -1575,13 +1619,14 @@ def get_jute_bill_pass_by_id_query():
             jm.updated_date_time
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         LEFT JOIN branch_mst pb ON pb.branch_id = jm.party_branch_id
         LEFT JOIN jute_po jp ON jp.jute_po_id = jm.po_id
         LEFT JOIN jute_mukam_mst jmm ON jmm.mukam_id = jm.mukam_id
         LEFT JOIN status_mst sm ON sm.status_id = jm.status_id
-        WHERE jm.jute_mr_id = :jute_mr_id 
+        WHERE jm.jute_mr_id = :jute_mr_id
         AND jm.status_id = 3
         AND bm.co_id = :co_id
     """
@@ -1692,13 +1737,25 @@ def get_jute_stock_outstanding_query():
     Filters by branch_id and returns only records with positive balance quantity.
     Optionally filters by issue_date to exclude stock received after the issue date.
     """
-    sql = _group_path_cte() + """
+    mr_num_expr = get_jute_mr_number_sql_expression(
+        mr_no_column="vso.branch_mr_no",
+        mr_date_column="jm.jute_mr_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+
+    sql = _group_path_cte() + f"""
         SELECT
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
             vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
+            CASE
+                WHEN vso.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jml.jute_mr_id,
             im.item_grp_id AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
@@ -1712,6 +1769,9 @@ def get_jute_stock_outstanding_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
+        LEFT JOIN branch_mst bm ON bm.branch_id = vso.branch_id
+        LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN item_mst im ON im.item_id = vso.actual_item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
@@ -1731,13 +1791,25 @@ def get_jute_stock_outstanding_by_item_query():
     Optionally filters by issue_date to exclude stock received after the issue date.
     Uses recursive CTE for full group path names.
     """
-    sql = _group_path_cte() + """
+    mr_num_expr = get_jute_mr_number_sql_expression(
+        mr_no_column="vso.branch_mr_no",
+        mr_date_column="jm.jute_mr_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+
+    sql = _group_path_cte() + f"""
         SELECT
             vso.jute_mr_li_id,
             vso.jute_gate_entry_no,
             vso.warehouse_name,
             vso.branch_id,
             vso.branch_mr_no,
+            CASE
+                WHEN vso.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jml.jute_mr_id,
             im.item_grp_id AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
@@ -1751,6 +1823,9 @@ def get_jute_stock_outstanding_by_item_query():
             vso.bal_weight AS balweight
         FROM vw_jute_stock_outstanding vso
         INNER JOIN jute_mr_li jml ON jml.jute_mr_li_id = vso.jute_mr_li_id
+        INNER JOIN jute_mr jm ON jm.jute_mr_id = jml.jute_mr_id
+        LEFT JOIN branch_mst bm ON bm.branch_id = vso.branch_id
+        LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN item_mst im ON im.item_id = vso.actual_item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
         LEFT JOIN full_group_paths fgp ON fgp.item_grp_id = im.item_grp_id
@@ -1774,7 +1849,14 @@ def get_jute_issues_by_date_query():
     This ensures old records that only had jute_quality_id (now deprecated)
     still resolve to the correct item via the MR's actual_item_id.
     """
-    sql = _group_path_cte() + """
+    mr_num_expr = get_jute_mr_number_sql_expression(
+        mr_no_column="jm.branch_mr_no",
+        mr_date_column="jm.jute_mr_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+
+    sql = _group_path_cte() + f"""
         SELECT
             ji.jute_issue_id,
             ji.branch_id,
@@ -1785,6 +1867,11 @@ def get_jute_issues_by_date_query():
             ji.jute_mr_li_id,
             mrli.jute_mr_id,
             jm.branch_mr_no,
+            CASE
+                WHEN jm.branch_mr_no IS NOT NULL
+                THEN {mr_num_expr}
+                ELSE NULL
+            END AS mr_num,
             jm.jute_gate_entry_no,
             COALESCE(im.item_grp_id, im2.item_grp_id) AS item_grp_id,
             COALESCE(fgp.item_grp_name_path, ig.item_grp_name) AS jute_group_name,
@@ -1801,6 +1888,7 @@ def get_jute_issues_by_date_query():
             ji.update_date_time
         FROM jute_issue ji
         INNER JOIN branch_mst bm ON bm.branch_id = ji.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN status_mst sm ON sm.status_id = ji.status_id
         LEFT JOIN jute_mr_li mrli ON mrli.jute_mr_li_id = ji.jute_mr_li_id
         LEFT JOIN jute_mr jm ON jm.jute_mr_id = mrli.jute_mr_id
@@ -1964,4 +2052,80 @@ def get_batch_daily_assign_max_date_query():
         FROM jute_batch_daily_assign
         WHERE branch_id = :branch_id
     """
+    return text(sql)
+
+
+# =============================================================================
+# APPROVAL UTILITY QUERY FUNCTIONS
+# =============================================================================
+# These functions are used by the shared approval utility (src/common/approval_utils.py)
+# to integrate jute MR and jute PO with the multi-level approval workflow.
+
+
+def get_mr_with_approval_info():
+    """Get jute MR details required by the shared approval utility.
+
+    Returns: status_id, approval_level, branch_id (required by process_approval).
+    """
+    sql = """SELECT
+        jm.jute_mr_id,
+        jm.status_id,
+        jm.approval_level,
+        jm.branch_id,
+        jm.party_id,
+        jm.party_branch_id,
+        jm.jute_mr_date,
+        jm.branch_mr_no
+    FROM jute_mr jm
+    WHERE jm.jute_mr_id = :jute_mr_id;"""
+    return text(sql)
+
+
+def update_mr_status():
+    """Update jute MR status and approval level.
+
+    Used by the shared approval utility to transition MR status during
+    the approval workflow.
+    """
+    sql = """UPDATE jute_mr SET
+        status_id = :status_id,
+        approval_level = :approval_level,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE jute_mr_id = :jute_mr_id;"""
+    return text(sql)
+
+
+def get_jute_po_with_approval_info():
+    """Get jute PO details required by the shared approval utility.
+
+    Returns: status_id, approval_level, branch_id (required by process_approval).
+    Also joins branch_mst to get co_id for validation.
+    """
+    sql = """SELECT
+        jp.jute_po_id,
+        jp.status_id,
+        jp.approval_level,
+        jp.branch_id,
+        jp.po_date,
+        jp.po_no,
+        bm.co_id
+    FROM jute_po jp
+    LEFT JOIN branch_mst bm ON bm.branch_id = jp.branch_id
+    WHERE jp.jute_po_id = :jute_po_id;"""
+    return text(sql)
+
+
+def update_jute_po_status():
+    """Update jute PO status and approval level.
+
+    Used by the shared approval utility to transition Jute PO status during
+    the approval workflow.
+    """
+    sql = """UPDATE jute_po SET
+        status_id = :status_id,
+        approval_level = :approval_level,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE jute_po_id = :jute_po_id;"""
     return text(sql)

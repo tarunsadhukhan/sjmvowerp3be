@@ -9,7 +9,6 @@ from src.masters.query import get_branch_list, get_item_group_drodown
 from src.procurement.indent import (
     calculate_financial_year,
     format_indent_no,
-    calculate_approval_permissions,
 )
 from src.procurement.query import (
     get_item_by_group_id_purchaseable,
@@ -22,7 +21,11 @@ from src.sales.quotation import (
     to_positive_float,
     format_date,
     get_fy_boundaries,
-    process_sales_approval,
+)
+from src.common.approval_utils import (
+    process_approval,
+    process_rejection,
+    calculate_approval_permissions,
 )
 from src.sales.query import (
     get_customers_for_sales,
@@ -1000,8 +1003,10 @@ async def open_sales_invoice(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 1,
+            "approval_level": None,
             "invoice_no": new_no,
             "updated_by": user_id,
+            "updated_date_time": datetime.utcnow(),
         })
         db.commit()
 
@@ -1042,8 +1047,10 @@ async def cancel_draft_sales_invoice(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 6,
+            "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
+            "updated_date_time": datetime.utcnow(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 6, "message": "Draft cancelled successfully."}
@@ -1077,8 +1084,10 @@ async def send_sales_invoice_for_approval(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": 20,
+            "approval_level": 1,
             "invoice_no": None,
             "updated_by": user_id,
+            "updated_date_time": datetime.utcnow(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 20, "new_approval_level": 1, "message": "Sales invoice sent for approval."}
@@ -1108,12 +1117,17 @@ async def approve_sales_invoice(
             raise HTTPException(status_code=404, detail="Sales invoice not found")
         document_amount = float(dict(doc_result._mapping).get("invoice_amount", 0) or 0)
 
-        result = process_sales_approval(
-            doc_id=invoice_id, user_id=user_id, menu_id=menu_id,
-            get_doc_query=get_invoice_with_approval_info,
-            update_status_query=update_invoice_status,
-            id_param_name="invoice_id", doc_name="Sales invoice",
-            db=db, document_amount=document_amount,
+        result = process_approval(
+            doc_id=invoice_id,
+            user_id=user_id,
+            menu_id=menu_id,
+            db=db,
+            get_doc_fn=get_invoice_with_approval_info,
+            update_status_fn=update_invoice_status,
+            id_param_name="invoice_id",
+            doc_name="Sales invoice",
+            document_amount=document_amount,
+            extra_update_params={"invoice_no": None},
         )
         return result
     except HTTPException:
@@ -1131,29 +1145,26 @@ async def reject_sales_invoice(
     """Reject a sales invoice (20 -> 4)."""
     try:
         invoice_id = to_int(payload.get("invoice_id"), "invoice_id", required=True)
+        menu_id = to_int(payload.get("menu_id"), "menu_id")
         user_id = int(token_data.get("user_id"))
+        reason = payload.get("reason")
 
-        doc_query = get_invoice_with_approval_info()
-        doc_result = db.execute(doc_query, {"invoice_id": invoice_id}).fetchone()
-        if not doc_result:
-            raise HTTPException(status_code=404, detail="Sales invoice not found")
-        if dict(doc_result._mapping).get("status_id") != 20:
-            raise HTTPException(status_code=400, detail="Cannot reject. Expected status 20 (Pending Approval).")
-
-        update_q = update_invoice_status()
-        db.execute(update_q, {
-            "invoice_id": invoice_id,
-            "status_id": 4,
-            "invoice_no": None,
-            "updated_by": user_id,
-        })
-        db.commit()
-        return {"status": "success", "new_status_id": 4, "message": "Sales invoice rejected."}
+        result = process_rejection(
+            doc_id=invoice_id,
+            user_id=user_id,
+            menu_id=menu_id,
+            db=db,
+            get_doc_fn=get_invoice_with_approval_info,
+            update_status_fn=update_invoice_status,
+            id_param_name="invoice_id",
+            doc_name="Sales invoice",
+            reason=reason,
+            extra_update_params={"invoice_no": None},
+        )
+        return result
     except HTTPException:
-        db.rollback()
         raise
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1185,8 +1196,10 @@ async def reopen_sales_invoice(
         db.execute(update_q, {
             "invoice_id": invoice_id,
             "status_id": new_status_id,
+            "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
+            "updated_date_time": datetime.utcnow(),
         })
         db.commit()
         return {"status": "success", "new_status_id": new_status_id, "message": f"Sales invoice reopened (status: {new_status_id})."}

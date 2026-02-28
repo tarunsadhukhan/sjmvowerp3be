@@ -56,17 +56,16 @@ from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import (
 	format_indent_no,
 	calculate_financial_year,
-	calculate_approval_permissions,
 	determine_validation_logic,
 	get_fy_boundaries,
 )
+from src.common.approval_utils import (
+	process_approval,
+	process_rejection,
+	calculate_approval_permissions,
+)
 from src.procurement.query import (
 	get_approval_flow_by_menu_branch,
-	get_user_approval_level,
-	get_max_approval_level,
-	get_user_consumed_amounts,
-	check_approval_mst_exists,
-	get_user_edit_access,
 )
 
 logger = logging.getLogger(__name__)
@@ -728,19 +727,19 @@ def calculate_gst_amounts(
 		sgst_pct = tax_percentage / 2.0
 		cgst_pct = tax_percentage / 2.0
 		igst_pct = 0.0
-		sgst_amt = (amount * sgst_pct) / 100.0
-		cgst_amt = (amount * cgst_pct) / 100.0
+		sgst_amt = round((amount * sgst_pct) / 100.0, 2)
+		cgst_amt = round((amount * cgst_pct) / 100.0, 2)
 		igst_amt = 0.0
 	else:
 		# Different state: Full tax as IGST
 		igst_pct = tax_percentage
 		sgst_pct = 0.0
 		cgst_pct = 0.0
-		igst_amt = (amount * igst_pct) / 100.0
+		igst_amt = round((amount * igst_pct) / 100.0, 2)
 		sgst_amt = 0.0
 		cgst_amt = 0.0
-	
-	total_tax = igst_amt + sgst_amt + cgst_amt
+
+	total_tax = round(igst_amt + sgst_amt + cgst_amt, 2)
 	
 	return {
 		"i_tax_percentage": igst_pct,
@@ -850,13 +849,13 @@ async def create_po(
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
 		created_at = datetime.utcnow()
-		
+
 		# Calculate totals
 		net_amount = 0.0
 		total_igst = 0.0
 		total_sgst = 0.0
 		total_cgst = 0.0
-		
+
 		# Process line items
 		normalized_items = []
 		for idx, item in enumerate(raw_items, start=1):
@@ -868,7 +867,7 @@ async def create_po(
 			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
 			item_make_id = to_int(item.get("make"), f"items[{idx}].make")
 			indent_dtl_id = to_int(item.get("indent_dtl_id"), f"items[{idx}].indent_dtl_id")
-			
+
 			# Get tax percentage from item_mst
 			item_query = text("SELECT tax_percentage, hsn_code FROM item_mst WHERE item_id = :item_id")
 			item_result = db.execute(item_query, {"item_id": item_id}).fetchone()
@@ -877,12 +876,12 @@ async def create_po(
 			if item_result:
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
-			
+
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
 			discount_value = to_float(item.get("discount_value"), f"items[{idx}].discount_value")
 			discount_amount = 0.0
-			
+
 			base_amount = qty * rate
 			if discount_mode == 1:  # Percentage
 				if discount_value > 100:
@@ -892,51 +891,24 @@ async def create_po(
 				if discount_value > base_amount:
 					raise HTTPException(status_code=400, detail=f"items[{idx}].discount_amount cannot be greater than total amount")
 				discount_amount = discount_value
-			
+
 			amount = base_amount - discount_amount
 			net_amount += amount
-			
-			# Calculate GST if india_gst is enabled
-			if india_gst and tax_percentage > 0:
-				# Use values from frontend
-				i_tax_amount = to_float(item.get("igst_amount"), f"items[{idx}].igst_amount")
-				c_tax_amount = to_float(item.get("cgst_amount"), f"items[{idx}].cgst_amount")
-				s_tax_amount = to_float(item.get("sgst_amount"), f"items[{idx}].sgst_amount")
-				tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
-				
-				if tax_amount > 0:
-					# Determine percentages based on amounts
-					if i_tax_amount > 0:
-						i_tax_percentage = tax_percentage
-						c_tax_percentage = 0.0
-						s_tax_percentage = 0.0
-					else:
-						i_tax_percentage = 0.0
-						c_tax_percentage = tax_percentage / 2.0
-						s_tax_percentage = tax_percentage / 2.0
-					
-					gst_amounts = {
-						"i_tax_percentage": i_tax_percentage,
-						"s_tax_percentage": s_tax_percentage,
-						"c_tax_percentage": c_tax_percentage,
-						"i_tax_amount": i_tax_amount,
-						"s_tax_amount": s_tax_amount,
-						"c_tax_amount": c_tax_amount,
-						"tax_amount": tax_amount,
-						"tax_pct": tax_percentage,
-						"stax_percentage": s_tax_percentage + c_tax_percentage,
-					}
-					
-					total_igst += i_tax_amount
-					total_sgst += s_tax_amount
-					total_cgst += c_tax_amount
-				else:
-					gst_amounts = None
+
+			# Calculate GST if india_gst is enabled (server-side calculation)
+			if india_gst and tax_percentage > 0 and supplier_state_id and shipping_state_id:
+				line_amount = float(amount)
+				gst_amounts = calculate_gst_amounts(
+					line_amount, tax_percentage, supplier_state_id, shipping_state_id
+				)
+				total_igst += gst_amounts["i_tax_amount"]
+				total_sgst += gst_amounts["s_tax_amount"]
+				total_cgst += gst_amounts["c_tax_amount"]
 			else:
 				gst_amounts = None
-			
+
 			remarks_raw = item.get("remarks", "").strip() or None
-			
+
 			normalized_items.append({
 				"item_id": item_id,
 				"qty": qty,
@@ -953,7 +925,7 @@ async def create_po(
 				"tax_percentage": tax_percentage,
 				"gst_amounts": gst_amounts,
 			})
-		
+
 		# Process additional charges
 		normalized_additional = []
 		for idx, addl in enumerate(raw_additional, start=1):
@@ -965,9 +937,10 @@ async def create_po(
 			
 			remarks_raw = addl.get("remarks", "").strip() or None
 			
-			# GST for additional charges (if applicable)
+			# GST for additional charges (if applicable, respecting apply_tax flag)
 			gst_amounts = None
-			if india_gst and supplier_state_id and shipping_state_id:
+			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
+			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
 				# Get tax percentage from additional_charges_mst or use default
 				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
@@ -977,7 +950,7 @@ async def create_po(
 					total_igst += gst_amounts["i_tax_amount"]
 					total_sgst += gst_amounts["s_tax_amount"]
 					total_cgst += gst_amounts["c_tax_amount"]
-			
+
 			normalized_additional.append({
 				"additional_charges_id": additional_charges_id,
 				"qty": qty,
@@ -986,10 +959,10 @@ async def create_po(
 				"remarks": remarks_raw,
 				"gst_amounts": gst_amounts,
 			})
-		
+
 		total_amount = net_amount + total_igst + total_sgst + total_cgst
 		advance_amount = (net_amount * advance_value) / 100.0 if advance_value > 0 else 0.0
-		
+
 		# Insert PO header
 		insert_header_query = insert_proc_po()
 		header_params = {
@@ -1302,8 +1275,12 @@ async def get_po_by_id(
 				line["igst"] = float(gst.get("i_tax_amount", 0)) if gst.get("i_tax_amount") else 0
 				line["sgst"] = float(gst.get("s_tax_amount", 0)) if gst.get("s_tax_amount") else 0
 				line["cgst"] = float(gst.get("c_tax_amount", 0)) if gst.get("c_tax_amount") else 0
+				line["igstPercentage"] = float(gst.get("i_tax_percentage", 0)) if gst.get("i_tax_percentage") else 0
+				line["cgstPercentage"] = float(gst.get("c_tax_percentage", 0)) if gst.get("c_tax_percentage") else 0
+				line["sgstPercentage"] = float(gst.get("stax_percentage", 0)) / 2 if gst.get("stax_percentage") else 0
+				line["taxAmount"] = float(gst.get("tax_amount", 0)) if gst.get("tax_amount") else 0
 			response["lines"].append(line)
-		
+
 		# Map additional charges
 		for addl in additional_charges:
 			gst = gst_by_additional_id.get(addl.get("po_additional_id"))
@@ -1433,13 +1410,13 @@ async def update_po(
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
 		updated_at = datetime.utcnow()
-		
+
 		# Calculate totals (same logic as create)
 		net_amount = 0.0
 		total_igst = 0.0
 		total_sgst = 0.0
 		total_cgst = 0.0
-		
+
 		# Process line items (same as create)
 		normalized_items = []
 		for idx, item in enumerate(raw_items, start=1):
@@ -1451,7 +1428,7 @@ async def update_po(
 			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
 			item_make_id = to_int(item.get("make"), f"items[{idx}].make")
 			indent_dtl_id = to_int(item.get("indent_dtl_id"), f"items[{idx}].indent_dtl_id")
-			
+
 			# Get tax percentage from item_mst
 			item_query = text("SELECT tax_percentage, hsn_code FROM item_mst WHERE item_id = :item_id")
 			item_result = db.execute(item_query, {"item_id": item_id}).fetchone()
@@ -1460,12 +1437,12 @@ async def update_po(
 			if item_result:
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
-			
+
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
 			discount_value = to_float(item.get("discount_value"), f"items[{idx}].discount_value")
 			discount_amount = 0.0
-			
+
 			base_amount = qty * rate
 			if discount_mode == 1:  # Percentage
 				if discount_value > 100:
@@ -1475,51 +1452,24 @@ async def update_po(
 				if discount_value > base_amount:
 					raise HTTPException(status_code=400, detail=f"items[{idx}].discount_amount cannot be greater than total amount")
 				discount_amount = discount_value
-			
+
 			amount = base_amount - discount_amount
 			net_amount += amount
-			
-			# Calculate GST if india_gst is enabled
-			if india_gst and tax_percentage > 0:
-				# Use values from frontend
-				i_tax_amount = to_float(item.get("igst_amount"), f"items[{idx}].igst_amount")
-				c_tax_amount = to_float(item.get("cgst_amount"), f"items[{idx}].cgst_amount")
-				s_tax_amount = to_float(item.get("sgst_amount"), f"items[{idx}].sgst_amount")
-				tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
-				
-				if tax_amount > 0:
-					# Determine percentages based on amounts
-					if i_tax_amount > 0:
-						i_tax_percentage = tax_percentage
-						c_tax_percentage = 0.0
-						s_tax_percentage = 0.0
-					else:
-						i_tax_percentage = 0.0
-						c_tax_percentage = tax_percentage / 2.0
-						s_tax_percentage = tax_percentage / 2.0
-					
-					gst_amounts = {
-						"i_tax_percentage": i_tax_percentage,
-						"s_tax_percentage": s_tax_percentage,
-						"c_tax_percentage": c_tax_percentage,
-						"i_tax_amount": i_tax_amount,
-						"s_tax_amount": s_tax_amount,
-						"c_tax_amount": c_tax_amount,
-						"tax_amount": tax_amount,
-						"tax_pct": tax_percentage,
-						"stax_percentage": s_tax_percentage + c_tax_percentage,
-					}
-					
-					total_igst += i_tax_amount
-					total_sgst += s_tax_amount
-					total_cgst += c_tax_amount
-				else:
-					gst_amounts = None
+
+			# Calculate GST if india_gst is enabled (server-side calculation)
+			if india_gst and tax_percentage > 0 and supplier_state_id and shipping_state_id:
+				line_amount = float(amount)
+				gst_amounts = calculate_gst_amounts(
+					line_amount, tax_percentage, supplier_state_id, shipping_state_id
+				)
+				total_igst += gst_amounts["i_tax_amount"]
+				total_sgst += gst_amounts["s_tax_amount"]
+				total_cgst += gst_amounts["c_tax_amount"]
 			else:
 				gst_amounts = None
-			
+
 			remarks_raw = item.get("remarks", "").strip() or None
-			
+
 			normalized_items.append({
 				"item_id": item_id,
 				"qty": qty,
@@ -1536,7 +1486,7 @@ async def update_po(
 				"tax_percentage": tax_percentage,
 				"gst_amounts": gst_amounts,
 			})
-		
+
 		# Process additional charges (same as create)
 		normalized_additional = []
 		for idx, addl in enumerate(raw_additional, start=1):
@@ -1548,9 +1498,10 @@ async def update_po(
 			
 			remarks_raw = addl.get("remarks", "").strip() or None
 			
-			# GST for additional charges (if applicable)
+			# GST for additional charges (if applicable, respecting apply_tax flag)
 			gst_amounts = None
-			if india_gst and supplier_state_id and shipping_state_id:
+			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
+			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
 				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
 				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
 				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
@@ -1559,7 +1510,7 @@ async def update_po(
 					total_igst += gst_amounts["i_tax_amount"]
 					total_sgst += gst_amounts["s_tax_amount"]
 					total_cgst += gst_amounts["c_tax_amount"]
-			
+
 			normalized_additional.append({
 				"additional_charges_id": additional_charges_id,
 				"qty": qty,
@@ -1568,10 +1519,10 @@ async def update_po(
 				"remarks": remarks_raw,
 				"gst_amounts": gst_amounts,
 			})
-		
+
 		total_amount = net_amount + total_igst + total_sgst + total_cgst
 		advance_amount = (net_amount * advance_value) / 100.0 if advance_value > 0 else 0.0
-		
+
 		# Get existing po_no to preserve it
 		existing_query = text("SELECT po_no FROM proc_po WHERE po_id = :po_id")
 		existing_result = db.execute(existing_query, {"po_id": po_id}).fetchone()
@@ -1734,146 +1685,6 @@ async def save_po(
 		raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== APPROVAL FUNCTIONS ====================
-
-def process_po_approval_with_value(
-	po_id: int,
-	user_id: int,
-	menu_id: int,
-	document_amount: float,
-	db: Session,
-) -> dict:
-	"""Process approval for PO with monetary value."""
-	try:
-		# Get PO details
-		po_query = get_po_with_approval_info()
-		po_result = db.execute(po_query, {"po_id": po_id}).fetchone()
-		if not po_result:
-			raise HTTPException(status_code=404, detail="PO not found")
-		
-		po = dict(po_result._mapping)
-		current_status_id = po.get("status_id")
-		current_approval_level = po.get("approval_level") or 0
-		branch_id = po.get("branch_id")
-
-		# Guard: cannot approve an already-approved PO
-		if current_status_id == 3:
-			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
-		
-		# If status is Open (1), first transition to Pending Approval (20) with level 1
-		if current_status_id == 1:
-			updated_at = datetime.utcnow()
-			update_query = update_po_status()
-			db.execute(
-				update_query,
-				{
-					"po_id": po_id,
-					"status_id": 20,  # Pending Approval
-					"approval_level": 1,  # Start at level 1
-					"updated_by": user_id,
-					"updated_date_time": updated_at,
-					"po_no": None,  # Don't update po_no
-				}
-			)
-			db.commit()
-			current_status_id = 20
-			current_approval_level = 1
-			po_result = db.execute(po_query, {"po_id": po_id}).fetchone()
-			if po_result:
-				po = dict(po_result._mapping)
-		
-		# Verify current status is Pending Approval (20)
-		if current_status_id != 20:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Cannot approve PO with status_id {current_status_id}. Expected status 20 (Pending Approval) or 1 (Open)."
-			)
-		
-		# Get user's approval level and limits
-		user_level_query = get_user_approval_level()
-		logger.info(f"Checking approval permission: menu_id={menu_id}, branch_id={branch_id}, user_id={user_id}")
-		user_level_result = db.execute(
-			user_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-		).fetchone()
-		
-		if not user_level_result:
-			logger.warning(f"No approval permission found for menu_id={menu_id}, branch_id={branch_id}, user_id={user_id}")
-			raise HTTPException(
-				status_code=403,
-				detail=f"User does not have approval permission for this menu and branch. (menu_id={menu_id}, branch_id={branch_id}, user_id={user_id})"
-			)
-		
-		user_data = dict(user_level_result._mapping)
-		user_approval_level = user_data.get("approval_level")
-		max_amount_single = user_data.get("max_amount_single")
-		
-		# Check if user can approve at current level
-		if user_approval_level != current_approval_level:
-			raise HTTPException(
-				status_code=403,
-				detail=f"User approval level ({user_approval_level}) does not match current PO approval level ({current_approval_level})."
-			)
-		
-		# Check amount limits
-		if max_amount_single is not None and document_amount > max_amount_single:
-			raise HTTPException(
-				status_code=403,
-				detail=f"Document amount ({document_amount}) exceeds maximum single approval amount ({max_amount_single})."
-			)
-		
-		# Get max approval level
-		max_level_query = get_max_approval_level()
-		max_level_result = db.execute(
-			max_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id}
-		).fetchone()
-		
-		max_approval_level = dict(max_level_result._mapping).get("max_level") if max_level_result else user_approval_level
-		
-		# Determine next status
-		if user_approval_level >= max_approval_level:
-			# Final level - approve
-			new_status_id = 3  # Approved
-			new_approval_level = user_approval_level
-			message = "PO approved (final level)."
-		else:
-			# Move to next level
-			new_status_id = 20  # Still Pending Approval
-			new_approval_level = current_approval_level + 1
-			message = f"PO moved to approval level {new_approval_level}."
-		
-		# Update PO status
-		updated_at = datetime.utcnow()
-		update_query = update_po_status()
-		db.execute(
-			update_query,
-			{
-				"po_id": po_id,
-				"status_id": new_status_id,
-				"approval_level": new_approval_level,
-				"updated_by": user_id,
-				"updated_date_time": updated_at,
-				"po_no": None,  # Don't update po_no
-			}
-		)
-		db.commit()
-		
-		return {
-			"status": "success",
-			"new_status_id": new_status_id,
-			"new_approval_level": new_approval_level,
-			"message": message,
-		}
-	except HTTPException:
-		db.rollback()
-		raise
-	except Exception as e:
-		db.rollback()
-		logger.exception("Error processing PO approval with value")
-		raise HTTPException(status_code=500, detail=str(e))
-
-
 # ==================== APPROVAL API ENDPOINTS ====================
 
 @router.post("/approve_po")
@@ -1918,12 +1729,17 @@ async def approve_po(
 			raise HTTPException(status_code=400, detail="Purchase Order is already approved and cannot be approved again.")
 		
 		# Process approval with value checks
-		result = process_po_approval_with_value(
-			po_id=po_id,
+		result = process_approval(
+			doc_id=po_id,
 			user_id=user_id,
 			menu_id=menu_id,
-			document_amount=document_amount,
 			db=db,
+			get_doc_fn=get_po_with_approval_info,
+			update_status_fn=update_po_status,
+			id_param_name="po_id",
+			doc_name="Purchase Order",
+			document_amount=document_amount,
+			extra_update_params={"po_no": None},
 		)
 		
 		return result
@@ -2311,62 +2127,40 @@ async def reject_po(
 		po_id = payload.get("po_id")
 		co_id = payload.get("co_id")
 		reason = payload.get("reason", "")
-		
+		menu_id = payload.get("menu_id")
+
 		if not po_id:
 			raise HTTPException(status_code=400, detail="po_id is required")
 		if not co_id:
 			raise HTTPException(status_code=400, detail="co_id is required")
-		
+
 		try:
 			po_id = int(po_id)
 			co_id = int(co_id)
+			if menu_id is not None:
+				menu_id = int(menu_id)
 		except (TypeError, ValueError):
-			raise HTTPException(status_code=400, detail="Invalid po_id or co_id")
-		
+			raise HTTPException(status_code=400, detail="Invalid po_id, co_id, or menu_id")
+
 		user_id = int(token_data.get("user_id"))
-		
-		# Get PO details
-		po_query = get_po_with_approval_info()
-		po_result = db.execute(po_query, {"po_id": po_id}).fetchone()
-		if not po_result:
-			raise HTTPException(status_code=404, detail="PO not found")
-		
-		po = dict(po_result._mapping)
-		current_status_id = po.get("status_id")
-		
-		# Verify current status is Pending Approval (20)
-		if current_status_id != 20:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Cannot reject PO with status_id {current_status_id}. Expected status 20 (Pending Approval)."
-			)
-		
-		# Update status to Rejected (4)
-		updated_at = datetime.utcnow()
-		update_query = update_po_status()
-		db.execute(
-			update_query,
-			{
-				"po_id": po_id,
-				"status_id": 4,  # Rejected
-				"approval_level": None,
-				"updated_by": user_id,
-				"updated_date_time": updated_at,
-				"po_no": None,  # Don't update po_no
-			}
+
+		result = process_rejection(
+			doc_id=po_id,
+			user_id=user_id,
+			menu_id=menu_id,
+			db=db,
+			get_doc_fn=get_po_with_approval_info,
+			update_status_fn=update_po_status,
+			id_param_name="po_id",
+			doc_name="Purchase Order",
+			reason=reason,
+			extra_update_params={"po_no": None},
 		)
-		db.commit()
-		
-		return {
-			"status": "success",
-			"new_status_id": 4,
-			"message": "PO rejected successfully.",
-		}
+
+		return result
 	except HTTPException:
-		db.rollback()
 		raise
 	except Exception as e:
-		db.rollback()
 		logger.exception("Error rejecting PO")
 		raise HTTPException(status_code=500, detail=str(e))
 

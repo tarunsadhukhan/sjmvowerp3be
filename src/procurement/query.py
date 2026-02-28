@@ -2,6 +2,18 @@ from sqlalchemy.sql import text
 from sqlalchemy.sql import bindparam
 from sqlalchemy.sql.elements import TextClause
 
+# Re-export shared approval query functions for backward compatibility.
+# These were moved to src/common/approval_query.py but many modules still
+# import them from here.
+from src.common.approval_query import (  # noqa: F401
+    get_approval_flow_by_menu_branch,
+    get_user_approval_level,
+    get_max_approval_level,
+    check_approval_mst_exists,
+    get_user_edit_access,
+    get_user_consumed_amounts,
+)
+
 def get_expense_types():
     sql = f"""select expense_type_id, etm.expense_type_name  
     from expense_type_mst etm where etm.active =1 ;"""
@@ -23,8 +35,8 @@ where igm.co_id = :co_id;"""
 
 def get_item_by_group_id_purchaseable(item_group_id: int):
     sql = f"""Select im.item_id,
-im.item_code , im.item_name , im.uom_id , um.uom_name
-from item_mst im 
+im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage
+from item_mst im
 left join uom_mst um on um.uom_id= im.uom_id
 where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;"""
     query = text(sql)
@@ -476,99 +488,6 @@ def delete_proc_indent_detail():
     return text(sql)
 
 
-def get_approval_flow_by_menu_branch():
-    """Get approval flow details for a specific menu and branch.
-    Returns all approval levels configured for the menu/branch combination.
-    """
-    sql = """SELECT
-        am.approval_mst_id,
-        am.menu_id,
-        am.user_id,
-        am.branch_id,
-        am.approval_level,
-        am.max_amount_single,
-        am.day_max_amount,
-        am.month_max_amount,
-        um.user_name,
-        mm.menu_name
-    FROM approval_mst am
-    LEFT JOIN user_mst um ON um.user_id = am.user_id
-    LEFT JOIN menu_mst mm ON mm.menu_id = am.menu_id
-    WHERE am.menu_id = :menu_id
-        AND am.branch_id = :branch_id
-    ORDER BY am.approval_level ASC;"""
-    return text(sql)
-
-
-def get_user_approval_level():
-    """Get the approval level of a specific user for a menu and branch."""
-    sql = """SELECT
-        am.approval_level,
-        am.max_amount_single,
-        am.day_max_amount,
-        am.month_max_amount
-    FROM approval_mst am
-    WHERE am.menu_id = :menu_id
-        AND am.branch_id = :branch_id
-        AND am.user_id = :user_id
-    LIMIT 1;"""
-    return text(sql)
-
-
-def get_max_approval_level():
-    """Get the maximum approval level configured for a menu and branch."""
-    sql = """SELECT MAX(am.approval_level) as max_level
-    FROM approval_mst am
-    WHERE am.menu_id = :menu_id
-        AND am.branch_id = :branch_id;"""
-    return text(sql)
-
-
-def get_user_consumed_amounts():
-    """Get amounts already consumed by user for the day and month.
-    This aggregates amounts from documents approved by the user today/this month.
-    Note: This needs to be customized based on which table stores the document amounts.
-    """
-    sql = """SELECT
-        COALESCE(SUM(CASE WHEN DATE(pi.updated_date_time) = CURDATE() THEN 1 ELSE 0 END), 0) as day_count,
-        COALESCE(SUM(CASE WHEN YEAR(pi.updated_date_time) = YEAR(CURDATE()) 
-                          AND MONTH(pi.updated_date_time) = MONTH(CURDATE()) THEN 1 ELSE 0 END), 0) as month_count
-    FROM proc_indent pi
-    WHERE pi.approval_level = :approval_level
-        AND pi.status_id = 3
-        AND EXISTS (
-            SELECT 1 FROM approval_mst am
-            WHERE am.menu_id = :menu_id
-                AND am.branch_id = :branch_id
-                AND am.user_id = :user_id
-                AND am.approval_level = :approval_level
-        );"""
-    return text(sql)
-
-
-def check_approval_mst_exists():
-    """Check if approval_mst has any entries for a menu and branch."""
-    sql = """SELECT COUNT(*) as count
-    FROM approval_mst am
-    WHERE am.menu_id = :menu_id
-        AND am.branch_id = :branch_id;"""
-    return text(sql)
-
-
-def get_user_edit_access():
-    """Check if user has edit access (access_type_id >= 4) for a menu and branch."""
-    sql = """SELECT 
-        MAX(CASE WHEN ccm.access_type = 1 THEN 1 ELSE rmm.access_type_id END) as max_access_type_id
-    FROM user_role_map urm
-    LEFT JOIN role_menu_map rmm ON rmm.role_id = urm.role_id
-    LEFT JOIN menu_mst mm ON mm.menu_id = rmm.menu_id AND mm.active = 1
-    LEFT JOIN control_co_module ccm ON urm.co_id = ccm.co_id AND ccm.module_id = mm.module_mst_id
-    WHERE urm.user_id = :user_id
-        AND urm.branch_id = :branch_id
-        AND rmm.menu_id = :menu_id
-        AND IFNULL(ccm.access_type, 0) NOT IN (2);"""
-    return text(sql)
-
 
 def update_indent_status():
     """Update indent status and approval level. Optionally update indent_no."""
@@ -893,7 +812,8 @@ def insert_po_gst():
         i_tax_percentage,
         c_tax_amount,
         c_tax_percentage,
-        tax_amount
+        tax_amount,
+        active
     ) VALUES (
         :po_dtl_id,
         :po_additional_id,
@@ -904,7 +824,47 @@ def insert_po_gst():
         :i_tax_percentage,
         :c_tax_amount,
         :c_tax_percentage,
-        :tax_amount
+        :tax_amount,
+        1
+    );"""
+    return text(sql)
+
+
+def insert_proc_gst():
+    """Insert procurement inward GST record."""
+    sql = """INSERT INTO proc_gst (
+        proc_inward_dtl,
+        tax_pct,
+        stax_percentage,
+        s_tax_amount,
+        i_tax_amount,
+        i_tax_percentage,
+        c_tax_amount,
+        c_tax_percentage,
+        tax_amount,
+        active,
+        updated_by
+    ) VALUES (
+        :proc_inward_dtl,
+        :tax_pct,
+        :stax_percentage,
+        :s_tax_amount,
+        :i_tax_amount,
+        :i_tax_percentage,
+        :c_tax_amount,
+        :c_tax_percentage,
+        :tax_amount,
+        1,
+        :updated_by
+    );"""
+    return text(sql)
+
+
+def delete_proc_gst_by_inward():
+    """Delete procurement GST records by inward ID."""
+    sql = """DELETE FROM proc_gst
+    WHERE proc_inward_dtl IN (
+        SELECT inward_dtl_id FROM proc_inward_dtl WHERE inward_id = :inward_id
     );"""
     return text(sql)
 
@@ -1328,6 +1288,7 @@ def insert_proc_inward():
     sql = """INSERT INTO proc_inward (
     inward_sequence_no,
     supplier_id,
+    supplier_branch_id,
     vehicle_number,
     driver_name,
     driver_contact_number,
@@ -1345,6 +1306,8 @@ def insert_proc_inward():
     consignment_date,
     ewaybillno,
     ewaybill_date,
+    bill_branch_id,
+    ship_branch_id,
     branch_id,
     project_id,
     gross_amount,
@@ -1352,6 +1315,7 @@ def insert_proc_inward():
 ) VALUES (
     :inward_sequence_no,
     :supplier_id,
+    :supplier_branch_id,
     :vehicle_number,
     :driver_name,
     :driver_contact_number,
@@ -1369,6 +1333,8 @@ def insert_proc_inward():
     :consignment_date,
     :ewaybillno,
     :ewaybill_date,
+    :bill_branch_id,
+    :ship_branch_id,
     :branch_id,
     :project_id,
     :gross_amount,
@@ -1563,6 +1529,11 @@ def get_inward_dtl_for_inspection_query():
         pid.inward_dtl_id,
         pid.inward_id,
         pid.po_dtl_id,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm.branch_prefix,
+        cm.co_prefix,
         pid.item_id,
         im.item_code,
         im.item_name,
@@ -1587,6 +1558,10 @@ def get_inward_dtl_for_inspection_query():
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     WHERE pid.inward_id = :inward_id
         AND pid.active = 1
     ORDER BY pid.inward_dtl_id;"""
@@ -1682,7 +1657,12 @@ def get_sr_pending_count_query():
 
 
 def get_inward_for_sr_query():
-    """Get inward header details for SR page with state info for GST calculation."""
+    """Get inward header details for SR page with state info for GST calculation.
+
+    Uses COALESCE to fall back to the linked PO's branch IDs when the inward's
+    own supplier_branch_id / bill_branch_id / ship_branch_id are NULL (legacy data
+    created before these columns were populated during inward creation).
+    """
     sql = """SELECT
         pi.inward_id,
         pi.inward_sequence_no,
@@ -1696,11 +1676,11 @@ def get_inward_for_sr_query():
         pm.supp_name AS supplier_name,
         pbm.state_id AS supplier_state_id,
         sup_state.state AS supplier_state_name,
-        pi.bill_branch_id,
+        COALESCE(pi.bill_branch_id, linked_po.billing_branch_id) AS bill_branch_id,
         bb.branch_name AS billing_branch_name,
         bb.state_id AS billing_state_id,
         bill_state.state AS billing_state_name,
-        pi.ship_branch_id,
+        COALESCE(pi.ship_branch_id, linked_po.shipping_branch_id) AS ship_branch_id,
         sb.branch_name AS shipping_branch_name,
         sb.state_id AS shipping_state_id,
         ship_state.state AS shipping_state_name,
@@ -1728,16 +1708,24 @@ def get_inward_for_sr_query():
         pi.sr_remarks,
         pi.gross_amount,
         pi.net_amount,
-        1 AS india_gst
+        COALESCE(cc.india_gst, 0) AS india_gst
     FROM proc_inward AS pi
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN co_config AS cc ON cc.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
-    LEFT JOIN party_branch_mst AS pbm ON pbm.party_id = pm.party_id
+    LEFT JOIN proc_po AS linked_po ON linked_po.po_id = (
+        SELECT ppd.po_id
+        FROM proc_inward_dtl pid2
+        JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid2.po_dtl_id
+        WHERE pid2.inward_id = pi.inward_id AND pid2.active = 1
+        LIMIT 1
+    )
+    LEFT JOIN party_branch_mst AS pbm ON pbm.party_mst_branch_id = COALESCE(pi.supplier_branch_id, linked_po.supplier_branch_id)
     LEFT JOIN state_mst AS sup_state ON sup_state.state_id = pbm.state_id
-    LEFT JOIN branch_mst AS bb ON bb.branch_id = pi.bill_branch_id
+    LEFT JOIN branch_mst AS bb ON bb.branch_id = COALESCE(pi.bill_branch_id, linked_po.billing_branch_id)
     LEFT JOIN state_mst AS bill_state ON bill_state.state_id = bb.state_id
-    LEFT JOIN branch_mst AS sb ON sb.branch_id = pi.ship_branch_id
+    LEFT JOIN branch_mst AS sb ON sb.branch_id = COALESCE(pi.ship_branch_id, linked_po.shipping_branch_id)
     LEFT JOIN state_mst AS ship_state ON ship_state.state_id = sb.state_id
     LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
     WHERE pi.inward_id = :inward_id
@@ -1770,6 +1758,10 @@ def get_inward_dtl_for_sr_query():
         pid.inward_id,
         pid.po_dtl_id,
         ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm_po.branch_prefix,
+        cm_po.co_prefix,
         pid.item_id,
         im.item_code,
         im.item_name,
@@ -1798,6 +1790,9 @@ def get_inward_dtl_for_sr_query():
         COALESCE(im.tax_percentage, 0) AS tax_percentage
     FROM proc_inward_dtl AS pid
     LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst AS bm_po ON bm_po.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm_po ON cm_po.co_id = bm_po.co_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
@@ -1962,13 +1957,22 @@ def get_drcr_note_dtl_query():
         pid.approved_qty,
         dndg.cgst_amount,
         dndg.igst_amount,
-        dndg.sgst_amount
+        dndg.sgst_amount,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm.branch_prefix,
+        cm.co_prefix
     FROM drcr_note_dtl AS dnd
     LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN drcr_note_dtl_gst AS dndg ON dndg.drcr_note_dtl_id = dnd.drcr_note_dtl_id
+    LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     WHERE dnd.debit_credit_note_id = :drcr_note_id
     ORDER BY dnd.drcr_note_dtl_id;"""
     return text(sql)
@@ -2030,10 +2034,28 @@ def insert_drcr_note_dtl():
     return text(sql)
 
 
+def insert_drcr_note_dtl_gst():
+    """Insert GST record for debit/credit note detail line."""
+    sql = """INSERT INTO drcr_note_dtl_gst (
+        drcr_note_dtl_id,
+        cgst_amount,
+        igst_amount,
+        sgst_amount,
+        active
+    ) VALUES (
+        :drcr_note_dtl_id,
+        :cgst_amount,
+        :igst_amount,
+        :sgst_amount,
+        1
+    );"""
+    return text(sql)
+
+
 def update_drcr_note_status():
     """Update DRCR note status (for approval workflow)."""
     sql = """UPDATE drcr_note
-    SET 
+    SET
         status_id = :status_id,
         approved_by = :approved_by,
         approved_date = :approved_date,
@@ -2093,10 +2115,10 @@ def get_bill_pass_list_query():
     LEFT JOIN (
         SELECT
             pid.inward_id,
-            SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
+            SUM((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) AS sr_taxable,
             SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
-                (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+                ((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) +
                 COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
@@ -2212,13 +2234,13 @@ def get_bill_pass_by_id_query():
         SELECT 
             pid.inward_id,
             COUNT(*) AS line_count,
-            SUM(COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) AS sr_taxable,
+            SUM((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) AS sr_taxable,
             SUM(COALESCE(pg.c_tax_amount, 0)) AS sr_cgst,
             SUM(COALESCE(pg.s_tax_amount, 0)) AS sr_sgst,
             SUM(COALESCE(pg.i_tax_amount, 0)) AS sr_igst,
             SUM(COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS sr_tax,
             SUM(
-                (COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+                ((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) +
                 COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
             ) AS sr_total
         FROM proc_inward_dtl pid
@@ -2264,27 +2286,36 @@ def get_bill_pass_sr_lines_query():
         pid.approved_qty,
         pid.rate AS po_rate,
         pid.accepted_rate,
-        (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) AS line_amount,
+        ((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) AS line_amount,
         pid.discount_mode,
         pid.discount_value,
         pid.discount_amount,
         pg.c_tax_percentage AS cgst_percent,
         pg.c_tax_amount AS cgst_amount,
-        pg.stax_percentage AS sgst_percent,
+        pg.stax_percentage AS state_tax_percent,
         pg.s_tax_amount AS sgst_amount,
         pg.i_tax_percentage AS igst_percent,
         pg.i_tax_amount AS igst_amount,
         (COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)) AS tax_amount,
         (
-            (pid.approved_qty * COALESCE(pid.accepted_rate, pid.rate, 0)) +
+            ((COALESCE(pid.approved_qty, 0) * COALESCE(pid.accepted_rate, pid.rate, 0)) - COALESCE(pid.discount_amount, 0)) +
             COALESCE(pg.c_tax_amount, 0) + COALESCE(pg.s_tax_amount, 0) + COALESCE(pg.i_tax_amount, 0)
-        ) AS line_total
+        ) AS line_total,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm.branch_prefix,
+        cm.co_prefix
     FROM proc_inward_dtl pid
     LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make imk ON imk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst um ON um.uom_id = pid.uom_id
+    LEFT JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
     WHERE pid.inward_id = :inward_id
         AND pid.approved_qty > 0
     ORDER BY pid.inward_dtl_id;
@@ -2324,7 +2355,7 @@ def get_bill_pass_drcr_note_lines_query():
         dnd.debit_credit_note_id,
         dnd.inward_dtl_id,
         dnd.debitnote_type,
-        CASE 
+        CASE
             WHEN dnd.debitnote_type = 1 THEN 'Quantity Rejection'
             WHEN dnd.debitnote_type = 2 THEN 'Rate Difference'
             ELSE 'Other'
@@ -2337,13 +2368,22 @@ def get_bill_pass_drcr_note_lines_query():
         (dnd.quantity * dnd.rate - COALESCE(dnd.discount_amount, 0)) AS line_amount,
         -- Get item details from inward_dtl
         im.item_name,
-        im.item_code
+        im.item_code,
+        ppd.po_id,
+        pp.po_no,
+        pp.po_date,
+        bm.branch_prefix,
+        cm.co_prefix
     FROM drcr_note_dtl dnd
     LEFT JOIN proc_inward_dtl pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
+    LEFT JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid.po_dtl_id
+    LEFT JOIN proc_po pp ON pp.po_id = ppd.po_id
+    LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+    LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
     WHERE dnd.debit_credit_note_id IN (
-        SELECT debit_credit_note_id 
-        FROM drcr_note 
+        SELECT debit_credit_note_id
+        FROM drcr_note
         WHERE inward_id = :inward_id AND status_id = 3
     )
     ORDER BY dnd.debit_credit_note_id, dnd.drcr_note_dtl_id;

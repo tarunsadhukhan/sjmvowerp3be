@@ -23,13 +23,8 @@ from src.procurement.query import (
 	update_proc_indent,
 	delete_proc_indent_detail,
 	get_approval_flow_by_menu_branch,
-	get_user_approval_level,
-	get_max_approval_level,
-	get_user_consumed_amounts,
 	update_indent_status,
 	get_indent_with_approval_info,
-	check_approval_mst_exists,
-	get_user_edit_access,
 	get_max_indent_no_for_branch_fy,
 	get_all_approved_indents_query,
 	get_item_validation_data_v2,
@@ -43,6 +38,11 @@ from src.procurement.constants import (
 	VALID_INDENT_TYPE_VALUES,
 	normalize_indent_type,
 	is_valid_indent_type,
+)
+from src.common.approval_utils import (
+	process_approval,
+	process_rejection,
+	calculate_approval_permissions,
 )
 from datetime import datetime, date
 from typing import Optional
@@ -1513,435 +1513,6 @@ def get_approval_flow_details(menu_id: int, branch_id: int, db: Session) -> list
 		raise
 
 
-def calculate_approval_permissions(
-	user_id: int,
-	menu_id: int,
-	branch_id: int,
-	status_id: int,
-	current_approval_level: Optional[int],
-	db: Session,
-) -> dict:
-	"""Calculate approval permissions for a user based on indent status and approval configuration.
-	
-	Args:
-		user_id: The user ID
-		menu_id: The menu ID
-		branch_id: The branch ID
-		status_id: Current status ID of the indent
-		current_approval_level: Current approval level (only relevant when status_id = 20)
-		db: Database session
-		
-	Returns:
-		Dict with permission flags
-	"""
-	permissions = {
-		"canApprove": False,
-		"canReject": False,
-		"canOpen": False,
-		"canSendForApproval": False,
-		"canCancelDraft": False,
-		"canReopen": False,
-		"canViewApprovalLog": False,
-		"canClone": False,
-		"canSave": False,
-	}
-	
-	try:
-		# Check if approval_mst has entries for this menu/branch
-		approval_exists_query = check_approval_mst_exists()
-		approval_exists_result = db.execute(
-			approval_exists_query,
-			{"menu_id": menu_id, "branch_id": branch_id}
-		).fetchone()
-		approval_exists = False
-		if approval_exists_result:
-			result_dict = dict(approval_exists_result._mapping)
-			approval_exists = (result_dict.get("count") or 0) > 0
-		
-		# Status-based permissions (always available based on status)
-		if status_id == 21:  # Drafted
-			permissions["canOpen"] = True
-			permissions["canCancelDraft"] = True
-			permissions["canSave"] = True
-		elif status_id == 1:  # Open - show Approve button instead of Send for Approval
-			permissions["canSave"] = True
-			# Check approval permissions for Open status (same logic as Pending Approval)
-			if approval_exists:
-				# Approval hierarchy exists - check if user has approval level 1
-				user_level_query = get_user_approval_level()
-				user_level_result = db.execute(
-					user_level_query,
-					{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-				).fetchone()
-				
-				if user_level_result:
-					user_approval_level = dict(user_level_result._mapping).get("approval_level")
-					if user_approval_level == 1:  # User can approve at level 1
-						permissions["canApprove"] = True
-			else:
-				# No approval hierarchy - check if user has edit access
-				edit_access_query = get_user_edit_access()
-				edit_access_result = db.execute(
-					edit_access_query,
-					{"user_id": user_id, "branch_id": branch_id, "menu_id": menu_id}
-				).fetchone()
-				
-				if edit_access_result:
-					max_access_type = dict(edit_access_result._mapping).get("max_access_type_id")
-					# access_type_id >= 4 means edit access
-					if max_access_type is not None and max_access_type >= 4:
-						permissions["canApprove"] = True
-		elif status_id == 6:  # Cancelled
-			permissions["canReopen"] = True
-			permissions["canClone"] = True
-			permissions["canViewApprovalLog"] = True
-		elif status_id == 4:  # Rejected
-			permissions["canReopen"] = True
-			permissions["canClone"] = True
-			permissions["canViewApprovalLog"] = True
-		elif status_id == 3:  # Approved
-			permissions["canViewApprovalLog"] = True
-			permissions["canClone"] = True
-		elif status_id == 5:  # Closed
-			permissions["canViewApprovalLog"] = True
-		
-		# Approval/Reject permissions (only for status_id = 20)
-		if status_id == 20:  # Pending Approval
-			permissions["canViewApprovalLog"] = True
-			
-			if approval_exists:
-				# Approval hierarchy exists - check if user's level matches current level
-				if current_approval_level is not None:
-					user_level_query = get_user_approval_level()
-					user_level_result = db.execute(
-						user_level_query,
-						{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-					).fetchone()
-					
-					if user_level_result:
-						user_approval_level = dict(user_level_result._mapping).get("approval_level")
-						if user_approval_level == current_approval_level:
-							permissions["canApprove"] = True
-							permissions["canReject"] = True
-			else:
-				# No approval hierarchy - check if user has edit access
-				edit_access_query = get_user_edit_access()
-				edit_access_result = db.execute(
-					edit_access_query,
-					{"user_id": user_id, "branch_id": branch_id, "menu_id": menu_id}
-				).fetchone()
-				
-				if edit_access_result:
-					max_access_type = dict(edit_access_result._mapping).get("max_access_type_id")
-					# access_type_id >= 4 means edit access
-					if max_access_type is not None and max_access_type >= 4:
-						permissions["canApprove"] = True
-						permissions["canReject"] = True
-		
-		return permissions
-	except Exception as e:
-		logger.exception("Error calculating approval permissions")
-		# Return default permissions (all False) on error
-		return permissions
-
-
-def process_approval_without_value(
-	indent_id: int,
-	user_id: int,
-	menu_id: int,
-	db: Session,
-) -> dict:
-	"""Process approval for documents without monetary value (e.g., Indent).
-	
-	Logic:
-	1. Get current indent status and approval level
-	2. Get user's approval level for the menu/branch
-	3. Check if user can approve at current level
-	4. If yes, move to next level or approve if final level
-	5. Update status_id and approval_level in database
-	
-	Args:
-		indent_id: The indent ID
-		user_id: The user ID who is approving
-		menu_id: The menu ID (e.g., indent menu)
-		db: Database session
-		
-	Returns:
-		Dict with status, new_status_id, new_approval_level, and message
-	"""
-	try:
-		# Get indent details
-		indent_query = get_indent_with_approval_info()
-		indent_result = db.execute(indent_query, {"indent_id": indent_id}).fetchone()
-		if not indent_result:
-			raise HTTPException(status_code=404, detail="Indent not found")
-		
-		indent = dict(indent_result._mapping)
-		current_status_id = indent.get("status_id")
-		current_approval_level = indent.get("approval_level") or 0
-		branch_id = indent.get("branch_id")
-		
-		# If status is Open (1), first transition to Pending Approval (20) with level 1
-		if current_status_id == 1:
-			# Change status to Pending Approval (20) with level 1
-			updated_at = datetime.utcnow()
-			update_query = update_indent_status()
-			db.execute(
-				update_query,
-				{
-					"indent_id": indent_id,
-					"status_id": 20,  # Pending Approval
-					"approval_level": 1,  # Start at level 1
-					"updated_by": user_id,
-					"updated_date_time": updated_at,
-					"indent_no": None,  # Don't update indent_no
-				}
-			)
-			db.commit()
-			# Update current status and level for further processing
-			current_status_id = 20
-			current_approval_level = 1
-			# Refresh indent data after status change
-			indent_result = db.execute(indent_query, {"indent_id": indent_id}).fetchone()
-			if indent_result:
-				indent = dict(indent_result._mapping)
-		
-		# Verify current status is Pending Approval (20)
-		if current_status_id != 20:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Cannot approve indent with status_id {current_status_id}. Expected status 20 (Pending Approval) or 1 (Open)."
-			)
-		
-		# Get user's approval level
-		user_level_query = get_user_approval_level()
-		user_level_result = db.execute(
-			user_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-		).fetchone()
-		
-		if not user_level_result:
-			raise HTTPException(
-				status_code=403,
-				detail="User does not have approval permission for this menu and branch."
-			)
-		
-		user_approval_level = dict(user_level_result._mapping).get("approval_level")
-		
-		# Check if user can approve at current level
-		if user_approval_level != current_approval_level:
-			raise HTTPException(
-				status_code=403,
-				detail=f"User approval level ({user_approval_level}) does not match current indent approval level ({current_approval_level})."
-			)
-		
-		# Get max approval level
-		max_level_query = get_max_approval_level()
-		max_level_result = db.execute(
-			max_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id}
-		).fetchone()
-		
-		max_approval_level = dict(max_level_result._mapping).get("max_level") if max_level_result else user_approval_level
-		
-		# Determine next status
-		if user_approval_level >= max_approval_level:
-			# Final level - approve
-			new_status_id = 3  # Approved
-			new_approval_level = user_approval_level
-			message = "Indent approved (final level)."
-		else:
-			# Move to next level
-			new_status_id = 20  # Still Pending Approval
-			new_approval_level = current_approval_level + 1
-			message = f"Indent moved to approval level {new_approval_level}."
-		
-		# Update indent status
-		updated_at = datetime.utcnow()
-		update_query = update_indent_status()
-		db.execute(
-			update_query,
-			{
-				"indent_id": indent_id,
-				"status_id": new_status_id,
-				"approval_level": new_approval_level,
-				"updated_by": user_id,
-				"updated_date_time": updated_at,
-				"indent_no": None,  # Don't update indent_no
-			}
-		)
-		db.commit()
-		
-		return {
-			"status": "success",
-			"new_status_id": new_status_id,
-			"new_approval_level": new_approval_level,
-			"message": message,
-		}
-	except HTTPException:
-		db.rollback()
-		raise
-	except Exception as e:
-		db.rollback()
-		logger.exception("Error processing approval without value")
-		raise HTTPException(status_code=500, detail=str(e))
-
-
-def process_approval_with_value(
-	indent_id: int,
-	user_id: int,
-	menu_id: int,
-	document_amount: float,
-	db: Session,
-) -> dict:
-	"""Process approval for documents with monetary value.
-	
-	Logic:
-	1. Get current indent status and approval level
-	2. Get user's approval level and amount limits
-	3. Check if user can approve at current level
-	4. Check amount limits: max_amount_single, day_max_amount, month_max_amount
-	5. If all criteria met, move to next level or approve if final level
-	6. Update status_id and approval_level in database
-	
-	Args:
-		indent_id: The indent ID
-		user_id: The user ID who is approving
-		menu_id: The menu ID
-		document_amount: The document amount
-		db: Database session
-		
-	Returns:
-		Dict with status, new_status_id, new_approval_level, and message
-	"""
-	try:
-		# Get indent details
-		indent_query = get_indent_with_approval_info()
-		indent_result = db.execute(indent_query, {"indent_id": indent_id}).fetchone()
-		if not indent_result:
-			raise HTTPException(status_code=404, detail="Indent not found")
-		
-		indent = dict(indent_result._mapping)
-		current_status_id = indent.get("status_id")
-		current_approval_level = indent.get("approval_level") or 0
-		branch_id = indent.get("branch_id")
-		
-		# Verify current status is Pending Approval (20)
-		if current_status_id != 20:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Cannot approve indent with status_id {current_status_id}. Expected status 20 (Pending Approval)."
-			)
-		
-		# Get user's approval level and limits
-		user_level_query = get_user_approval_level()
-		user_level_result = db.execute(
-			user_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-		).fetchone()
-		
-		if not user_level_result:
-			raise HTTPException(
-				status_code=403,
-				detail="User does not have approval permission for this menu and branch."
-			)
-		
-		user_data = dict(user_level_result._mapping)
-		user_approval_level = user_data.get("approval_level")
-		max_amount_single = user_data.get("max_amount_single")
-		day_max_amount = user_data.get("day_max_amount")
-		month_max_amount = user_data.get("month_max_amount")
-		
-		# Check if user can approve at current level
-		if user_approval_level != current_approval_level:
-			raise HTTPException(
-				status_code=403,
-				detail=f"User approval level ({user_approval_level}) does not match current indent approval level ({current_approval_level})."
-			)
-		
-		# Check amount limits
-		if max_amount_single is not None and document_amount > max_amount_single:
-			raise HTTPException(
-				status_code=403,
-				detail=f"Document amount ({document_amount}) exceeds maximum single approval amount ({max_amount_single})."
-			)
-		
-		# Get consumed amounts
-		consumed_query = get_user_consumed_amounts()
-		consumed_result = db.execute(
-			consumed_query,
-			{
-				"menu_id": menu_id,
-				"branch_id": branch_id,
-				"user_id": user_id,
-				"approval_level": user_approval_level,
-			}
-		).fetchone()
-		
-		if consumed_result:
-			consumed = dict(consumed_result._mapping)
-			# Note: This is a placeholder - actual implementation needs to track amounts, not just counts
-			# day_consumed = consumed.get("day_count", 0)
-			# month_consumed = consumed.get("month_count", 0)
-			
-			# TODO: Implement actual amount checking logic here
-			# if day_max_amount is not None and (day_consumed + document_amount) > day_max_amount:
-			#     raise HTTPException(...)
-			# if month_max_amount is not None and (month_consumed + document_amount) > month_max_amount:
-			#     raise HTTPException(...)
-		
-		# Get max approval level
-		max_level_query = get_max_approval_level()
-		max_level_result = db.execute(
-			max_level_query,
-			{"menu_id": menu_id, "branch_id": branch_id}
-		).fetchone()
-		
-		max_approval_level = dict(max_level_result._mapping).get("max_level") if max_level_result else user_approval_level
-		
-		# Determine next status
-		if user_approval_level >= max_approval_level:
-			# Final level - approve
-			new_status_id = 3  # Approved
-			new_approval_level = user_approval_level
-			message = "Indent approved (final level)."
-		else:
-			# Move to next level
-			new_status_id = 20  # Still Pending Approval
-			new_approval_level = current_approval_level + 1
-			message = f"Indent moved to approval level {new_approval_level}."
-		
-		# Update indent status
-		updated_at = datetime.utcnow()
-		update_query = update_indent_status()
-		db.execute(
-			update_query,
-			{
-				"indent_id": indent_id,
-				"status_id": new_status_id,
-				"approval_level": new_approval_level,
-				"updated_by": user_id,
-				"updated_date_time": updated_at,
-				"indent_no": None,  # Don't update indent_no
-			}
-		)
-		db.commit()
-		
-		return {
-			"status": "success",
-			"new_status_id": new_status_id,
-			"new_approval_level": new_approval_level,
-			"message": message,
-		}
-	except HTTPException:
-		db.rollback()
-		raise
-	except Exception as e:
-		db.rollback()
-		logger.exception("Error processing approval with value")
-		raise HTTPException(status_code=500, detail=str(e))
-
-
 # ==================== APPROVAL API ENDPOINTS ====================
 
 @router.get("/get_approval_flow")
@@ -2018,11 +1589,16 @@ async def approve_indent(
 		user_id = int(token_data.get("user_id"))
 		
 		# Process approval (indent is without value)
-		result = process_approval_without_value(
-			indent_id=indent_id,
+		result = process_approval(
+			doc_id=indent_id,
 			user_id=user_id,
 			menu_id=menu_id,
 			db=db,
+			get_doc_fn=get_indent_with_approval_info,
+			update_status_fn=update_indent_status,
+			id_param_name="indent_id",
+			doc_name="Indent",
+			extra_update_params={"indent_no": None},
 		)
 		
 		return result
@@ -2064,12 +1640,17 @@ async def approve_indent_with_value(
 		user_id = int(token_data.get("user_id"))
 		
 		# Process approval with value checks
-		result = process_approval_with_value(
-			indent_id=indent_id,
+		result = process_approval(
+			doc_id=indent_id,
 			user_id=user_id,
 			menu_id=menu_id,
-			document_amount=document_amount,
 			db=db,
+			get_doc_fn=get_indent_with_approval_info,
+			update_status_fn=update_indent_status,
+			id_param_name="indent_id",
+			doc_name="Indent",
+			document_amount=document_amount,
+			extra_update_params={"indent_no": None},
 		)
 		
 		return result
@@ -2468,62 +2049,39 @@ async def reject_indent(
 		indent_id = payload.get("indent_id")
 		co_id = payload.get("co_id")
 		reason = payload.get("reason", "")
-		
+		menu_id = payload.get("menu_id")
+
 		if not indent_id:
 			raise HTTPException(status_code=400, detail="indent_id is required")
 		if not co_id:
 			raise HTTPException(status_code=400, detail="co_id is required")
-		
+
 		try:
 			indent_id = int(indent_id)
 			co_id = int(co_id)
+			if menu_id is not None:
+				menu_id = int(menu_id)
 		except (TypeError, ValueError):
-			raise HTTPException(status_code=400, detail="Invalid indent_id or co_id")
-		
+			raise HTTPException(status_code=400, detail="Invalid indent_id, co_id, or menu_id")
+
 		user_id = int(token_data.get("user_id"))
-		
-		# Get indent details
-		indent_query = get_indent_with_approval_info()
-		indent_result = db.execute(indent_query, {"indent_id": indent_id}).fetchone()
-		if not indent_result:
-			raise HTTPException(status_code=404, detail="Indent not found")
-		
-		indent = dict(indent_result._mapping)
-		current_status_id = indent.get("status_id")
-		
-		# Verify current status is Pending Approval (20)
-		if current_status_id != 20:
-			raise HTTPException(
-				status_code=400,
-				detail=f"Cannot reject indent with status_id {current_status_id}. Expected status 20 (Pending Approval)."
-			)
-		
-		# Update status to Rejected (4)
-		# TODO: Store rejection reason in a separate table or remarks field
-		updated_at = datetime.utcnow()
-		update_query = update_indent_status()
-		db.execute(
-			update_query,
-			{
-				"indent_id": indent_id,
-				"status_id": 4,  # Rejected
-				"approval_level": None,
-				"updated_by": user_id,
-				"updated_date_time": updated_at,
-				"indent_no": None,  # Don't update indent_no
-			}
+
+		result = process_rejection(
+			doc_id=indent_id,
+			user_id=user_id,
+			menu_id=menu_id,
+			db=db,
+			get_doc_fn=get_indent_with_approval_info,
+			update_status_fn=update_indent_status,
+			id_param_name="indent_id",
+			doc_name="Indent",
+			reason=reason,
+			extra_update_params={"indent_no": None},
 		)
-		db.commit()
-		
-		return {
-			"status": "success",
-			"new_status_id": 4,
-			"message": "Indent rejected successfully.",
-		}
+
+		return result
 	except HTTPException:
-		db.rollback()
 		raise
 	except Exception as e:
-		db.rollback()
 		logger.exception("Error rejecting indent")
 		raise HTTPException(status_code=500, detail=str(e))

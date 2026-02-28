@@ -161,6 +161,7 @@ class JuteMr(Base):
     qc_check: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     marketing_slip: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    approval_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
     remarks: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # Freight
@@ -488,6 +489,7 @@ class JutePo(Base):
     po_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     po_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    approval_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
 
     # Contract details
     contract_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

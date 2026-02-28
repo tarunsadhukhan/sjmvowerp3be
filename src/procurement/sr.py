@@ -26,7 +26,11 @@ from src.procurement.query import (
     insert_inward_additional,
     update_inward_additional,
     delete_inward_additional,
+    insert_proc_gst,
+    delete_proc_gst_by_inward,
 )
+from src.procurement.po import calculate_gst_amounts, extract_formatted_po_no
+from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.inward import format_inward_no
 
 logger = logging.getLogger(__name__)
@@ -59,6 +63,12 @@ class SRLineItemUpdate(BaseModel):
     discount_value: Optional[float] = None
     discount_amount: Optional[float] = None
     warehouse_id: Optional[int] = None
+    # GST fields
+    tax_percentage: Optional[float] = None
+    igst_amount: Optional[float] = None
+    cgst_amount: Optional[float] = None
+    sgst_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
 
 
 class SRAdditionalChargeUpdate(BaseModel):
@@ -272,6 +282,7 @@ async def get_sr_by_inward_id(
         line_items = []
         for row in dtl_result:
             item = dict(row._mapping)
+            item["po_no_formatted"] = extract_formatted_po_no(item) if item.get("po_no") else ""
             # Default accepted_rate to PO rate if not set
             if item.get("accepted_rate") is None:
                 item["accepted_rate"] = item.get("po_rate") or item.get("rate") or 0
@@ -517,9 +528,109 @@ async def save_sr(
             "updated_by": user_id,
             "updated_date_time": now,
         })
-        
+
+        # --- GST Handling ---
+        # Write proc_gst records for each line item when india_gst is enabled
+        if request_body.line_items and branch_id:
+            # Get co_id from branch
+            co_query = text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id")
+            co_result = db.execute(co_query, {"branch_id": branch_id}).fetchone()
+            co_id = co_result[0] if co_result else None
+
+            india_gst = False
+            if co_id:
+                config_query = get_co_config_by_id_query(co_id)
+                config_result = db.execute(config_query, {"co_id": co_id}).fetchone()
+                if config_result:
+                    india_gst = bool(dict(config_result._mapping).get("india_gst", False))
+
+            if india_gst:
+                # Get supplier_branch_id from proc_inward directly, fall back to PO chain for legacy data
+                inward_info_query = text("""
+                    SELECT
+                        COALESCE(pi.supplier_branch_id, pp.supplier_branch_id) AS supplier_branch_id,
+                        COALESCE(pi.bill_branch_id, pp.billing_branch_id) AS bill_branch_id,
+                        COALESCE(pi.ship_branch_id, pp.shipping_branch_id) AS ship_branch_id
+                    FROM proc_inward pi
+                    LEFT JOIN proc_po AS pp ON pp.po_id = (
+                        SELECT ppd.po_id
+                        FROM proc_inward_dtl pid
+                        JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid.po_dtl_id
+                        WHERE pid.inward_id = pi.inward_id AND pid.active = 1
+                        LIMIT 1
+                    )
+                    WHERE pi.inward_id = :inward_id
+                """)
+                inward_info_result = db.execute(
+                    inward_info_query, {"inward_id": request_body.inward_id}
+                ).fetchone()
+                inward_info = dict(inward_info_result._mapping) if inward_info_result else {}
+                supplier_branch_id = inward_info.get("supplier_branch_id")
+
+                # Get supplier state from party_branch_mst
+                supplier_state_id = None
+                if supplier_branch_id:
+                    supplier_state_query = text(
+                        "SELECT state_id FROM party_branch_mst WHERE party_mst_branch_id = :branch_id"
+                    )
+                    sup_result = db.execute(
+                        supplier_state_query, {"branch_id": supplier_branch_id}
+                    ).fetchone()
+                    supplier_state_id = sup_result[0] if sup_result else None
+
+                # Get shipping state from inward's branch IDs (with PO fallback already resolved)
+                ship_branch = inward_info.get("ship_branch_id") or inward_info.get("bill_branch_id")
+                shipping_state_id = None
+                if ship_branch:
+                    ship_state_query = text(
+                        "SELECT state_id FROM branch_mst WHERE branch_id = :branch_id"
+                    )
+                    ship_result = db.execute(
+                        ship_state_query, {"branch_id": ship_branch}
+                    ).fetchone()
+                    shipping_state_id = ship_result[0] if ship_result else None
+
+                if supplier_state_id and shipping_state_id:
+                    # Delete existing GST records for this inward
+                    delete_gst_query = delete_proc_gst_by_inward()
+                    db.execute(delete_gst_query, {"inward_id": request_body.inward_id})
+
+                    # Insert new GST records for each line item
+                    gst_insert_query = insert_proc_gst()
+                    for line in request_body.line_items:
+                        # Get tax_percentage from item_mst via inward_dtl
+                        tax_query = text("""
+                            SELECT im.tax_percentage
+                            FROM proc_inward_dtl pid
+                            JOIN item_mst im ON im.item_id = pid.item_id
+                            WHERE pid.inward_dtl_id = :inward_dtl_id
+                        """)
+                        tax_result = db.execute(
+                            tax_query, {"inward_dtl_id": line.inward_dtl_id}
+                        ).fetchone()
+                        tax_pct = float(tax_result[0]) if tax_result and tax_result[0] else 0.0
+
+                        if tax_pct > 0:
+                            line_amount = float(line.amount or 0)
+                            gst = calculate_gst_amounts(
+                                line_amount, tax_pct, supplier_state_id, shipping_state_id
+                            )
+
+                            db.execute(gst_insert_query, {
+                                "proc_inward_dtl": line.inward_dtl_id,
+                                "tax_pct": gst["tax_pct"],
+                                "stax_percentage": gst["stax_percentage"],
+                                "s_tax_amount": gst["s_tax_amount"],
+                                "i_tax_amount": gst["i_tax_amount"],
+                                "i_tax_percentage": gst["i_tax_percentage"],
+                                "c_tax_amount": gst["c_tax_amount"],
+                                "c_tax_percentage": gst["c_tax_percentage"],
+                                "tax_amount": gst["tax_amount"],
+                                "updated_by": user_id,
+                            })
+
         db.commit()
-        
+
         return {
             "success": True,
             "message": "SR saved successfully",
@@ -630,7 +741,12 @@ async def approve_sr(
                     "quantity": approved_qty,
                     "rate": abs(rate_diff),
                 })
-        
+
+        # TODO: When GST is enabled, auto-created DRCR notes should also include
+        # GST amounts (proc_gst records) for each DRCR detail line. This requires
+        # fetching supplier_state_id/shipping_state_id and using calculate_gst_amounts
+        # similar to the save_sr GST handling block above.
+
         # Create Debit Note if needed
         if drcr_lines_debit:
             gross_amount = sum(line["quantity"] * line["rate"] for line in drcr_lines_debit)

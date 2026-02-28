@@ -9,7 +9,6 @@ from src.masters.query import get_branch_list, get_item_group_drodown
 from src.procurement.indent import (
     calculate_financial_year,
     format_indent_no,
-    calculate_approval_permissions,
 )
 from src.procurement.query import (
     get_item_make_by_group_id,
@@ -24,7 +23,11 @@ from src.sales.quotation import (
     to_positive_float,
     format_date,
     get_fy_boundaries,
-    process_sales_approval,
+)
+from src.common.approval_utils import (
+    process_approval,
+    process_rejection,
+    calculate_approval_permissions,
 )
 from src.sales.query import (
     get_customers_for_sales,
@@ -1009,12 +1012,17 @@ async def approve_sales_order(
             raise HTTPException(status_code=404, detail="Sales order not found")
         document_amount = float(dict(doc_result._mapping).get("net_amount", 0) or 0)
 
-        result = process_sales_approval(
-            doc_id=sales_order_id, user_id=user_id, menu_id=menu_id,
-            get_doc_query=get_sales_order_with_approval_info,
-            update_status_query=update_sales_order_status,
-            id_param_name="sales_order_id", doc_name="Sales order",
-            db=db, document_amount=document_amount,
+        result = process_approval(
+            doc_id=sales_order_id,
+            user_id=user_id,
+            menu_id=menu_id,
+            db=db,
+            get_doc_fn=get_sales_order_with_approval_info,
+            update_status_fn=update_sales_order_status,
+            id_param_name="sales_order_id",
+            doc_name="Sales order",
+            document_amount=document_amount,
+            extra_update_params={"sales_no": None},
         )
         return result
     except HTTPException:
@@ -1032,28 +1040,26 @@ async def reject_sales_order(
     """Reject a sales order (20 -> 4)."""
     try:
         sales_order_id = to_int(payload.get("sales_order_id"), "sales_order_id", required=True)
+        menu_id = to_int(payload.get("menu_id"), "menu_id")
         user_id = int(token_data.get("user_id"))
+        reason = payload.get("reason")
 
-        doc_query = get_sales_order_with_approval_info()
-        doc_result = db.execute(doc_query, {"sales_order_id": sales_order_id}).fetchone()
-        if not doc_result:
-            raise HTTPException(status_code=404, detail="Sales order not found")
-        if dict(doc_result._mapping).get("status_id") != 20:
-            raise HTTPException(status_code=400, detail="Cannot reject. Expected status 20 (Pending Approval).")
-
-        updated_at = datetime.utcnow()
-        update_q = update_sales_order_status()
-        db.execute(update_q, {
-            "sales_order_id": sales_order_id, "status_id": 4, "approval_level": None,
-            "updated_by": user_id, "updated_date_time": updated_at, "sales_no": None,
-        })
-        db.commit()
-        return {"status": "success", "new_status_id": 4, "message": "Sales order rejected."}
+        result = process_rejection(
+            doc_id=sales_order_id,
+            user_id=user_id,
+            menu_id=menu_id,
+            db=db,
+            get_doc_fn=get_sales_order_with_approval_info,
+            update_status_fn=update_sales_order_status,
+            id_param_name="sales_order_id",
+            doc_name="Sales order",
+            reason=reason,
+            extra_update_params={"sales_no": None},
+        )
+        return result
     except HTTPException:
-        db.rollback()
         raise
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
