@@ -20,8 +20,15 @@ from src.juteProcurement.query import (
     get_all_active_company_branches_query,
     get_agent_map_options_query,
     get_warehouse_options_query,
+    get_mr_with_approval_info,
+    update_mr_status,
 )
-from src.juteProcurement.formatters import get_financial_year_sql_expression
+from src.common.approval_utils import process_approval, process_rejection
+from src.juteProcurement.formatters import (
+    get_financial_year_sql_expression,
+    format_jute_mr_number,
+    format_jute_bill_pass_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -613,6 +620,7 @@ class MRApprovalRequest(BaseModel):
     reason: Optional[str] = None  # For reject action
     party_branch_id: Optional[int] = None  # For approve action - use if provided
     mr_date: Optional[str] = None  # For approve action - YYYY-MM-DD format, mandatory for final approval
+    menu_id: Optional[int] = None  # For multi-level approval via shared utility
 
 
 # =============================================================================
@@ -1023,34 +1031,38 @@ async def approve_mr(
     """
     Approve MR - Changes status to Approved (3) or advances approval level.
     Can only be done from Open (1) or Pending Approval (20) status.
-    
+
     If party_branch_id is provided in the request, it will be used to update the MR
     before approval (handles case where branch was selected but not saved).
-    
+
     For final approval:
     - mr_date is MANDATORY (YYYY-MM-DD format)
     - branch_mr_no will be auto-generated based on branch + financial year
-    
-    TODO: Implement multi-level approval logic when needed.
+
+    When menu_id is provided, uses the shared approval utility for multi-level
+    approval hierarchy support. When menu_id is omitted, falls back to direct
+    approval (backward compatible).
     """
     try:
         mr_id = int(body.mr_id)
         branch_id = int(body.branch_id)
         user_id = token_data.get("user_id")
-        request_party_branch_id = body.party_branch_id  # May be None
-        request_mr_date = body.mr_date  # May be None - YYYY-MM-DD format
+        request_party_branch_id = body.party_branch_id
+        request_mr_date = body.mr_date
+        menu_id = body.menu_id
 
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
         # Get current MR details
         check_query = text("""
-            SELECT jute_mr_id, status_id, party_id, party_branch_id, branch_id, branch_mr_no, jute_mr_date
+            SELECT jute_mr_id, status_id, party_id, party_branch_id, branch_id,
+                   branch_mr_no, jute_mr_date
             FROM jute_mr
             WHERE jute_mr_id = :mr_id
         """)
         mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
-        
+
         if not mr_row:
             raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
 
@@ -1060,46 +1072,68 @@ async def approve_mr(
         db_party_branch_id = mr.get("party_branch_id")
         db_branch_id = mr.get("branch_id")
         db_branch_mr_no = mr.get("branch_mr_no")
-        db_mr_date = mr.get("jute_mr_date")
-        
+
         # Use request party_branch_id if provided, otherwise use database value
-        effective_party_branch_id = request_party_branch_id if request_party_branch_id is not None else db_party_branch_id
+        effective_party_branch_id = (
+            request_party_branch_id
+            if request_party_branch_id is not None
+            else db_party_branch_id
+        )
 
         # Validate current status
         if current_status not in [MR_STATUS_OPEN, MR_STATUS_PENDING_APPROVAL]:
-            raise HTTPException(status_code=400, detail="MR can only be approved from Open or Pending Approval status")
+            raise HTTPException(
+                status_code=400,
+                detail="MR can only be approved from Open or Pending Approval status",
+            )
 
         # Validate party_branch_id (using effective value)
         if party_id and not effective_party_branch_id:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot approve MR: Please select a party branch before approving."
+                detail="Cannot approve MR: Please select a party branch before approving.",
             )
 
         now = datetime.now()
 
-        # TODO: Implement multi-level approval logic here
-        # For now, directly approve (final approval)
-        is_final_approval = True  # Will be based on approval levels later
-        new_status = MR_STATUS_APPROVED
+        # Determine approval status via shared utility or direct approval
+        if menu_id is not None:
+            # Use shared approval utility for multi-level approval
+            approval_result = process_approval(
+                doc_id=mr_id,
+                user_id=user_id,
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_mr_with_approval_info,
+                update_status_fn=update_mr_status,
+                id_param_name="jute_mr_id",
+                doc_name="MR",
+                document_amount=None,  # Jute never checks values
+            )
+            new_status = approval_result["new_status_id"]
+            is_final_approval = new_status == MR_STATUS_APPROVED
+        else:
+            # Backward compatible: direct approval (no approval hierarchy)
+            is_final_approval = True
+            new_status = MR_STATUS_APPROVED
 
         # For final approval, mr_date is MANDATORY
         if is_final_approval:
             if not request_mr_date:
                 raise HTTPException(
                     status_code=400,
-                    detail="MR Date is required for final approval. Please enter the MR date."
+                    detail="MR Date is required for final approval. Please enter the MR date.",
                 )
-            
+
             # Parse and validate mr_date
             try:
                 parsed_mr_date = datetime.strptime(request_mr_date, "%Y-%m-%d").date()
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail="Invalid MR date format. Please use YYYY-MM-DD format."
+                    detail="Invalid MR date format. Please use YYYY-MM-DD format.",
                 )
-            
+
             # Generate MR number based on branch + financial year if not already set
             if not db_branch_mr_no:
                 new_branch_mr_no = get_next_mr_no_for_fy(db, db_branch_id, parsed_mr_date)
@@ -1115,14 +1149,20 @@ async def approve_mr(
                 except ValueError:
                     pass  # Ignore invalid date for non-final approval
 
-        # Build update query with all fields
-        update_fields = ["status_id = :new_status", "updated_by = :updated_by", "updated_date_time = :updated_date_time"]
+        # Build update query for business data fields
+        # Note: status_id and approval_level are already set by process_approval()
+        # when menu_id is provided. For backward compat (no menu_id), we set status here.
+        update_fields = ["updated_by = :updated_by", "updated_date_time = :updated_date_time"]
         update_params = {
             "mr_id": mr_id,
-            "new_status": new_status,
             "updated_by": user_id,
             "updated_date_time": now,
         }
+
+        # When menu_id is not provided, we must set the status ourselves
+        if menu_id is None:
+            update_fields.append("status_id = :new_status")
+            update_params["new_status"] = new_status
 
         # Add party_branch_id if changed
         if request_party_branch_id is not None and request_party_branch_id != db_party_branch_id:
@@ -1146,23 +1186,23 @@ async def approve_mr(
             # bill_pass_date = jute_mr_date (same date)
             update_fields.append("bill_pass_date = :bill_pass_date")
             update_params["bill_pass_date"] = parsed_mr_date
-            
+
             # Generate bill_pass_no based on branch + financial year
             new_bill_pass_no = get_next_bill_pass_no_for_fy(db, db_branch_id, parsed_mr_date)
             update_fields.append("bill_pass_no = :bill_pass_no")
             update_params["bill_pass_no"] = new_bill_pass_no
-            
+
             # Calculate amounts from line items
             mr_amounts = calculate_mr_amounts(db, mr_id)
             total_amount = mr_amounts["total_amount"]
             claim_amount = mr_amounts["claim_amount"]
-            
+
             # Calculate TDS based on cumulative party MR value in FY
             tds_amount = 0.0
             tds_applicable_amount = 0.0
             is_tds_applicable = False
             cumulative_previous = 0.0
-            
+
             if party_id:
                 cumulative_previous = get_cumulative_mr_value_for_party_in_fy(
                     db, party_id, parsed_mr_date, exclude_mr_id=mr_id
@@ -1170,32 +1210,32 @@ async def approve_mr(
                 tds_amount, tds_applicable_amount, is_tds_applicable = calculate_tds_amount(
                     cumulative_previous, total_amount
                 )
-            
+
             # Calculate net total: total_amount - claim_amount
             net_before_roundoff = total_amount - claim_amount
-            
+
             # Calculate roundoff
             roundoff = calculate_roundoff(net_before_roundoff)
-            
+
             # Net total (amount column) = net_before_roundoff + roundoff
             net_total = net_before_roundoff + roundoff
-            
+
             # Store all calculated amounts
             update_fields.append("total_amount = :total_amount")
             update_params["total_amount"] = total_amount
-            
+
             update_fields.append("claim_amount = :claim_amount")
             update_params["claim_amount"] = claim_amount
-            
+
             update_fields.append("roundoff = :roundoff")
             update_params["roundoff"] = roundoff
-            
+
             update_fields.append("net_total = :net_total")
             update_params["net_total"] = net_total
-            
+
             update_fields.append("tds_amount = :tds_amount")
             update_params["tds_amount"] = tds_amount
-            
+
             calculated_amounts = {
                 "total_amount": total_amount,
                 "claim_amount": claim_amount,
@@ -1214,22 +1254,49 @@ async def approve_mr(
             SET {', '.join(update_fields)}
             WHERE jute_mr_id = :mr_id
         """)
-        
+
         db.execute(update_query, update_params)
         db.commit()
 
-        return {
+        # Fetch company and branch prefix for formatted document numbers
+        mr_num = None
+        bill_pass_num = None
+        prefix_result = db.execute(
+            text("""
+                SELECT cm.co_prefix, bm.branch_prefix
+                FROM branch_mst bm
+                INNER JOIN co_mst cm ON cm.co_id = bm.co_id
+                WHERE bm.branch_id = :branch_id
+            """),
+            {"branch_id": db_branch_id},
+        ).fetchone()
+
+        co_prefix = prefix_result.co_prefix if prefix_result else None
+        branch_prefix = prefix_result.branch_prefix if prefix_result else None
+
+        if new_branch_mr_no and parsed_mr_date:
+            mr_num = format_jute_mr_number(new_branch_mr_no, parsed_mr_date, co_prefix, branch_prefix)
+        if new_bill_pass_no and parsed_mr_date:
+            bill_pass_num = format_jute_bill_pass_number(
+                new_bill_pass_no, parsed_mr_date, co_prefix, branch_prefix
+            )
+
+        response = {
             "success": True,
-            "message": "MR approved successfully",
+            "message": "MR approved successfully" if is_final_approval else "MR moved to next approval level",
             "mr_id": mr_id,
             "status_id": new_status,
-            "status_name": "Approved",
+            "status_name": "Approved" if is_final_approval else "Pending Approval",
             "branch_mr_no": new_branch_mr_no,
+            "mr_num": mr_num,
             "jute_mr_date": str(parsed_mr_date) if parsed_mr_date else None,
             "bill_pass_no": new_bill_pass_no,
+            "bill_pass_num": bill_pass_num,
             "bill_pass_date": str(parsed_mr_date) if parsed_mr_date else None,
             "calculated_amounts": calculated_amounts,
         }
+
+        return response
 
     except HTTPException:
         db.rollback()
@@ -1250,54 +1317,80 @@ async def reject_mr(
     """
     Reject MR - Changes status to Rejected (4).
     Can only be done from Open (1) or Pending Approval (20) status.
+
+    When menu_id is provided, uses the shared rejection utility for
+    level-based permission checks. When omitted, falls back to direct
+    rejection (backward compatible).
     """
     try:
         mr_id = int(body.mr_id)
         user_id = token_data.get("user_id")
         reason = body.reason or ""
+        menu_id = body.menu_id
 
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
-        # Get current MR details
-        check_query = text("""
-            SELECT jute_mr_id, status_id
-            FROM jute_mr
-            WHERE jute_mr_id = :mr_id
-        """)
-        mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
-        
-        if not mr_row:
-            raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
+        if menu_id is not None:
+            # Use shared rejection utility for level-based permission checks
+            process_rejection(
+                doc_id=mr_id,
+                user_id=user_id,
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_mr_with_approval_info,
+                update_status_fn=update_mr_status,
+                id_param_name="jute_mr_id",
+                doc_name="MR",
+                reason=reason,
+            )
+        else:
+            # Backward compatible: direct rejection without hierarchy checks
+            check_query = text("""
+                SELECT jute_mr_id, status_id
+                FROM jute_mr
+                WHERE jute_mr_id = :mr_id
+            """)
+            mr_row = db.execute(check_query, {"mr_id": mr_id}).fetchone()
 
-        mr = dict(mr_row._mapping)
-        current_status = mr.get("status_id")
+            if not mr_row:
+                raise HTTPException(status_code=404, detail=f"MR with id {mr_id} not found")
 
-        # Validate current status
-        if current_status not in [MR_STATUS_OPEN, MR_STATUS_PENDING_APPROVAL]:
-            raise HTTPException(status_code=400, detail="MR can only be rejected from Open or Pending Approval status")
+            mr = dict(mr_row._mapping)
+            current_status = mr.get("status_id")
 
-        now = datetime.now()
+            if current_status not in [MR_STATUS_OPEN, MR_STATUS_PENDING_APPROVAL]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MR can only be rejected from Open or Pending Approval status",
+                )
 
-        # Update status to Rejected
-        update_query = text("""
-            UPDATE jute_mr
-            SET status_id = :new_status,
-                remarks = CONCAT(COALESCE(remarks, ''), ' [Rejected: ', :reason, ']'),
-                updated_by = :updated_by,
-                updated_date_time = :updated_date_time
-            WHERE jute_mr_id = :mr_id
-        """)
-        
-        db.execute(update_query, {
-            "mr_id": mr_id,
-            "new_status": MR_STATUS_REJECTED,
-            "reason": reason,
-            "updated_by": user_id,
-            "updated_date_time": now,
-        })
+            now = datetime.now()
+            update_query = text("""
+                UPDATE jute_mr
+                SET status_id = :new_status,
+                    approval_level = NULL,
+                    updated_by = :updated_by,
+                    updated_date_time = :updated_date_time
+                WHERE jute_mr_id = :mr_id
+            """)
+            db.execute(update_query, {
+                "mr_id": mr_id,
+                "new_status": MR_STATUS_REJECTED,
+                "updated_by": user_id,
+                "updated_date_time": now,
+            })
+            db.commit()
 
-        db.commit()
+        # Append rejection reason to remarks (both paths)
+        if reason:
+            remarks_query = text("""
+                UPDATE jute_mr
+                SET remarks = CONCAT(COALESCE(remarks, ''), ' [Rejected: ', :reason, ']')
+                WHERE jute_mr_id = :mr_id
+            """)
+            db.execute(remarks_query, {"mr_id": mr_id, "reason": reason})
+            db.commit()
 
         return {
             "success": True,

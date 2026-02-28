@@ -20,7 +20,10 @@ from src.juteProcurement.query import (
     get_parties_by_supplier_query,
     get_branches_query,
     get_all_suppliers_query,
+    get_jute_po_with_approval_info,
+    update_jute_po_status,
 )
+from src.common.approval_utils import process_approval, process_rejection
 from src.juteProcurement.formatters import format_jute_po_number
 
 logger = logging.getLogger(__name__)
@@ -781,6 +784,19 @@ async def jute_po_update(
 
 
 # =============================================================================
+# JUTE PO APPROVAL SCHEMAS
+# =============================================================================
+
+class ApprovePayload(BaseModel):
+    menu_id: Optional[int] = None  # For multi-level approval via shared utility
+
+
+class RejectPayload(BaseModel):
+    reason: Optional[str] = None
+    menu_id: Optional[int] = None  # For multi-level rejection via shared utility
+
+
+# =============================================================================
 # JUTE PO APPROVAL ENDPOINTS
 # =============================================================================
 
@@ -837,38 +853,75 @@ async def approve_jute_po(
     request: Request,
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
+    payload: Optional[ApprovePayload] = None,
 ):
-    """Approve a Jute PO."""
+    """Approve a Jute PO.
+
+    When menu_id is provided (via body or query param), uses the shared approval
+    utility for multi-level approval hierarchy support. When omitted, falls back
+    to direct approval (backward compatible).
+    """
     try:
         from src.models.jute import JutePo
         from src.models.mst import BranchMst
-        
+
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
-        
-        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
-        jute_po = db.query(JutePo).join(
-            BranchMst, JutePo.branch_id == BranchMst.branch_id
-        ).filter(
-            JutePo.jute_po_id == jute_po_id,
-            BranchMst.co_id == co_id
-        ).first()
-        
-        if not jute_po:
-            raise HTTPException(status_code=404, detail="Jute PO not found")
-        
-        if jute_po.status_id not in [1, 20]:  # Must be Open or Pending Approval
-            raise HTTPException(status_code=400, detail="Jute PO cannot be approved in current status")
-        
-        jute_po.status_id = 3  # Approved status
-        jute_po.updated_by = token_data.get("user_id")
-        jute_po.updated_date_time = datetime.now()
-        
-        db.commit()
-        
-        return {"success": True, "message": "Jute PO approved successfully"}
+
+        user_id = token_data.get("user_id")
+
+        # Determine menu_id from payload body or query param
+        menu_id = None
+        if payload and payload.menu_id is not None:
+            menu_id = payload.menu_id
+        elif request.query_params.get("menu_id"):
+            menu_id = int(request.query_params.get("menu_id"))
+
+        if menu_id is not None:
+            # Use shared approval utility for multi-level approval
+            approval_result = process_approval(
+                doc_id=jute_po_id,
+                user_id=user_id,
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_jute_po_with_approval_info,
+                update_status_fn=update_jute_po_status,
+                id_param_name="jute_po_id",
+                doc_name="Jute PO",
+                document_amount=None,  # Jute never checks values
+            )
+            new_status = approval_result["new_status_id"]
+            is_final = new_status == 3
+            message = "Jute PO approved successfully" if is_final else approval_result["message"]
+
+            return {"success": True, "message": message, "status_id": new_status}
+        else:
+            # Backward compatible: direct approval without hierarchy checks
+            jute_po = db.query(JutePo).join(
+                BranchMst, JutePo.branch_id == BranchMst.branch_id
+            ).filter(
+                JutePo.jute_po_id == jute_po_id,
+                BranchMst.co_id == co_id,
+            ).first()
+
+            if not jute_po:
+                raise HTTPException(status_code=404, detail="Jute PO not found")
+
+            if jute_po.status_id not in [1, 20]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Jute PO cannot be approved in current status",
+                )
+
+            jute_po.status_id = 3  # Approved status
+            jute_po.updated_by = user_id
+            jute_po.updated_date_time = datetime.now()
+
+            db.commit()
+
+            return {"success": True, "message": "Jute PO approved successfully"}
 
     except HTTPException:
         raise
@@ -876,10 +929,6 @@ async def approve_jute_po(
         db.rollback()
         logger.exception("Error approving Jute PO")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-class RejectPayload(BaseModel):
-    reason: Optional[str] = None
 
 
 @router.post("/reject_jute_po/{jute_po_id}")
@@ -890,38 +939,76 @@ async def reject_jute_po(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Reject a Jute PO."""
+    """Reject a Jute PO.
+
+    When menu_id is provided, uses the shared rejection utility for
+    level-based permission checks. When omitted, falls back to direct
+    rejection (backward compatible).
+    """
     try:
         from src.models.jute import JutePo
         from src.models.mst import BranchMst
-        
+
         q_co_id = request.query_params.get("co_id")
         if not q_co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
         co_id = int(q_co_id)
-        
-        # Join with branch_mst to verify co_id since JutePo doesn't have co_id column
-        jute_po = db.query(JutePo).join(
-            BranchMst, JutePo.branch_id == BranchMst.branch_id
-        ).filter(
-            JutePo.jute_po_id == jute_po_id,
-            BranchMst.co_id == co_id
-        ).first()
-        
-        if not jute_po:
-            raise HTTPException(status_code=404, detail="Jute PO not found")
-        
-        if jute_po.status_id not in [1, 20]:  # Must be Open or Pending Approval
-            raise HTTPException(status_code=400, detail="Jute PO cannot be rejected in current status")
-        
-        jute_po.status_id = 4  # Rejected status
+
+        user_id = token_data.get("user_id")
+        menu_id = payload.menu_id
+
+        if menu_id is not None:
+            # Use shared rejection utility for level-based permission checks
+            process_rejection(
+                doc_id=jute_po_id,
+                user_id=user_id,
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_jute_po_with_approval_info,
+                update_status_fn=update_jute_po_status,
+                id_param_name="jute_po_id",
+                doc_name="Jute PO",
+                reason=payload.reason,
+            )
+        else:
+            # Backward compatible: direct rejection without hierarchy checks
+            jute_po = db.query(JutePo).join(
+                BranchMst, JutePo.branch_id == BranchMst.branch_id
+            ).filter(
+                JutePo.jute_po_id == jute_po_id,
+                BranchMst.co_id == co_id,
+            ).first()
+
+            if not jute_po:
+                raise HTTPException(status_code=404, detail="Jute PO not found")
+
+            if jute_po.status_id not in [1, 20]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Jute PO cannot be rejected in current status",
+                )
+
+            jute_po.status_id = 4  # Rejected status
+            jute_po.approval_level = None
+            jute_po.updated_by = user_id
+            jute_po.updated_date_time = datetime.now()
+
+            db.commit()
+
+        # Store rejection reason in internal_note (both paths)
         if payload.reason:
-            jute_po.internal_note = f"Rejected: {payload.reason}"
-        jute_po.updated_by = token_data.get("user_id")
-        jute_po.updated_date_time = datetime.now()
-        
-        db.commit()
-        
+            note_query = text("""
+                UPDATE jute_po
+                SET internal_note = CONCAT(
+                    COALESCE(internal_note, ''),
+                    CASE WHEN internal_note IS NOT NULL AND internal_note != '' THEN ' | ' ELSE '' END,
+                    'Rejected: ', :reason
+                )
+                WHERE jute_po_id = :jute_po_id
+            """)
+            db.execute(note_query, {"jute_po_id": jute_po_id, "reason": payload.reason})
+            db.commit()
+
         return {"success": True, "message": "Jute PO rejected successfully"}
 
     except HTTPException:

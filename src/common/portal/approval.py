@@ -1,4 +1,5 @@
 from typing import List, Optional
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import  func
 from sqlalchemy.sql import text
@@ -134,23 +135,18 @@ async def get_approval_level_data_setup(
         # Get available users for this menu and branch
         users_query = get_users_approval_portal(menu_id=menu_id, branch_id=branch_id)
         users_result = tenant_session.execute(users_query, {"menu_id": menu_id, "branch_id": branch_id}).fetchall()
-        print('users_result',users_result)
-        
+
         # Get max approval level for this menu
         max_level_query = get_max_approval(menu_id=menu_id)
-        print('max_level_query',max_level_query)
         max_level_result = tenant_session.execute(max_level_query, {"menu_id": menu_id}).scalar()
-        print('max_level_result',max_level_result)
         max_level = max_level_result if max_level_result else 0
-        print('max_level',max_level)
         
         # Get approval data for this menu and branch
         approval_data_query = get_approval_data(menu_id=menu_id, branch_id=branch_id)
         approval_data_result = tenant_session.execute(
-            approval_data_query, 
+            approval_data_query,
             {"menu_id": menu_id, "branch_id": branch_id}
         ).fetchall()
-        print('approval_data_result',approval_data_result)
         
         # Format users as options
         user_options = []
@@ -166,9 +162,9 @@ async def get_approval_level_data_setup(
             level_data = {
                 "level": row.approval_level,
                 "users": [str(row.user_id)],
-                "maxSingle": str(row.max_amount_single) if row.max_amount_single is not None else "0",
-                "maxDay": str(row.day_max_amount) if row.day_max_amount is not None else "0",
-                "maxMonth": str(row.month_max_amount) if row.month_max_amount is not None else "0"
+                "maxSingle": str(row.max_amount_single) if row.max_amount_single else "",
+                "maxDay": str(row.day_max_amount) if row.day_max_amount else "",
+                "maxMonth": str(row.month_max_amount) if row.month_max_amount else ""
             }
             
             # Check if we already have this level in our list
@@ -220,8 +216,6 @@ async def approval_level_data_setup_submit(
             ApprovalMst.branch_id == branch_id
         ).delete(synchronize_session='fetch')
         
-        print(f"Deleted {delete_count} existing approval entries for menu_id {menu_id} and branch_id {branch_id}")
-        
         # Now create new entries for each level and user combination
         new_entries = []
         
@@ -229,9 +223,9 @@ async def approval_level_data_setup_submit(
             level = level_data.level
             
             # Convert empty strings to None for numeric fields
-            max_single = float(level_data.maxSingle) if level_data.maxSingle else None
-            max_day = float(level_data.maxDay) if level_data.maxDay else None
-            max_month = float(level_data.maxMonth) if level_data.maxMonth else None
+            max_single = float(level_data.maxSingle) if level_data.maxSingle and float(level_data.maxSingle) > 0 else None
+            max_day = float(level_data.maxDay) if level_data.maxDay and float(level_data.maxDay) > 0 else None
+            max_month = float(level_data.maxMonth) if level_data.maxMonth and float(level_data.maxMonth) > 0 else None
             
             # Create an entry for each user in this level
             for user_id_str in level_data.users:
@@ -245,7 +239,8 @@ async def approval_level_data_setup_submit(
                     max_amount_single=max_single,
                     day_max_amount=max_day,
                     month_max_amount=max_month,
-                    updated_by=updated_by_user_id
+                    updated_by=updated_by_user_id,
+                    updated_date_time=datetime.utcnow(),
                 )
                 
                 tenant_session.add(new_approval)
@@ -264,7 +259,6 @@ async def approval_level_data_setup_submit(
         
     except Exception as e:
         tenant_session.rollback()
-        print(f"Error updating approval configuration: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error updating approval configuration: {str(e)}")
 
 

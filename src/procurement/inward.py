@@ -729,11 +729,38 @@ async def create_inward(
 
         logger.debug("Normalized inward items: %s", normalized_items)
 
+        # Derive supplier_branch_id, bill_branch_id, ship_branch_id from linked PO
+        supplier_branch_id = None
+        bill_branch_id = None
+        ship_branch_id = None
+        first_po_dtl_id = next(
+            (item["po_dtl_id"] for item in normalized_items if item.get("po_dtl_id")),
+            None,
+        )
+        if first_po_dtl_id:
+            from sqlalchemy import text as sa_text
+            po_info = db.execute(
+                sa_text("""
+                    SELECT pp.supplier_branch_id, pp.billing_branch_id, pp.shipping_branch_id
+                    FROM proc_po_dtl ppd
+                    JOIN proc_po pp ON pp.po_id = ppd.po_id
+                    WHERE ppd.po_dtl_id = :po_dtl_id
+                    LIMIT 1
+                """),
+                {"po_dtl_id": first_po_dtl_id},
+            ).fetchone()
+            if po_info:
+                po_row = dict(po_info._mapping)
+                supplier_branch_id = po_row.get("supplier_branch_id")
+                bill_branch_id = po_row.get("billing_branch_id")
+                ship_branch_id = po_row.get("shipping_branch_id")
+
         # Insert header
         insert_header_query = insert_proc_inward()
         header_params = {
             "inward_sequence_no": None,  # Will be set to inward_id after insert
             "supplier_id": supplier_id,
+            "supplier_branch_id": supplier_branch_id,
             "vehicle_number": vehicle_no,
             "driver_name": driver_name,
             "driver_contact_number": driver_contact_no,
@@ -751,6 +778,8 @@ async def create_inward(
             "consignment_date": consignment_date,
             "ewaybillno": ewaybillno,
             "ewaybill_date": ewaybill_date,
+            "bill_branch_id": bill_branch_id,
+            "ship_branch_id": ship_branch_id,
             "branch_id": branch_id,
             "project_id": project_id,
             "gross_amount": total_amount,

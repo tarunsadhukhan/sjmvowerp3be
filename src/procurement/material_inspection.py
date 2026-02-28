@@ -20,6 +20,7 @@ from src.procurement.query import (
     update_inward_inspection_complete,
 )
 from src.procurement.inward import format_inward_no
+from src.procurement.po import extract_formatted_po_no
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ async def get_inspection_by_inward_id(
         line_items = []
         for row in dtl_result:
             item = dict(row._mapping)
+            item["po_no_formatted"] = extract_formatted_po_no(item) if item.get("po_no") else ""
             # Default approved_qty to inward_qty if not set
             if item.get("approved_qty") is None:
                 item["approved_qty"] = item.get("inward_qty") or 0

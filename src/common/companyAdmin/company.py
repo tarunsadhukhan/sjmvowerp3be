@@ -357,9 +357,8 @@ async def get_co_invoice_type_map_setup(
         invoice_types = db.execute(
             text(
                 """
-                SELECT invoice_type_id, invoice_type_name, invoice_type_code
+                SELECT invoice_type_id, invoice_type_name
                 FROM invoice_type_mst
-                WHERE active = 1
                 ORDER BY invoice_type_name
                 """
             )
@@ -409,7 +408,6 @@ async def save_co_invoice_type_map(
                 """
                 SELECT invoice_type_id
                 FROM invoice_type_mst
-                WHERE active = 1
                 """
             )
         ).fetchall()

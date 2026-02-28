@@ -5,8 +5,6 @@ def test_invoice_type_mst_columns_present():
     columns = InvoiceTypeMst.__table__.c
     assert "invoice_type_id" in columns
     assert "invoice_type_name" in columns
-    assert "invoice_type_code" in columns
-    assert "active" in columns
 
 
 def test_invoice_type_co_map_columns_and_fk():

@@ -10,16 +10,15 @@ from src.masters.query import get_branch_list, get_item_group_drodown
 from src.procurement.indent import (
     calculate_financial_year,
     format_indent_no,
-    calculate_approval_permissions,
 )
 from src.procurement.query import (
     get_item_make_by_group_id,
-    get_approval_flow_by_menu_branch,
-    get_user_approval_level,
-    get_max_approval_level,
-    check_approval_mst_exists,
-    get_user_edit_access,
     get_company_branch_addresses,
+)
+from src.common.approval_utils import (
+    process_approval,
+    process_rejection,
+    calculate_approval_permissions,
 )
 from src.sales.query import (
     get_item_by_group_id_saleable,
@@ -120,146 +119,6 @@ def get_fy_boundaries(doc_date):
         fy_end_year = year
 
     return datetime(fy_start_year, 4, 1).date(), datetime(fy_end_year, 3, 31).date()
-
-
-def process_sales_approval(
-    doc_id: int,
-    user_id: int,
-    menu_id: int,
-    get_doc_query,
-    update_status_query,
-    id_param_name: str,
-    doc_name: str,
-    db: Session,
-    document_amount: float | None = None,
-) -> dict:
-    """Generic approval processing for sales documents (quotation, order, delivery order).
-
-    Args:
-        doc_id: The document primary key value
-        user_id: The approving user
-        menu_id: The menu ID for approval lookup
-        get_doc_query: Query function to get document with approval info
-        update_status_query: Query function to update document status
-        id_param_name: The bind parameter name for the document ID (e.g. 'sales_quotation_id')
-        doc_name: Human-readable name for error messages
-        db: Database session
-        document_amount: Optional amount for value-based approval checks
-    """
-    try:
-        doc_query = get_doc_query()
-        doc_result = db.execute(doc_query, {id_param_name: doc_id}).fetchone()
-        if not doc_result:
-            raise HTTPException(status_code=404, detail=f"{doc_name} not found")
-
-        doc = dict(doc_result._mapping)
-        current_status_id = doc.get("status_id")
-        current_approval_level = doc.get("approval_level") or 0
-        branch_id = doc.get("branch_id")
-
-        # If status is Open (1), transition to Pending Approval (20) with level 1
-        if current_status_id == 1:
-            updated_at = datetime.utcnow()
-            update_q = update_status_query()
-            params = {
-                id_param_name: doc_id,
-                "status_id": 20,
-                "approval_level": 1,
-                "updated_by": user_id,
-                "updated_date_time": updated_at,
-            }
-            # Add the doc_no param (set to None to keep existing)
-            for key in ["quotation_no", "sales_no", "delivery_order_no"]:
-                if key not in params:
-                    params[key] = None
-            db.execute(update_q, params)
-            db.commit()
-            current_status_id = 20
-            current_approval_level = 1
-            doc_result = db.execute(doc_query, {id_param_name: doc_id}).fetchone()
-            if doc_result:
-                doc = dict(doc_result._mapping)
-
-        if current_status_id != 20:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot approve {doc_name} with status_id {current_status_id}. Expected 20 (Pending Approval) or 1 (Open)."
-            )
-
-        user_level_query = get_user_approval_level()
-        user_level_result = db.execute(
-            user_level_query,
-            {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-        ).fetchone()
-
-        if not user_level_result:
-            raise HTTPException(
-                status_code=403,
-                detail="User does not have approval permission for this menu and branch."
-            )
-
-        user_data = dict(user_level_result._mapping)
-        user_approval_level = user_data.get("approval_level")
-
-        if user_approval_level != current_approval_level:
-            raise HTTPException(
-                status_code=403,
-                detail=f"User approval level ({user_approval_level}) does not match current {doc_name} approval level ({current_approval_level})."
-            )
-
-        # Amount limit checks (for value-based approval)
-        if document_amount is not None:
-            max_amount_single = user_data.get("max_amount_single")
-            if max_amount_single is not None and document_amount > max_amount_single:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Document amount ({document_amount}) exceeds maximum single approval amount ({max_amount_single})."
-                )
-
-        max_level_query = get_max_approval_level()
-        max_level_result = db.execute(
-            max_level_query,
-            {"menu_id": menu_id, "branch_id": branch_id}
-        ).fetchone()
-        max_approval_level = dict(max_level_result._mapping).get("max_level") if max_level_result else user_approval_level
-
-        if user_approval_level >= max_approval_level:
-            new_status_id = 3
-            new_approval_level = user_approval_level
-            message = f"{doc_name} approved (final level)."
-        else:
-            new_status_id = 20
-            new_approval_level = current_approval_level + 1
-            message = f"{doc_name} moved to approval level {new_approval_level}."
-
-        updated_at = datetime.utcnow()
-        update_q = update_status_query()
-        params = {
-            id_param_name: doc_id,
-            "status_id": new_status_id,
-            "approval_level": new_approval_level,
-            "updated_by": user_id,
-            "updated_date_time": updated_at,
-        }
-        for key in ["quotation_no", "sales_no", "delivery_order_no"]:
-            if key not in params:
-                params[key] = None
-        db.execute(update_q, params)
-        db.commit()
-
-        return {
-            "status": "success",
-            "new_status_id": new_status_id,
-            "new_approval_level": new_approval_level,
-            "message": message,
-        }
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.exception(f"Error processing approval for {doc_name}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -1117,16 +976,17 @@ async def approve_quotation(
             raise HTTPException(status_code=404, detail="Quotation not found")
         document_amount = float(dict(doc_result._mapping).get("net_amount", 0) or 0)
 
-        result = process_sales_approval(
+        result = process_approval(
             doc_id=sales_quotation_id,
             user_id=user_id,
             menu_id=menu_id,
-            get_doc_query=get_quotation_with_approval_info,
-            update_status_query=update_quotation_status,
+            db=db,
+            get_doc_fn=get_quotation_with_approval_info,
+            update_status_fn=update_quotation_status,
             id_param_name="sales_quotation_id",
             doc_name="Quotation",
-            db=db,
             document_amount=document_amount,
+            extra_update_params={"quotation_no": None},
         )
         return result
     except HTTPException:
@@ -1145,34 +1005,26 @@ async def reject_quotation(
     """Reject a quotation (20 -> 4)."""
     try:
         sales_quotation_id = to_int(payload.get("sales_quotation_id"), "sales_quotation_id", required=True)
+        menu_id = to_int(payload.get("menu_id"), "menu_id")
         user_id = int(token_data.get("user_id"))
+        reason = payload.get("reason")
 
-        doc_query = get_quotation_with_approval_info()
-        doc_result = db.execute(doc_query, {"sales_quotation_id": sales_quotation_id}).fetchone()
-        if not doc_result:
-            raise HTTPException(status_code=404, detail="Quotation not found")
-        doc = dict(doc_result._mapping)
-
-        if doc.get("status_id") != 20:
-            raise HTTPException(status_code=400, detail=f"Cannot reject quotation with status_id {doc.get('status_id')}. Expected 20 (Pending Approval).")
-
-        updated_at = datetime.utcnow()
-        update_q = update_quotation_status()
-        db.execute(update_q, {
-            "sales_quotation_id": sales_quotation_id,
-            "status_id": 4,
-            "approval_level": None,
-            "updated_by": user_id,
-            "updated_date_time": updated_at,
-            "quotation_no": None,
-        })
-        db.commit()
-        return {"status": "success", "new_status_id": 4, "message": "Quotation rejected."}
+        result = process_rejection(
+            doc_id=sales_quotation_id,
+            user_id=user_id,
+            menu_id=menu_id,
+            db=db,
+            get_doc_fn=get_quotation_with_approval_info,
+            update_status_fn=update_quotation_status,
+            id_param_name="sales_quotation_id",
+            doc_name="Quotation",
+            reason=reason,
+            extra_update_params={"quotation_no": None},
+        )
+        return result
     except HTTPException:
-        db.rollback()
         raise
     except Exception as e:
-        db.rollback()
         logger.exception("Error rejecting quotation")
         raise HTTPException(status_code=500, detail=str(e))
 

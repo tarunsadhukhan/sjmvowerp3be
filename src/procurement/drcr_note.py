@@ -22,6 +22,7 @@ from src.procurement.query import (
     update_drcr_note_status,
 )
 from src.procurement.inward import format_inward_no
+from src.procurement.po import extract_formatted_po_no
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,8 @@ async def get_drcr_note_by_id(
         line_items = []
         for row in dtl_result:
             item = dict(row._mapping)
-            
+            item["po_no_formatted"] = extract_formatted_po_no(item) if item.get("po_no") else ""
+
             # Add type label
             debit_type = item.get("debitnote_type")
             if debit_type == DEBITNOTE_TYPE_QTY_REJECTION:

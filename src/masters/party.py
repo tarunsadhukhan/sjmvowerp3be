@@ -92,7 +92,32 @@ async def party_edit_setup(
 
         # Fetch party branches
         querypartybranches = get_party_branch_by_party_id(party_id_int)
-        resultpartybranches = db.execute(querypartybranches, {"party_id": party_id_int}).fetchall()
+        try:
+            resultpartybranches = db.execute(querypartybranches, {"party_id": party_id_int}).fetchall()
+        except Exception as branch_err:
+            err_text = str(branch_err)
+            if "Unknown column 'pbm.state_id'" not in err_text:
+                raise
+
+            legacy_querypartybranches = text("""
+SELECT
+  pbm.active,
+  pbm.party_mst_branch_id,
+  pbm.gst_no,
+  pbm.address,
+  pbm.address_additional,
+  pbm.zip_code,
+  cm.state_id,
+  sm.state,
+  pbm.contact_no,
+  pbm.contact_person
+FROM party_branch_mst pbm
+LEFT JOIN city_mst cm ON cm.city_id = pbm.city_id
+LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+WHERE pbm.party_id = :party_id;
+""")
+            resultpartybranches = db.execute(legacy_querypartybranches, {"party_id": party_id_int}).fetchall()
+
         party_branches = [dict(row._mapping) for row in resultpartybranches]
 
         # Lookup lists

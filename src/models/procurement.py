@@ -472,6 +472,7 @@ class ProcInward(Base):
     inward_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     inward_sequence_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     supplier_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    supplier_branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     vehicle_number: Mapped[Optional[str]] = mapped_column(String(25), nullable=True)
     driver_name: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     driver_contact_number: Mapped[Optional[str]] = mapped_column(String(25), nullable=True)
