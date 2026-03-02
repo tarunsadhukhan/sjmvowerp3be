@@ -474,6 +474,7 @@ def calculate_approval_permissions(
 
         # Approval/Reject permissions (only for status_id = 20)
         if status_id == 20:  # Pending Approval
+            permissions["canSave"] = True
             permissions["canViewApprovalLog"] = True
 
             if approval_exists:
