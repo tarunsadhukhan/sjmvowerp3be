@@ -488,6 +488,33 @@ def delete_proc_indent_detail():
     return text(sql)
 
 
+def update_proc_indent_detail():
+    """Update an existing indent detail row in place (preserves indent_dtl_id)."""
+    sql = """UPDATE proc_indent_dtl SET
+        item_id = :item_id,
+        qty = :qty,
+        uom_id = :uom_id,
+        item_make_id = :item_make_id,
+        dept_id = :dept_id,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_dtl_id = :indent_dtl_id
+      AND indent_id = :indent_id;"""
+    return text(sql)
+
+
+def soft_delete_indent_detail_by_ids():
+    """Soft-delete specific indent detail rows by their IDs."""
+    sql = """UPDATE proc_indent_dtl SET
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_id = :indent_id
+      AND indent_dtl_id IN :dtl_ids;"""
+    return text(sql)
+
+
 
 def update_indent_status():
     """Update indent status and approval level. Optionally update indent_no."""
