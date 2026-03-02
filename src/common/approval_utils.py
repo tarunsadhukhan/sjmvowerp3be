@@ -35,6 +35,7 @@ def process_approval(
     doc_name: str,
     document_amount: float | None = None,
     extra_update_params: dict | None = None,
+    get_consumed_amounts_fn=None,
 ) -> dict:
     """Generic approval processing for any document type.
 
@@ -61,6 +62,10 @@ def process_approval(
             When None, amount checks are skipped entirely.
         extra_update_params: Optional dict of additional bind parameters
             to include in update_status_fn calls (e.g., {'indent_no': None}).
+        get_consumed_amounts_fn: Optional callable that returns a text() query
+            for fetching daily/monthly consumed amounts. The query must accept
+            bind param :user_id and return columns: day_total, month_total.
+            When provided, daily/monthly limits from approval_mst are enforced.
 
     Returns:
         Dict with keys: status, new_status_id, new_approval_level, message.
@@ -163,23 +168,8 @@ def process_approval(
 
             user_approval_level = user_data.get("approval_level")
 
-            # 8. Value-based checks (only when document_amount is provided)
-            if document_amount is not None:
-                max_amount_single = user_data.get("max_amount_single")
-                if (
-                    max_amount_single is not None
-                    and max_amount_single > 0
-                    and document_amount > max_amount_single
-                ):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"Document amount ({document_amount}) exceeds maximum "
-                            f"single approval amount ({max_amount_single})."
-                        )
-                    )
-
-            # 9. Get max approval level for this menu/branch
+            # 8. Get max approval level for this menu/branch (needed for
+            #    value-based decisions below)
             max_level_query = get_max_approval_level()
             max_level_result = db.execute(
                 max_level_query,
@@ -191,8 +181,95 @@ def process_approval(
                 else user_approval_level
             )
 
+            # 9. Value-based checks (only when document_amount is provided)
+            value_based_final = False
+            amount_exceeds_limit = False
+            if document_amount is not None:
+                max_amount_single = user_data.get("max_amount_single")
+                day_max_amount_limit = user_data.get("day_max_amount")
+                month_max_amount_limit = user_data.get("month_max_amount")
+
+                # Check single-document amount limit
+                has_value_limits = (
+                    max_amount_single is not None and max_amount_single > 0
+                )
+                if has_value_limits:
+                    if document_amount > max_amount_single:
+                        # Amount exceeds this user's limit. If higher levels
+                        # exist, escalate so someone with a higher limit can
+                        # approve. Only block when this IS the final level.
+                        if user_approval_level >= max_approval_level:
+                            raise HTTPException(
+                                status_code=403,
+                                detail=(
+                                    f"Document amount ({document_amount}) exceeds maximum "
+                                    f"single approval amount ({max_amount_single}) "
+                                    f"and no higher approval level exists."
+                                )
+                            )
+                        amount_exceeds_limit = True
+                    else:
+                        # Single amount is within limit — check daily/monthly
+                        value_based_final = True
+
+                        if get_consumed_amounts_fn is not None:
+                            needs_daily = (
+                                day_max_amount_limit is not None
+                                and day_max_amount_limit > 0
+                            )
+                            needs_monthly = (
+                                month_max_amount_limit is not None
+                                and month_max_amount_limit > 0
+                            )
+
+                            if needs_daily or needs_monthly:
+                                consumed_query = get_consumed_amounts_fn()
+                                consumed_result = db.execute(
+                                    consumed_query, {"user_id": user_id}
+                                ).fetchone()
+
+                                if consumed_result:
+                                    consumed = dict(consumed_result._mapping)
+                                    day_total = float(consumed.get("day_total", 0) or 0)
+                                    month_total = float(consumed.get("month_total", 0) or 0)
+
+                                    if needs_daily and (day_total + document_amount) > day_max_amount_limit:
+                                        if user_approval_level >= max_approval_level:
+                                            raise HTTPException(
+                                                status_code=403,
+                                                detail=(
+                                                    f"Approving this {doc_name} (amount {document_amount}) "
+                                                    f"would exceed daily approval limit "
+                                                    f"({day_total} + {document_amount} > {day_max_amount_limit})."
+                                                )
+                                            )
+                                        value_based_final = False
+                                        amount_exceeds_limit = True
+
+                                    if needs_monthly and (month_total + document_amount) > month_max_amount_limit:
+                                        if user_approval_level >= max_approval_level:
+                                            raise HTTPException(
+                                                status_code=403,
+                                                detail=(
+                                                    f"Approving this {doc_name} (amount {document_amount}) "
+                                                    f"would exceed monthly approval limit "
+                                                    f"({month_total} + {document_amount} > {month_max_amount_limit})."
+                                                )
+                                            )
+                                        value_based_final = False
+                                        amount_exceeds_limit = True
+
             # 10-11. Determine next status
-            if user_approval_level >= max_approval_level:
+            # - value_based_final: user's value limits cover the amount →
+            #   approve directly without requiring higher levels.
+            # - amount_exceeds_limit: user's limits are too low → force
+            #   escalation to next level regardless of level-based logic.
+            if amount_exceeds_limit:
+                # Must escalate — user's value authority is insufficient
+                new_status_id = 20  # Still Pending Approval
+                new_approval_level = current_approval_level + 1
+                message = f"{doc_name} moved to approval level {new_approval_level}."
+            elif user_approval_level >= max_approval_level or value_based_final:
                 new_status_id = 3  # Approved (final)
                 new_approval_level = user_approval_level
                 message = f"{doc_name} approved (final level)."

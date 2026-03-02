@@ -29,9 +29,11 @@ from src.procurement.query import (
 	get_max_po_no_for_branch_fy,
 	get_po_with_approval_info,
 	update_po_status,
+	get_po_consumed_amounts,
 	get_item_by_group_id_purchaseable,
 	get_item_make_by_group_id,
 	get_item_uom_by_group_id,
+	get_last_purchase_rates_by_item_group,
 	get_expense_types,
 	get_project,
 	get_po_header_query,
@@ -56,9 +58,38 @@ from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import (
 	format_indent_no,
 	calculate_financial_year,
-	determine_validation_logic,
 	get_fy_boundaries,
 )
+
+# =============================================================================
+# PO-SPECIFIC VALIDATION HELPERS
+# =============================================================================
+
+# Mapping: (po_type, expense_type_name) -> validation logic
+# Logic 1: Max/Min Quantity Validation with Stock Check
+# Logic 2: FY Check + max qty as forced value (requires min/max)
+# Logic 3: No Validation / Free Entry
+#
+# NOTE: This differs from the indent VALIDATION_LOGIC_MAP in two key ways:
+#   - Regular + Capital -> Logic 3 (indent uses Logic 2)
+#   - Open + General/Maintenance/Production -> Logic 2 (indent uses Logic 3)
+PO_VALIDATION_LOGIC_MAP = {
+	# Regular PO
+	("Regular", "General"): 1,
+	("Regular", "Maintenance"): 1,
+	("Regular", "Production"): 1,
+	("Regular", "Overhaul"): 1,
+	("Regular", "Capital"): 3,
+	# Open PO — FY check + forced max qty
+	("Open", "General"): 2,
+	("Open", "Maintenance"): 2,
+	("Open", "Production"): 2,
+}
+
+
+def determine_po_validation_logic(po_type: str, expense_type_name: str) -> int:
+	"""Determine which validation logic applies for PO based on po_type + expense type."""
+	return PO_VALIDATION_LOGIC_MAP.get((po_type, expense_type_name), 3)
 from src.common.approval_utils import (
 	process_approval,
 	process_rejection,
@@ -243,6 +274,25 @@ async def get_po_setup_2(
 		uoms_result = db.execute(uoms_query, {"item_group_id": item_group_id}).fetchall()
 		uoms = [dict(r._mapping) for r in uoms_result]
 
+		# Enrich items with last purchase rate if co_id is provided
+		co_id = request.query_params.get("co_id")
+		if co_id:
+			rates_query = get_last_purchase_rates_by_item_group()
+			rates_result = db.execute(rates_query, {
+				"item_group_id": item_group_id, "co_id": int(co_id)
+			}).fetchall()
+			rates_map = {r._mapping["item_id"]: dict(r._mapping) for r in rates_result}
+			for item in items:
+				rate_info = rates_map.get(item["item_id"])
+				if rate_info:
+					item["last_purchase_rate"] = rate_info["last_purchase_rate"]
+					item["last_purchase_date"] = str(rate_info["last_purchase_date"]) if rate_info["last_purchase_date"] else None
+					item["last_supplier_name"] = rate_info["last_supplier_name"]
+				else:
+					item["last_purchase_rate"] = None
+					item["last_purchase_date"] = None
+					item["last_supplier_name"] = None
+
 		return {
 			"item_grp_code": item_grp_code,
 			"item_grp_name": item_grp_name,
@@ -268,7 +318,7 @@ async def validate_item_for_po(
 	Returns validation data including errors, warnings, and allowable qty range
 	based on (po_type + expense_type) → Logic 1, 2, or 3.
 
-	Logic mapping (mirrors indent validation matrix):
+	Logic mapping (PO-specific — differs from indent):
 	  Logic 1 (Regular + General/Maintenance/Production/Overhaul): Stock + max/min formula including outstanding_po_qty.
 	  Logic 2 (Open + General/Maintenance/Production): FY PO check + max qty forced.
 	  Logic 3 (Regular + Capital, others): No validation, free entry.
@@ -308,8 +358,8 @@ async def validate_item_for_po(
 			raise HTTPException(status_code=400, detail=f"Invalid expense_type_id: {expense_type_id}")
 		expense_type_name = dict(expense_row._mapping)["expense_type_name"]
 
-		# Determine validation logic using the same mapping as indent
-		validation_logic = determine_validation_logic(po_type, expense_type_name)
+		# Determine validation logic using PO-specific mapping
+		validation_logic = determine_po_validation_logic(po_type, expense_type_name)
 
 		result = {
 			"validation_logic": validation_logic,
@@ -1740,6 +1790,7 @@ async def approve_po(
 			doc_name="Purchase Order",
 			document_amount=document_amount,
 			extra_update_params={"po_no": None},
+			get_consumed_amounts_fn=get_po_consumed_amounts,
 		)
 		
 		return result

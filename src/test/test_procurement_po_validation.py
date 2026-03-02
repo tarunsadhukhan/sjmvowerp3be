@@ -75,10 +75,11 @@ class TestValidateItemForPOLogic3:
         app.dependency_overrides.pop(get_tenant_db, None)
 
     def test_regular_capital_returns_logic3(self):
+        """Per PO spec, Regular + Capital -> Logic 3 (free entry, no validation)."""
         mock_session = MagicMock()
         mock_session.execute.return_value.fetchone.return_value = _mock_row({"expense_type_name": "Capital"})
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
-        response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Regular&expense_type_id=3")
+        response = client.get("/api/procurementPO/validate_item_for_po?co_id=1&branch_id=1&item_id=10&po_type=Regular&expense_type_id=5")
         assert response.status_code == 200
         data = response.json()
         assert data["validation_logic"] == 3
