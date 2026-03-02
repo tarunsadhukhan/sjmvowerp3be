@@ -275,6 +275,7 @@ class TestValidateItemEndpoint:
             "open_indent_outstanding": 0,
             "outstanding_po_qty": 0,
             "open_po_outstanding": 0,
+            "po_outstanding_to_validate": 0,
             "minqty": 20,
             "maxqty": 100,
             "min_order_qty": 10,

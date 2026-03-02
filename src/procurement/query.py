@@ -2704,6 +2704,7 @@ def get_item_validation_data_v2():
         bal_tot_ind_qty    → total_all_indent_outstanding  (all types incl. Open — informational only)
         open_bal_ind_tot_qty   → open_indent_outstanding
         bal_tot_po_qty     → total outstanding PO qty
+        bal_qty_po_to_validate → po_outstanding_to_validate (Regular POs only — used for max recalc)
 
     Pre-computed validation columns (added 2026-02-24):
         max_indent_qty  → sentinel -2 (open outstanding), -1 (no minmax), or >=0 (limit)
@@ -2723,6 +2724,7 @@ def get_item_validation_data_v2():
         COALESCE(v.open_bal_ind_tot_qty, 0)    AS open_indent_outstanding,
         COALESCE(v.bal_tot_po_qty, 0)          AS outstanding_po_qty,
         COALESCE(v.open_bal_tot_po_qty, 0)     AS open_po_outstanding,
+        COALESCE(v.bal_qty_po_to_validate, 0)  AS po_outstanding_to_validate,
         COALESCE(v.max_indent_qty, -1)         AS max_indent_qty,
         COALESCE(v.min_indent_qty, -1)         AS min_indent_qty,
         COALESCE(v.max_po_qty, -1)             AS max_po_qty,
@@ -2730,6 +2732,32 @@ def get_item_validation_data_v2():
     FROM vw_item_balance_qty_by_branch_new v
     WHERE v.branch_id = :branch_id
       AND v.item_id   = :item_id;
+    """
+    return text(sql)
+
+
+def get_indent_item_outstanding():
+    """
+    Get the outstanding indent quantity contributed by a specific indent
+    for a given (branch_id, item_id) pair.
+
+    Used during edit to exclude the current indent's own quantity from
+    the aggregate outstanding total, preventing a self-referencing
+    validation error.
+
+    Returns a single row with `indent_outstanding` (float).
+    """
+    sql = """
+    SELECT COALESCE(SUM(vpion.bal_ind_qty), 0) AS indent_outstanding
+    FROM vw_proc_indent_outstanding_new vpion
+    WHERE vpion.branch_id = :branch_id
+      AND vpion.item_id   = :item_id
+      AND vpion.indent_dtl_id IN (
+          SELECT pid.indent_dtl_id
+          FROM proc_indent_dtl pid
+          WHERE pid.indent_id = :indent_id
+            AND pid.active = 1
+      )
     """
     return text(sql)
 
