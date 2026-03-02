@@ -28,6 +28,7 @@ from src.procurement.query import (
 	get_max_indent_no_for_branch_fy,
 	get_all_approved_indents_query,
 	get_item_validation_data_v2,
+	get_indent_item_outstanding,
 	get_item_fy_indent_check_v2,
 	get_expense_type_name_by_id,
 	get_distinct_indent_titles,
@@ -44,6 +45,7 @@ from src.common.approval_utils import (
 	process_rejection,
 	calculate_approval_permissions,
 )
+from src.common.approval_query import get_max_approval_level
 from datetime import datetime, date
 from typing import Optional
 import math
@@ -154,6 +156,7 @@ async def validate_item_for_indent(
         indent_type = request.query_params.get("indent_type")
         expense_type_id = request.query_params.get("expense_type_id")
         indent_date_str = request.query_params.get("indent_date")
+        indent_id = request.query_params.get("indent_id")  # optional: exclude self when editing
 
         if not branch_id:
             raise HTTPException(status_code=400, detail="branch_id is required")
@@ -249,9 +252,34 @@ async def validate_item_for_indent(
         minqty = vdata.get("minqty")
         maxqty = vdata.get("maxqty")
         min_order_qty = vdata.get("min_order_qty")
+        # PO outstanding for validation (excludes Open + Capital/Maintenance POs)
+        po_to_validate = float(vdata.get("po_outstanding_to_validate") or 0)
         # Pre-computed validation limits from the view (sentinel: -2=open outstanding, -1=no minmax, >=0=limit)
         view_max_indent = float(vdata.get("max_indent_qty", -1))
         view_min_indent = float(vdata.get("min_indent_qty", -1))
+
+        # When editing an existing indent, exclude its own outstanding from the totals
+        # to prevent the self-referencing validation error.
+        self_outstanding = 0.0
+        if indent_id:
+            self_row = db.execute(
+                get_indent_item_outstanding(),
+                {"branch_id": branch_id, "item_id": item_id, "indent_id": int(indent_id)},
+            ).fetchone()
+            if self_row:
+                self_outstanding = float(dict(self_row._mapping).get("indent_outstanding") or 0)
+            outstanding -= self_outstanding
+            regular_bom_outstanding_val -= self_outstanding
+            # Recalculate max_indent_qty with adjusted outstanding
+            if view_max_indent >= 0 and self_outstanding > 0:
+                maxqty_f = float(maxqty) if maxqty is not None else 0
+                moq = float(min_order_qty) if min_order_qty is not None else 0
+                available = maxqty_f - branch_stock - outstanding - po_to_validate
+                if moq > 0:
+                    view_max_indent = math.ceil(max(available, 0) / moq) * moq
+                else:
+                    view_max_indent = max(available, 0)
+
         result["branch_stock"] = branch_stock
         result["outstanding_indent_qty"] = outstanding
         result["minqty"] = float(minqty) if minqty is not None else None
@@ -860,6 +888,22 @@ async def get_indent_by_id(
 				logger.exception("Error calculating permissions, continuing without them")
 				permissions = None
 		
+		# Get max approval level for this menu/branch
+		max_approval_level = None
+		if menu_id is not None and branch_id is not None:
+			try:
+				max_level_query = get_max_approval_level()
+				max_level_result = db.execute(
+					max_level_query,
+					{"menu_id": menu_id, "branch_id": branch_id}
+				).fetchone()
+				if max_level_result:
+					max_level_val = dict(max_level_result._mapping).get("max_level")
+					if max_level_val is not None:
+						max_approval_level = int(max_level_val)
+			except Exception:
+				logger.exception("Error fetching max approval level, continuing without it")
+
 		# Format indent_no if it exists
 		raw_indent_no = header.get("indent_no")
 		formatted_indent_no = ""
@@ -892,6 +936,7 @@ async def get_indent_by_id(
 			"status": header.get("status_name") if header.get("status_name") else None,
 			"statusId": header.get("status_id"),
 			"approvalLevel": approval_level,
+			"maxApprovalLevel": max_approval_level,
 			"updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
 			"updatedAt": updated_at_str,
 			"remarks": header.get("remarks") if header.get("remarks") else None,
@@ -1261,9 +1306,26 @@ async def update_indent(
 					).fetchone()
 					if vdata:
 						vd = dict(vdata._mapping)
-						# Use pre-computed max_indent_qty from view
-						# Sentinel: -2=open outstanding (skip), -1=no minmax (skip), >=0=enforce
 						max_allowed = float(vd.get("max_indent_qty", -1))
+						outstanding_qty = float(vd.get("outstanding_indent_qty") or 0)
+
+						# Exclude the current indent's own outstanding so editing
+						# doesn't fail against its own previously-saved quantity.
+						self_row = db.execute(
+							get_indent_item_outstanding(),
+							{"branch_id": int(branch_id), "item_id": int(item_id), "indent_id": int(indent_id)},
+						).fetchone()
+						self_out = float(dict(self_row._mapping).get("indent_outstanding") or 0) if self_row else 0.0
+						if self_out > 0 and max_allowed >= 0:
+							maxqty_f = float(vd.get("maxqty") or 0)
+							stock = float(vd.get("branch_stock") or 0)
+							po_out = float(vd.get("po_outstanding_to_validate") or 0)
+							adj_outstanding = outstanding_qty - self_out
+							available = maxqty_f - stock - adj_outstanding - po_out
+							moq = float(vd.get("min_order_qty") or 0)
+							max_allowed = math.ceil(max(available, 0) / moq) * moq if moq > 0 else max(available, 0)
+							outstanding_qty = adj_outstanding
+
 						if max_allowed >= 0 and ni["qty"] > max_allowed:
 							raise HTTPException(
 								status_code=400,
@@ -1272,7 +1334,7 @@ async def update_indent(
 									f"maximum allowed indent quantity of {max_allowed:.2f} "
 									f"for this item (maxQty={vd.get('maxqty')}, "
 									f"stock={vd.get('branch_stock', 0)}, "
-									f"outstanding={vd.get('outstanding_indent_qty', 0)})."
+									f"outstanding={outstanding_qty})."
 								),
 							)
 

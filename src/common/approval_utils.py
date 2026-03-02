@@ -99,13 +99,12 @@ def process_approval(
                 **merged_extra,
             }
             db.execute(update_q, params)
-            db.commit()
+            # Do NOT commit here — keep auto-transition + approval as one
+            # atomic transaction. The single commit at the end handles both.
+            # If validation fails, db.rollback() in the except block will
+            # undo this auto-transition.
             current_status_id = 20
             current_approval_level = 1
-            # Refresh document data after status change
-            doc_result = db.execute(doc_query, {id_param_name: doc_id}).fetchone()
-            if doc_result:
-                doc = dict(doc_result._mapping)
 
         # 4. Must be in Pending Approval (20) to proceed
         if current_status_id != 20:
@@ -129,30 +128,40 @@ def process_approval(
 
         if approval_exists:
             # 6a. Hierarchy exists — use level-based approval
+            # A user may have entries at multiple levels (e.g., level 1 AND level 2).
+            # Fetch all and find the row matching the document's current level.
             user_level_query = get_user_approval_level()
-            user_level_result = db.execute(
+            user_level_rows = db.execute(
                 user_level_query,
                 {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-            ).fetchone()
+            ).fetchall()
 
-            if not user_level_result:
+            if not user_level_rows:
                 raise HTTPException(
                     status_code=403,
                     detail="User does not have approval permission for this menu and branch."
                 )
 
-            user_data = dict(user_level_result._mapping)
-            user_approval_level = user_data.get("approval_level")
+            # Find the row matching the document's current approval level
+            user_data = None
+            for row in user_level_rows:
+                row_dict = dict(row._mapping)
+                if row_dict.get("approval_level") == current_approval_level:
+                    user_data = row_dict
+                    break
 
-            # 7. Level mismatch check
-            if user_approval_level != current_approval_level:
+            if user_data is None:
+                # User has approval entries but none at the current level
+                user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"User approval level ({user_approval_level}) does not match "
+                        f"User approval level(s) {user_levels} do not match "
                         f"current {doc_name} approval level ({current_approval_level})."
                     )
                 )
+
+            user_approval_level = user_data.get("approval_level")
 
             # 8. Value-based checks (only when document_amount is provided)
             if document_amount is not None:
@@ -312,23 +321,23 @@ def process_rejection(
             if approval_exists:
                 # Hierarchy exists — use level-based check
                 user_level_query = get_user_approval_level()
-                user_level_result = db.execute(
+                user_level_rows = db.execute(
                     user_level_query,
                     {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                ).fetchone()
+                ).fetchall()
 
-                if not user_level_result:
+                if not user_level_rows:
                     raise HTTPException(
                         status_code=403,
                         detail="User does not have approval permission for this menu and branch."
                     )
 
-                user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                if user_approval_level != current_approval_level:
+                user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                if current_approval_level not in user_levels:
                     raise HTTPException(
                         status_code=403,
                         detail=(
-                            f"User approval level ({user_approval_level}) does not match "
+                            f"User approval level(s) {user_levels} do not match "
                             f"current {doc_name} approval level ({current_approval_level})."
                         )
                     )
@@ -435,14 +444,14 @@ def calculate_approval_permissions(
             if approval_exists:
                 # Approval hierarchy exists — check if user has approval level 1
                 user_level_query = get_user_approval_level()
-                user_level_result = db.execute(
+                user_level_rows = db.execute(
                     user_level_query,
                     {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                ).fetchone()
+                ).fetchall()
 
-                if user_level_result:
-                    user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                    if user_approval_level == 1:
+                if user_level_rows:
+                    user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                    if 1 in user_levels:
                         permissions["canApprove"] = True
             else:
                 # No approval hierarchy — check if user has edit access
@@ -471,18 +480,38 @@ def calculate_approval_permissions(
                 # Approval hierarchy exists — check if user's level matches current level
                 if current_approval_level is not None:
                     user_level_query = get_user_approval_level()
-                    user_level_result = db.execute(
+                    user_level_rows = db.execute(
                         user_level_query,
                         {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                    ).fetchone()
+                    ).fetchall()
 
-                    if user_level_result:
-                        user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                        if user_approval_level == current_approval_level:
+                    if user_level_rows:
+                        user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                        level_matches = current_approval_level in user_levels
+                        logger.info(
+                            f"[PermCheck] user_id={user_id} menu_id={menu_id} branch_id={branch_id} "
+                            f"user_levels={user_levels} doc_level={current_approval_level} "
+                            f"match={level_matches}"
+                        )
+                        if level_matches:
                             permissions["canApprove"] = True
                             permissions["canReject"] = True
+                    else:
+                        logger.warning(
+                            f"[PermCheck] No approval_mst entry for user_id={user_id} "
+                            f"menu_id={menu_id} branch_id={branch_id}"
+                        )
+                else:
+                    logger.warning(
+                        f"[PermCheck] current_approval_level is None for status=20, "
+                        f"menu_id={menu_id} branch_id={branch_id}"
+                    )
             else:
                 # No approval hierarchy — check if user has edit access
+                logger.info(
+                    f"[PermCheck] No approval hierarchy for menu_id={menu_id} "
+                    f"branch_id={branch_id}, checking edit access"
+                )
                 has_edit = _user_has_edit_access(user_id, branch_id, menu_id, db)
                 if has_edit:
                     permissions["canApprove"] = True
