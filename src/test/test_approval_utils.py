@@ -257,18 +257,52 @@ class TestProcessApproval:
         assert exc_info.value.status_code == 400
         assert "already approved" in exc_info.value.detail.lower()
 
-    def test_amount_exceeds_limit(self):
-        """Document amount exceeding max_amount_single should get 403."""
+    def test_amount_exceeds_limit_escalates_when_higher_levels_exist(self):
+        """Document amount exceeding max_amount_single should escalate to
+        next level (not block) when higher approval levels exist.
+        """
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=50000.0)
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
 
         _setup_db_execute(db, [
             {'fetchone': doc_row},
             {'fetchone': count_row},
-            {'fetchall': [approval_row]},  # User has level 1 with amount limit
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="PO",
+            document_amount=75000.0,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated, not blocked
+        assert result["new_approval_level"] == 2
+
+    def test_amount_exceeds_limit_blocks_at_final_level(self):
+        """Document amount exceeding max_amount_single at the FINAL level
+        should get 403 (no higher level to escalate to).
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=2)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(approval_level=2, max_amount_single=50000.0)
+        max_level_row = _mock_max_level_row(max_level=2)  # This IS the final level
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
         ])
 
         with pytest.raises(HTTPException) as exc_info:
@@ -290,11 +324,12 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=100000.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
+        # Note: max_level is fetched BEFORE value checks
         _setup_db_execute(db, [
             {'fetchone': doc_row},
             {'fetchone': count_row},
             {'fetchall': [approval_row]},
-            {'fetchone': max_level_row},
+            {'fetchone': max_level_row},  # max level (fetched first)
             {},  # UPDATE
         ])
 
@@ -344,6 +379,7 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=0.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
+        # max_level fetched before value checks
         _setup_db_execute(db, [
             {'fetchone': doc_row},
             {'fetchone': count_row},
@@ -371,6 +407,7 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=None)
         max_level_row = _mock_max_level_row(max_level=1)
 
+        # max_level fetched before value checks
         _setup_db_execute(db, [
             {'fetchone': doc_row},
             {'fetchone': count_row},
@@ -583,6 +620,223 @@ class TestProcessApproval:
         assert exc_info.value.status_code == 403
         db.rollback.assert_called_once()
         db.commit.assert_not_called()
+
+    def test_value_based_final_approval_skips_remaining_levels(self):
+        """Level 1 user with max_amount_single covering the PO amount should
+        get final approval (status 3) even when higher levels exist.
+        This is the core fix for the value-based approval bug.
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        # Level 1 user with max_amount_single = 10000
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Level 2 exists
+
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},  # max level (fetched first)
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # Within 10000 limit
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Should be APPROVED, not 20
+        assert result["new_approval_level"] == 1
+
+    def test_value_based_no_final_when_no_value_limits(self):
+        """When max_amount_single is None/0, value-based final should NOT apply,
+        and normal level escalation should occur.
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(approval_level=1, max_amount_single=None)
+        max_level_row = _mock_max_level_row(max_level=2)
+
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},  # max level (fetched first)
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="PO",
+            document_amount=5000.0,
+        )
+
+        assert result["new_status_id"] == 20  # Should escalate
+        assert result["new_approval_level"] == 2
+
+    def test_daily_limit_exceeded_escalates_when_higher_levels_exist(self):
+        """When daily limit exceeded but higher levels exist, should escalate."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=50000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 45000.0, "month_total": 45000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},  # consumed amounts query
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=8000.0,  # 45000 + 8000 = 53000 > 50000
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated
+        assert result["new_approval_level"] == 2
+
+    def test_daily_limit_exceeded_blocks_at_final_level(self):
+        """When daily limit exceeded at the final level, should get 403."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=50000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=1)  # This IS the final level
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 45000.0, "month_total": 45000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_approval(
+                doc_id=1, user_id=10, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="Purchase Order",
+                document_amount=8000.0,  # 45000 + 8000 = 53000 > 50000
+                get_consumed_amounts_fn=_consumed_fn,
+            )
+        assert exc_info.value.status_code == 403
+        assert "daily" in exc_info.value.detail.lower()
+
+    def test_monthly_limit_exceeded_escalates_when_higher_levels_exist(self):
+        """When monthly limit exceeded but higher levels exist, should escalate."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=50000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 5000.0, "month_total": 48000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # 48000 + 5000 = 53000 > 50000
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated
+        assert result["new_approval_level"] == 2
+
+    def test_value_based_final_with_daily_monthly_within_limits(self):
+        """When all value limits (single, daily, monthly) pass, should approve directly."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=3)  # 3 levels exist
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 20000.0, "month_total": 200000.0}
+
+        # max_level fetched before value/consumed checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},   # max level (fetched first)
+            {'fetchone': consumed_row},    # consumed amounts
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # Within all limits
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Approved directly, skipping levels 2 & 3
+        assert result["new_approval_level"] == 1
 
     def test_multi_level_user_can_approve_at_matching_level(self):
         """User with entries at BOTH level 1 and level 2 should be able to

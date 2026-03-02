@@ -62,25 +62,25 @@ router = APIRouter()
 
 # Mapping: (indent_type, expense_type_name) -> validation logic
 # Logic 1: Max/Min Quantity Validation with Stock Check
-# Logic 2: Open Entry Validation with Financial Year Check
-# Logic 3: No Validation (Capital/Overhaul)
+# Logic 2: FY Check + max qty as forced value (requires min/max)
+# Logic 3: No Validation / Free Entry
 VALIDATION_LOGIC_MAP = {
     # Regular indent
     ("Regular", "General"): 1,
     ("Regular", "Maintenance"): 1,
     ("Regular", "Production"): 1,
     ("Regular", "Overhaul"): 1,
-    ("Regular", "Capital"): 3,
-    # Open indent
-    ("Open", "General"): 2,
-    ("Open", "Maintenance"): 2,
-    ("Open", "Production"): 2,
+    ("Regular", "Capital"): 2,
+    # Open indent — free entry, no validation
+    ("Open", "General"): 3,
+    ("Open", "Maintenance"): 3,
+    ("Open", "Production"): 3,
     # BOM indent
     ("BOM", "General"): 1,
     ("BOM", "Maintenance"): 1,
     ("BOM", "Production"): 1,
-    ("BOM", "Capital"): 3,
-    ("BOM", "Overhaul"): 3,
+    ("BOM", "Capital"): 2,
+    ("BOM", "Overhaul"): 2,
 }
 
 
@@ -370,7 +370,7 @@ async def validate_item_for_indent(
             if maxqty is None and minqty is None:
                 result["has_minmax"] = False
                 result["errors"].append(
-                    "No max/min quantity defined for this item. Cannot create open indent."
+                    "No max/min quantity defined for this item. Cannot create indent with forced quantity."
                 )
             else:
                 result["has_minmax"] = True
