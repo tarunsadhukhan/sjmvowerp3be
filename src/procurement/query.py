@@ -42,6 +42,33 @@ where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;""
     query = text(sql)
     return query
 
+def get_last_purchase_rates_by_item_group():
+    sql = """
+    SELECT ranked.item_id, ranked.last_purchase_rate,
+           ranked.last_purchase_date, ranked.last_supplier_name
+    FROM (
+        SELECT ppd.item_id,
+               ppd.rate AS last_purchase_rate,
+               pp.po_date AS last_purchase_date,
+               pm.supp_name AS last_supplier_name,
+               ROW_NUMBER() OVER (
+                   PARTITION BY ppd.item_id
+                   ORDER BY pp.po_date DESC, pp.po_id DESC
+               ) AS rn
+        FROM proc_po_dtl ppd
+        JOIN proc_po pp ON pp.po_id = ppd.po_id
+        JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+        LEFT JOIN party_mst pm ON pm.party_id = pp.supplier_id
+        JOIN item_mst im ON im.item_id = ppd.item_id
+        WHERE im.item_grp_id = :item_group_id
+          AND pp.status_id = 3
+          AND ppd.active = 1
+          AND bm.co_id = :co_id
+    ) ranked
+    WHERE ranked.rn = 1
+    """
+    return text(sql)
+
 def get_item_make_by_group_id(item_group_id: int):
     sql = f"""select im.item_make_id, im.item_make_name 
     from item_make im 
@@ -1004,7 +1031,8 @@ def get_po_by_id_query():
             WHEN pp.status_id = 20 THEN pp.approval_level 
             ELSE NULL 
         END AS approval_level,
-        pp.expense_type_id
+        pp.expense_type_id,
+        pp.po_type
     FROM proc_po AS pp
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -1196,6 +1224,24 @@ def get_po_dtl_query():
         pod.indent_dtl_id
     FROM proc_po_dtl AS pod
     WHERE pod.po_id = :po_id;"""
+    return text(sql)
+
+
+def get_po_consumed_amounts():
+    """Get total PO amounts approved by a user for the current day and month.
+    Used for daily/monthly value-based approval limit enforcement.
+    """
+    sql = """SELECT
+        COALESCE(SUM(CASE
+            WHEN DATE(pp.updated_date_time) = CURDATE()
+            THEN pp.total_amount ELSE 0 END), 0) as day_total,
+        COALESCE(SUM(CASE
+            WHEN YEAR(pp.updated_date_time) = YEAR(CURDATE())
+            AND MONTH(pp.updated_date_time) = MONTH(CURDATE())
+            THEN pp.total_amount ELSE 0 END), 0) as month_total
+    FROM proc_po pp
+    WHERE pp.updated_by = :user_id
+        AND pp.status_id = 3;"""
     return text(sql)
 
 
