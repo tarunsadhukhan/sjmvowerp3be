@@ -21,6 +21,7 @@ from src.procurement.query import (
 	get_indent_by_id_query,
 	get_indent_detail_by_id_query,
 	update_proc_indent,
+	update_proc_indent_detail,
 	delete_proc_indent_detail,
 	get_approval_flow_by_menu_branch,
 	update_indent_status,
@@ -252,14 +253,13 @@ async def validate_item_for_indent(
         minqty = vdata.get("minqty")
         maxqty = vdata.get("maxqty")
         min_order_qty = vdata.get("min_order_qty")
-        # PO outstanding for validation (excludes Open + Capital/Maintenance POs)
-        po_to_validate = float(vdata.get("po_outstanding_to_validate") or 0)
         # Pre-computed validation limits from the view (sentinel: -2=open outstanding, -1=no minmax, >=0=limit)
         view_max_indent = float(vdata.get("max_indent_qty", -1))
         view_min_indent = float(vdata.get("min_indent_qty", -1))
 
-        # When editing an existing indent, exclude its own outstanding from the totals
-        # to prevent the self-referencing validation error.
+        # When editing an existing indent, the view's max_indent_qty already
+        # includes this indent's own outstanding in the deduction. We need to
+        # add it back so the user can keep/adjust their current qty.
         self_outstanding = 0.0
         if indent_id:
             self_row = db.execute(
@@ -270,15 +270,9 @@ async def validate_item_for_indent(
                 self_outstanding = float(dict(self_row._mapping).get("indent_outstanding") or 0)
             outstanding -= self_outstanding
             regular_bom_outstanding_val -= self_outstanding
-            # Recalculate max_indent_qty with adjusted outstanding
+            # Add self-outstanding back to the view's pre-computed max
             if view_max_indent >= 0 and self_outstanding > 0:
-                maxqty_f = float(maxqty) if maxqty is not None else 0
-                moq = float(min_order_qty) if min_order_qty is not None else 0
-                available = maxqty_f - branch_stock - outstanding - po_to_validate
-                if moq > 0:
-                    view_max_indent = math.ceil(max(available, 0) / moq) * moq
-                else:
-                    view_max_indent = max(available, 0)
+                view_max_indent += self_outstanding
 
         result["branch_stock"] = branch_stock
         result["outstanding_indent_qty"] = outstanding
@@ -1263,6 +1257,12 @@ async def update_indent(
 			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
 			item_make_id = to_int(item.get("item_make"), f"items[{idx}].item_make")
 			department_id = to_int(item.get("department"), f"items[{idx}].department")
+			# indent_dtl_id may be a client-generated UUID for new lines — treat as None
+			raw_dtl_id = item.get("indent_dtl_id")
+			try:
+				indent_dtl_id = int(raw_dtl_id) if raw_dtl_id else None
+			except (TypeError, ValueError):
+				indent_dtl_id = None
 
 			remarks_raw = item.get("remarks")
 			remarks = str(remarks_raw).strip() if remarks_raw else None
@@ -1271,6 +1271,7 @@ async def update_indent(
 
 			normalized_items.append(
 				{
+					"indent_dtl_id": indent_dtl_id,
 					"item_id": item_id,
 					"qty": qty,
 					"uom_id": uom_id,
@@ -1309,7 +1310,7 @@ async def update_indent(
 						max_allowed = float(vd.get("max_indent_qty", -1))
 						outstanding_qty = float(vd.get("outstanding_indent_qty") or 0)
 
-						# Exclude the current indent's own outstanding so editing
+						# Add back the current indent's own outstanding so editing
 						# doesn't fail against its own previously-saved quantity.
 						self_row = db.execute(
 							get_indent_item_outstanding(),
@@ -1317,14 +1318,8 @@ async def update_indent(
 						).fetchone()
 						self_out = float(dict(self_row._mapping).get("indent_outstanding") or 0) if self_row else 0.0
 						if self_out > 0 and max_allowed >= 0:
-							maxqty_f = float(vd.get("maxqty") or 0)
-							stock = float(vd.get("branch_stock") or 0)
-							po_out = float(vd.get("po_outstanding_to_validate") or 0)
-							adj_outstanding = outstanding_qty - self_out
-							available = maxqty_f - stock - adj_outstanding - po_out
-							moq = float(vd.get("min_order_qty") or 0)
-							max_allowed = math.ceil(max(available, 0) / moq) * moq if moq > 0 else max(available, 0)
-							outstanding_qty = adj_outstanding
+							max_allowed += self_out
+							outstanding_qty -= self_out
 
 						if max_allowed >= 0 and ni["qty"] > max_allowed:
 							raise HTTPException(
@@ -1399,36 +1394,68 @@ async def update_indent(
 
 		db.execute(update_header_query, header_params)
 
-		# Soft delete existing detail rows
-		delete_detail_query = delete_proc_indent_detail()
-		db.execute(
-			delete_detail_query,
-			{
-				"indent_id": indent_id,
-				"updated_by": updated_by,
-				"updated_date_time": updated_at,
-			},
-		)
+		# ── Update detail rows in place ──────────────────────────────────
+		# Existing rows are updated (preserving indent_dtl_id for PO traceability
+		# and view consistency). New rows are inserted. Removed rows are soft-deleted.
 
-		# Insert new detail rows
-		detail_query = insert_proc_indent_detail()
+		# Get current active detail IDs for this indent
+		existing_dtl_rows = db.execute(
+			text("SELECT indent_dtl_id FROM proc_indent_dtl WHERE indent_id = :indent_id AND active = 1"),
+			{"indent_id": indent_id},
+		).fetchall()
+		existing_dtl_ids = {row[0] for row in existing_dtl_rows}
+
+		incoming_dtl_ids = set()
 		for detail in normalized_items:
-			db.execute(
-				detail_query,
-				{
-					"indent_id": indent_id,
-					"required_by_days": None,
-					"active": 1,
-					"item_id": detail["item_id"],
-					"qty": detail["qty"],
-					"uom_id": detail["uom_id"],
-					"remarks": detail["remarks"],
-					"updated_by": updated_by,
-					"updated_date_time": updated_at,
-					"item_make_id": detail["item_make_id"],
-					"dept_id": detail["dept_id"],
-				},
-			)
+			dtl_id = detail.get("indent_dtl_id")
+			if dtl_id and dtl_id in existing_dtl_ids:
+				# Update existing row in place
+				incoming_dtl_ids.add(dtl_id)
+				db.execute(
+					update_proc_indent_detail(),
+					{
+						"indent_dtl_id": dtl_id,
+						"indent_id": indent_id,
+						"item_id": detail["item_id"],
+						"qty": detail["qty"],
+						"uom_id": detail["uom_id"],
+						"item_make_id": detail["item_make_id"],
+						"dept_id": detail["dept_id"],
+						"remarks": detail["remarks"],
+						"updated_by": updated_by,
+						"updated_date_time": updated_at,
+					},
+				)
+			else:
+				# New row — insert
+				db.execute(
+					insert_proc_indent_detail(),
+					{
+						"indent_id": indent_id,
+						"required_by_days": None,
+						"active": 1,
+						"item_id": detail["item_id"],
+						"qty": detail["qty"],
+						"uom_id": detail["uom_id"],
+						"remarks": detail["remarks"],
+						"updated_by": updated_by,
+						"updated_date_time": updated_at,
+						"item_make_id": detail["item_make_id"],
+						"dept_id": detail["dept_id"],
+					},
+				)
+
+		# Soft-delete rows that were removed by the user
+		removed_dtl_ids = existing_dtl_ids - incoming_dtl_ids
+		if removed_dtl_ids:
+			for dtl_id in removed_dtl_ids:
+				db.execute(
+					text(
+						"UPDATE proc_indent_dtl SET active = 0, updated_by = :updated_by, "
+						"updated_date_time = :updated_date_time WHERE indent_dtl_id = :dtl_id"
+					),
+					{"dtl_id": dtl_id, "updated_by": updated_by, "updated_date_time": updated_at},
+				)
 
 		db.commit()
 		return {
