@@ -1066,10 +1066,12 @@ async def create_po(
 			gst_amounts = None
 			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
 			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
-				# Get tax percentage from additional_charges_mst or use default
-				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
-				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
-				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
+				# Use frontend-sent tax_pct if provided, fallback to master default_value
+				tax_pct = to_float(addl.get("tax_pct"), f"additional_charges[{idx}].tax_pct")
+				if tax_pct <= 0:
+					addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
+					addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
+					tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
 					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]
@@ -1343,6 +1345,7 @@ async def get_po_by_id(
 			"branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
 			"supplier": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
 			"supplierBranch": str(header.get("supplier_branch_id", "")) if header.get("supplier_branch_id") else "",
+			"supplierState": header.get("supplier_state_name") if header.get("supplier_state_name") else None,
 			"billingAddress": str(header.get("billing_branch_id", "")) if header.get("billing_branch_id") else "",
 			"billingState": header.get("billing_state_name") if header.get("billing_state_name") else None,
 			"shippingAddress": str(header.get("shipping_branch_id", "")) if header.get("shipping_branch_id") else "",
@@ -1638,9 +1641,12 @@ async def update_po(
 			gst_amounts = None
 			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
 			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
-				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
-				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
-				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
+				# Use frontend-sent tax_pct if provided, fallback to master default_value
+				tax_pct = to_float(addl.get("tax_pct"), f"additional_charges[{idx}].tax_pct")
+				if tax_pct <= 0:
+					addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
+					addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
+					tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
 					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]

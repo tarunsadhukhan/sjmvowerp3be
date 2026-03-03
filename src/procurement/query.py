@@ -1038,6 +1038,8 @@ def get_po_by_id_query():
         pm.supp_name AS supplier_name,
         pp.supplier_branch_id,
         pbm.address AS supplier_branch_address,
+        pbm.state_id AS supplier_state_id,
+        sm_supplier.state AS supplier_state_name,
         pp.billing_branch_id,
         bm_billing.branch_name AS billing_branch_name,
         bm_billing.state_id AS billing_state_id,
@@ -1075,6 +1077,7 @@ def get_po_by_id_query():
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = pp.supplier_id
     LEFT JOIN party_branch_mst AS pbm ON pbm.party_mst_branch_id = pp.supplier_branch_id
+    LEFT JOIN state_mst AS sm_supplier ON sm_supplier.state_id = pbm.state_id
     LEFT JOIN branch_mst AS bm_billing ON bm_billing.branch_id = pp.billing_branch_id
     LEFT JOIN state_mst AS sm_billing ON sm_billing.state_id = bm_billing.state_id
     LEFT JOIN branch_mst AS bm_shipping ON bm_shipping.branch_id = pp.shipping_branch_id
