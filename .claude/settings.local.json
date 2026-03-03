@@ -63,7 +63,9 @@
       "Bash(pytest src/test/ -k \"test_po\" -v)",
       "Bash(PYTHONPATH=. pytest src/test/ -k \"test_po\" -v)",
       "Read(//c/Users/silve/.dbclient/storage/1764904564439@@3.7.255.145@3306@dev3/**)",
-      "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/inward/createInward/hooks/useInwardLineItems.ts\")"
+      "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/inward/createInward/hooks/useInwardLineItems.ts\")",
+      "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/sr/createSR/components/SRLineItemsTable.tsx\")",
+      "Bash(xxd)"
     ]
   }
 }
