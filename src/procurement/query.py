@@ -834,6 +834,26 @@ def insert_proc_po_dtl():
     return text(sql)
 
 
+def update_proc_po_dtl():
+    """Update a single PO detail row in-place (preserving po_dtl_id)."""
+    sql = """UPDATE proc_po_dtl SET
+        item_id = :item_id,
+        hsn_code = :hsn_code,
+        item_make_id = :item_make_id,
+        qty = :qty,
+        rate = :rate,
+        uom_id = :uom_id,
+        remarks = :remarks,
+        discount_mode = :discount_mode,
+        discount_value = :discount_value,
+        discount_amount = :discount_amount,
+        indent_dtl_id = :indent_dtl_id,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE po_dtl_id = :po_dtl_id AND po_id = :po_id;"""
+    return text(sql)
+
+
 def insert_proc_po_additional():
     """Insert PO additional charges."""
     sql = """INSERT INTO proc_po_additional (
@@ -981,6 +1001,21 @@ def delete_po_gst():
     WHERE po_dtl_id IN (
         SELECT po_dtl_id FROM proc_po_dtl WHERE po_id = :po_id
     ) OR po_additional_id IN (
+        SELECT po_additional_id FROM proc_po_additional WHERE po_id = :po_id
+    );"""
+    return text(sql)
+
+
+def delete_po_gst_by_dtl_id():
+    """Delete GST records for a specific PO detail line."""
+    sql = """DELETE FROM po_gst WHERE po_dtl_id = :po_dtl_id;"""
+    return text(sql)
+
+
+def delete_po_gst_for_additional_charges():
+    """Delete GST records linked to additional charges for a given PO."""
+    sql = """DELETE FROM po_gst
+    WHERE po_additional_id IN (
         SELECT po_additional_id FROM proc_po_additional WHERE po_id = :po_id
     );"""
     return text(sql)
@@ -2905,6 +2940,24 @@ def check_open_po_for_item_v2():
     return text(sql)
 
 
+def check_open_po_for_item_v2_exclude():
+    """
+    V2: Check if any active PO (other than the one being edited) with
+    outstanding qty exists for item + branch.
+    Returns po_id, po_no of first match.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.bal_po_qty > 0
+      AND v.po_id     != :exclude_po_id
+    LIMIT 1;
+    """
+    return text(sql)
+
+
 def get_po_fy_check_v2():
     """
     V2: Check if an Open PO exists for item + branch within the
@@ -2921,6 +2974,43 @@ def get_po_fy_check_v2():
       AND v.po_date   >= :fy_start
       AND v.po_date   <= :fy_end
     LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_po_fy_check_v2_exclude():
+    """
+    V2: Check if an Open PO (other than the one being edited) exists
+    for item + branch within the current FY.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.po_type    = 'Open'
+      AND v.bal_po_qty > 0
+      AND v.po_date   >= :fy_start
+      AND v.po_date   <= :fy_end
+      AND v.po_id     != :exclude_po_id
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_current_po_item_outstanding():
+    """
+    Get the current PO's outstanding qty for a specific item at a branch,
+    from vw_proc_po_outstanding_new.
+    Used during edit to subtract the current PO's qty from view aggregates,
+    preventing double-counting in validation.
+    """
+    sql = """
+    SELECT COALESCE(SUM(v.bal_po_qty), 0) AS current_po_outstanding
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.po_id     = :po_id
+      AND v.item_id   = :item_id
+      AND v.branch_id = :branch_id;
     """
     return text(sql)
 
