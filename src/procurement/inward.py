@@ -539,18 +539,20 @@ async def get_inward_by_id(
                     po_no_formatted = str(raw_po_no) if raw_po_no else ""
 
             line = {
+                "inward_dtl_id": str(detail.get("inward_dtl_id", "")) if detail.get("inward_dtl_id") else "",
                 "id": str(detail.get("inward_dtl_id", "")) if detail.get("inward_dtl_id") else "",
-                "poDtlId": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else None,
-                "poNo": po_no_formatted,
-                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
-                "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
-                "itemCode": detail.get("item_code") if detail.get("item_code") else None,
-                "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
+                "po_dtl_id": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else None,
+                "po_no": po_no_formatted,
+                "item_grp_id": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
+                "item_id": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+                "item_code": detail.get("item_code") if detail.get("item_code") else None,
+                "item_make_id": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
                 "rate": float(detail.get("rate", 0)) if detail.get("rate") is not None else 0,
-                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+                "uom_id": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
                 "amount": float(detail.get("amount", 0)) if detail.get("amount") is not None else 0,
                 "remarks": detail.get("remarks") if detail.get("remarks") else None,
+                "hsn_code": detail.get("hsn_code") if detail.get("hsn_code") else None,
             }
             response["lines"].append(line)
 
@@ -873,6 +875,17 @@ async def update_inward(
         inward_id = body.get("id")
         if not inward_id:
             raise HTTPException(status_code=400, detail="Inward ID is required")
+
+        # Guard: prevent updates after material inspection is completed
+        inspection_row = db.execute(
+            text("SELECT inspection_check FROM proc_inward WHERE inward_id = :inward_id"),
+            {"inward_id": int(inward_id)},
+        ).fetchone()
+        if inspection_row and inspection_row[0]:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot modify inward after material inspection is completed",
+            )
 
         updated_by = token_data.get("user_id") if token_data else None
         updated_at = datetime.now()
