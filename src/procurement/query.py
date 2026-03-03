@@ -35,7 +35,7 @@ where igm.co_id = :co_id;"""
 
 def get_item_by_group_id_purchaseable(item_group_id: int):
     sql = f"""Select im.item_id,
-im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage
+im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage, im.hsn_code
 from item_mst im
 left join uom_mst um on um.uom_id= im.uom_id
 where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;"""
@@ -399,6 +399,7 @@ def get_inward_detail_by_id_query():
         ig.item_grp_name,
         pid.item_make_id,
         imk.item_make_name,
+        pid.hsn_code,
         pid.inward_qty AS quantity,
         pid.uom_id,
         um.uom_name,
@@ -1365,6 +1366,7 @@ def get_po_line_items_for_inward_query():
         um.uom_name,
         pod.rate,
         pod.remarks,
+        pod.hsn_code,
         im.tax_percentage,
         COALESCE(recv.received_qty, 0) AS received_qty,
         (pod.qty - COALESCE(recv.received_qty, 0)) AS pending_qty,
@@ -1459,6 +1461,7 @@ def insert_proc_inward_dtl():
     po_dtl_id,
     item_id,
     item_make_id,
+    hsn_code,
     description,
     remarks,
     challan_qty,
@@ -1476,6 +1479,7 @@ def insert_proc_inward_dtl():
     :po_dtl_id,
     :item_id,
     :item_make_id,
+    :hsn_code,
     :description,
     :remarks,
     :challan_qty,
@@ -1521,6 +1525,7 @@ def update_proc_inward_dtl():
     """Update an existing proc_inward_dtl line item record."""
     sql = """UPDATE proc_inward_dtl SET
     item_id = :item_id,
+    hsn_code = :hsn_code,
     remarks = :remarks,
     inward_qty = :inward_qty,
     uom_id = :uom_id,
@@ -1885,6 +1890,7 @@ def get_inward_dtl_for_sr_query():
         um.uom_name,
         pid.approved_qty,
         pid.rejected_qty,
+        pid.hsn_code,
         pid.rate,
         pid.accepted_rate,
         pid.amount,
@@ -1923,6 +1929,7 @@ def update_inward_dtl_sr():
         discount_mode = :discount_mode,
         discount_value = :discount_value,
         discount_amount = :discount_amount,
+        hsn_code = :hsn_code,
         warehouse_id = :warehouse_id,
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
@@ -2385,6 +2392,7 @@ def get_bill_pass_sr_lines_query():
     SELECT
         pid.inward_dtl_id,
         pid.item_id,
+        pid.hsn_code,
         im.item_name,
         im.item_code,
         igm.item_grp_name,

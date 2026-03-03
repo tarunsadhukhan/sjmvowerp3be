@@ -712,6 +712,10 @@ async def create_inward(
             if item_remarks:
                 item_remarks = str(item_remarks).strip()[:255]
 
+            hsn_code = item.get("hsn_code")
+            if hsn_code:
+                hsn_code = str(hsn_code).strip()[:50]
+
             amount = qty * rate
             total_amount += amount
 
@@ -723,6 +727,7 @@ async def create_inward(
                 "uom_id": uom_id,
                 "item_make_id": item_make_id,
                 "warehouse_id": warehouse_id,
+                "hsn_code": hsn_code,
                 "remarks": item_remarks,
                 "amount": amount,
             })
@@ -816,6 +821,7 @@ async def create_inward(
                     "po_dtl_id": detail["po_dtl_id"],
                     "item_id": detail["item_id"],
                     "item_make_id": detail["item_make_id"],
+                    "hsn_code": detail.get("hsn_code"),
                     "description": None,
                     "remarks": detail["remarks"],
                     "challan_qty": detail["qty"],
@@ -965,6 +971,9 @@ async def update_inward(
             inward_qty = item.get("quantity")
             uom_id = item.get("uom")
             remarks = item.get("remarks")
+            hsn_code = item.get("hsn_code")
+            if hsn_code:
+                hsn_code = str(hsn_code).strip()[:50]
             po_dtl_id = item.get("po_dtl_id")
 
             # Get existing inward_dtl_id from po_dtl_id
@@ -982,6 +991,7 @@ async def update_inward(
                     {
                         "inward_dtl_id": inward_dtl_id,
                         "item_id": int(item_id) if item_id else None,
+                        "hsn_code": hsn_code,
                         "remarks": remarks,
                         "inward_qty": float(inward_qty) if inward_qty else 0,
                         "uom_id": int(uom_id) if uom_id else None,

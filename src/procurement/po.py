@@ -997,6 +997,11 @@ async def create_po(
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
 
+			# Allow frontend to override hsn_code
+			frontend_hsn = item.get("hsn_code")
+			if frontend_hsn is not None and str(frontend_hsn).strip():
+				hsn_code = str(frontend_hsn).strip()
+
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
 			discount_value = to_float(item.get("discount_value"), f"items[{idx}].discount_value")
@@ -1379,6 +1384,7 @@ async def get_po_by_id(
 				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
 				"item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
 				"itemCode": detail.get("item_code") if detail.get("item_code") else "",
+				"hsnCode": detail.get("hsn_code") if detail.get("hsn_code") else "",
 				"itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
 				"quantity": float(detail.get("qty", 0)) if detail.get("qty") is not None else 0,
 				"rate": float(detail.get("rate", 0)) if detail.get("rate") is not None else 0,
@@ -1561,6 +1567,11 @@ async def update_po(
 			if item_result:
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
+
+			# Allow frontend to override hsn_code
+			frontend_hsn = item.get("hsn_code")
+			if frontend_hsn is not None and str(frontend_hsn).strip():
+				hsn_code = str(frontend_hsn).strip()
 
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
