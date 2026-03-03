@@ -702,7 +702,7 @@ def get_indent_line_items_for_po(indent_id: int):
         igm.item_grp_code,
         igm.item_grp_name,
         pid.qty,
-        COALESCE(oi.Bal_ind_qty, 0) AS outstanding_qty,
+        COALESCE(oi.bal_ind_qty, 0) AS outstanding_qty,
         pid.uom_id,
         um.uom_name,
         pid.item_make_id,
@@ -711,7 +711,7 @@ def get_indent_line_items_for_po(indent_id: int):
         dm.dept_desc AS dept_name,
         im.tax_percentage,
         pid.remarks,
-        oi.min_order_qty
+        ibv.min_po_qty AS min_order_qty
     FROM proc_indent_dtl AS pid
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
@@ -719,7 +719,8 @@ def get_indent_line_items_for_po(indent_id: int):
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
-    LEFT JOIN vw_proc_indent_outstanding oi ON oi.indent_dtl_id = pid.indent_dtl_id
+    LEFT JOIN vw_proc_indent_outstanding_new oi ON oi.indent_dtl_id = pid.indent_dtl_id
+    LEFT JOIN vw_item_balance_qty_by_branch_new ibv ON ibv.item_id = pid.item_id AND ibv.branch_id = pi.branch_id
     WHERE pid.indent_id = :indent_id
         AND pid.active = 1
     ORDER BY pid.indent_dtl_id;"""
