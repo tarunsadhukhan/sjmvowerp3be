@@ -63,6 +63,7 @@ class SRLineItemUpdate(BaseModel):
     discount_value: Optional[float] = None
     discount_amount: Optional[float] = None
     warehouse_id: Optional[int] = None
+    hsn_code: Optional[str] = None
     # GST fields
     tax_percentage: Optional[float] = None
     igst_amount: Optional[float] = None
@@ -433,6 +434,7 @@ async def save_sr(
                 "discount_mode": line.discount_mode,
                 "discount_value": line.discount_value,
                 "discount_amount": line.discount_amount,
+                "hsn_code": line.hsn_code,
                 "warehouse_id": line.warehouse_id,
                 "updated_by": user_id,
                 "updated_date_time": now,
