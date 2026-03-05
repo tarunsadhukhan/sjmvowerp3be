@@ -625,7 +625,17 @@ async def create_sales_invoice(
         # Jute-specific: extract fields and adjust invoice_amount for claim deduction
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
         jute_data = payload.get("jute") or {}
-        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
+
+        # Compute claim_amount as sum of line item claim_amount_dtl values
+        claim_amount_from_lines = sum(
+            to_float((item.get("jute_dtl") or {}).get("claim_amount_dtl"), "claim_amount_dtl") or 0
+            for item in normalized_items
+            if item.get("jute_dtl")
+        )
+        if claim_amount_from_lines:
+            claim_amount = round(claim_amount_from_lines, 2)
+        else:
+            claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
 
         # For jute invoices, invoice_amount = gross_amount - claim_amount
         effective_amount = gross_amount or 0
@@ -796,7 +806,17 @@ async def update_sales_invoice_endpoint(
         # Jute-specific: extract fields and adjust invoice_amount for claim deduction
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
         jute_data = payload.get("jute") or {}
-        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
+
+        # Compute claim_amount as sum of line item claim_amount_dtl values
+        claim_amount_from_lines = sum(
+            to_float((item.get("jute_dtl") or {}).get("claim_amount_dtl"), "claim_amount_dtl") or 0
+            for item in normalized_items
+            if item.get("jute_dtl")
+        )
+        if claim_amount_from_lines:
+            claim_amount = round(claim_amount_from_lines, 2)
+        else:
+            claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
 
         # For jute invoices, invoice_amount = gross_amount - claim_amount
         effective_amount = gross_amount or 0

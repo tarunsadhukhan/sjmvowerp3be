@@ -189,7 +189,7 @@ class SalesInvoiceJute(Base):
     )
     mr_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     mr_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    claim_amount: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    claim_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2), nullable=True)
     other_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     unit_conversion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     claim_description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
