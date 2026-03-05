@@ -610,8 +610,9 @@ async def get_indent_table(
 	limit: int = 10,
 	search: str | None = None,
 	co_id: int | None = None,
+	branch_id: int | None = None,
 ):
-	"""Return paginated procurement indent list."""
+	"""Return paginated procurement indent list filtered by branch_id if provided."""
 
 	try:
 		page = max(page, 1)
@@ -623,6 +624,7 @@ async def get_indent_table(
 
 		params = {
 			"co_id": co_id,
+			"branch_id": branch_id,
 			"search_like": search_like,
 			"limit": limit,
 			"offset": offset,
@@ -669,7 +671,7 @@ async def get_indent_table(
 			)
 
 		count_query = get_indent_table_count_query()
-		count_params = {"co_id": co_id, "search_like": search_like}
+		count_params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}
 		count_result = db.execute(count_query, count_params).scalar()
 		total = int(count_result) if count_result is not None else 0
 

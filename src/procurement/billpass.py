@@ -39,6 +39,7 @@ router = APIRouter()
 
 class BillPassUpdate(BaseModel):
     """Request body for updating bill pass fields."""
+    invoice_no: Optional[str] = None
     invoice_date: Optional[str] = None  # YYYY-MM-DD
     invoice_amount: Optional[float] = None
     invoice_recvd_date: Optional[str] = None  # YYYY-MM-DD
@@ -343,6 +344,7 @@ async def get_bill_pass_by_id(
             "inward_date": format_date_iso(inward_date_obj),
             "supplier_id": mapped.get("supplier_id"),
             "supplier_name": mapped.get("supplier_name") or "",
+            "invoice_no": mapped.get("invoice_no") or "",
             "invoice_date": format_date_iso(mapped.get("invoice_date")),
             "invoice_amount": safe_float(mapped.get("invoice_amount")),
             "invoice_recvd_date": format_date_iso(mapped.get("invoice_recvd_date")),
@@ -435,6 +437,7 @@ async def update_bill_pass(
         # Build update params
         params = {
             "inward_id": inward_id,
+            "invoice_no": body.invoice_no,
             "invoice_date": parse_date(body.invoice_date),
             "invoice_amount": round(body.invoice_amount, 2) if body.invoice_amount is not None else None,
             "invoice_recvd_date": parse_date(body.invoice_recvd_date),
