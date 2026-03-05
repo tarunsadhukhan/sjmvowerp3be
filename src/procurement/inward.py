@@ -506,7 +506,7 @@ async def get_inward_by_id(
             "supplierId": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
             "challanNo": header.get("challan_no") if header.get("challan_no") else None,
             "challanDate": challan_date_str,
-            "invoiceNo": None,  # No invoice_no column in current schema
+            "invoiceNo": header.get("invoice_no") if header.get("invoice_no") else None,
             "invoiceDate": invoice_date_str,
             "invoiceRecvdDate": format_date_field(header.get("invoice_recvd_date")),
             "vehicleNo": header.get("vehicle_number") if header.get("vehicle_number") else None,
@@ -778,6 +778,7 @@ async def create_inward(
             "updated_by": updated_by,
             "challan_no": challan_no,
             "challan_date": challan_date,
+            "invoice_no": invoice_no,
             "invoice_amount": None,
             "invoice_date": invoice_date,
             "invoice_recvd_date": invoice_recvd_date,
@@ -899,6 +900,7 @@ async def update_inward(
         driver_contact_no = body.get("driver_contact_no")
         challan_no = body.get("challan_no")
         challan_date = body.get("challan_date")
+        invoice_no = body.get("invoice_no")
         invoice_date = body.get("invoice_date")
         invoice_recvd_date = body.get("invoice_recvd_date")
         consignment_no = body.get("consignment_no")
@@ -963,6 +965,7 @@ async def update_inward(
             "receipts_remarks": receipts_remarks,
             "challan_no": challan_no,
             "challan_date": challan_date_obj,
+            "invoice_no": invoice_no,
             "invoice_date": invoice_date_obj,
             "invoice_recvd_date": invoice_recvd_date_obj,
             "consignment_no": consignment_no,

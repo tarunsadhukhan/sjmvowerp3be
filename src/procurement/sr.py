@@ -361,6 +361,7 @@ async def get_sr_by_inward_id(
                 "invoice_date": format_date(header.get("invoice_date")),
                 "invoice_amount": header.get("invoice_amount"),
                 "invoice_recvd_date": format_date(header.get("invoice_recvd_date")),
+                "invoice_no": header.get("invoice_no") or "",
                 "challan_no": header.get("challan_no") or "",
                 "challan_date": format_date(header.get("challan_date")),
                 "vehicle_number": header.get("vehicle_number") or "",

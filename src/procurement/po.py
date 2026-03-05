@@ -1380,9 +1380,21 @@ async def get_po_by_id(
 		# Map line items
 		for detail in details:
 			gst = gst_by_dtl_id.get(detail.get("po_dtl_id"))
+			
+			# Extract indent_dtl_id for balance calculation
+			indent_dtl_id_val = detail.get("indent_dtl_id")
+			if indent_dtl_id_val:
+				try:
+					indent_dtl_id_int = int(indent_dtl_id_val)
+				except (TypeError, ValueError):
+					indent_dtl_id_int = None
+			else:
+				indent_dtl_id_int = None
+			
 			line = {
 				"id": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else "",
 				"indentNo": detail.get("indent_no") if detail.get("indent_no") else None,
+				"indentDtlId": str(indent_dtl_id_val) if indent_dtl_id_val else None,
 				"department": str(detail.get("dept_id", "")) if detail.get("dept_id") else None,
 				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
 				"item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
@@ -1399,6 +1411,57 @@ async def get_po_by_id(
 				"remarks": detail.get("remarks") if detail.get("remarks") else None,
 				"taxPercentage": None,  # Will be calculated from GST if available
 			}
+			
+			# Fetch available indent balance if indent_dtl_id exists
+			if indent_dtl_id_int:
+				try:
+					# Try to fetch from vw_proc_indent_outstanding_new first
+					indent_balance_query = text("""
+						SELECT indent_bal_qty FROM vw_proc_indent_outstanding_new 
+						WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_balance_result = db.execute(
+						indent_balance_query, 
+						{"indent_dtl_id": indent_dtl_id_int}
+					).fetchone()
+					
+					# If view doesn't exist or no result, calculate manually
+					if not indent_balance_result:
+						# Get total indent qty from proc_indent_dtl
+						indent_dtl_query = text("""
+							SELECT qty FROM proc_indent_dtl 
+							WHERE indent_dtl_id = :indent_dtl_id
+						""")
+						indent_dtl_result = db.execute(
+							indent_dtl_query,
+							{"indent_dtl_id": indent_dtl_id_int}
+						).fetchone()
+						
+						if indent_dtl_result:
+							indent_total_qty = float(indent_dtl_result[0]) if indent_dtl_result[0] is not None else 0
+							
+							# Get sum of all PO quantities for this indent (excluding soft-deleted)
+							po_qty_query = text("""
+								SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+								WHERE ppd.indent_dtl_id = :indent_dtl_id 
+									AND ppd.active = 1
+							""")
+							po_result = db.execute(
+								po_qty_query,
+								{"indent_dtl_id": indent_dtl_id_int}
+							).fetchone()
+							po_qty = float(po_result[0]) if po_result else 0
+							
+							# indent_bal_qty = total_indent_qty - po_qty
+							indent_bal_qty = indent_total_qty - po_qty
+							line["availableIndentQty"] = indent_bal_qty
+					else:
+						line["availableIndentQty"] = float(indent_balance_result[0]) if indent_balance_result[0] is not None else 0
+						
+				except Exception as e:
+					# Log for debugging
+					logger.exception(f"Error fetching indent balance for indent_dtl_id {indent_dtl_id_int}: {e}")
+			
 			if gst:
 				line["taxPercentage"] = float(gst.get("tax_pct", 0)) if gst.get("tax_pct") else None
 				line["igst"] = float(gst.get("i_tax_amount", 0)) if gst.get("i_tax_amount") else 0
@@ -1710,12 +1773,14 @@ async def update_po(
 		# traceability). New rows are inserted. Removed rows are soft-deleted.
 		# Triggers handle audit logging for updates and deletions.
 
-		# Get current active detail IDs for this PO
+		# Get current active detail rows for this PO (including all fields)
 		existing_dtl_rows = db.execute(
-			text("SELECT po_dtl_id FROM proc_po_dtl WHERE po_id = :po_id AND active = 1"),
+			text("""SELECT po_dtl_id, qty, indent_dtl_id FROM proc_po_dtl 
+					 WHERE po_id = :po_id AND active = 1"""),
 			{"po_id": po_id},
 		).fetchall()
-		existing_dtl_ids = {row[0] for row in existing_dtl_rows}
+		existing_dtl_map = {row[0]: {"qty": row[1], "indent_dtl_id": row[2]} for row in existing_dtl_rows}
+		existing_dtl_ids = set(existing_dtl_map.keys())
 
 		incoming_dtl_ids = set()
 		for item in normalized_items:
@@ -1725,6 +1790,46 @@ async def update_po(
 				# ── Update existing row in-place ──
 				incoming_dtl_ids.add(po_dtl_id_val)
 
+				# Get original values for inventory tracking
+				existing_data = existing_dtl_map[po_dtl_id_val]
+				old_qty = existing_data["qty"]
+				original_indent_dtl_id = existing_data["indent_dtl_id"]
+				
+				# Preserve indent_dtl_id if not provided in update
+				update_indent_dtl_id = item["indent_dtl_id"] if item["indent_dtl_id"] else original_indent_dtl_id
+				
+				# ── Validate indent balance qty if indent_dtl_id exists ──
+				if update_indent_dtl_id:
+					# Get indent detail info
+					indent_dtl_query = text("""
+						SELECT qty FROM proc_indent_dtl WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_dtl_result = db.execute(indent_dtl_query, {"indent_dtl_id": update_indent_dtl_id}).fetchone()
+					
+					if indent_dtl_result:
+						indent_total_qty = indent_dtl_result[0]
+						
+						# Get sum of all OTHER PO quantities for this indent (excluding current line)
+						other_po_qty_query = text("""
+							SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+							WHERE ppd.indent_dtl_id = :indent_dtl_id 
+								AND ppd.po_dtl_id != :po_dtl_id
+								AND ppd.active = 1
+						""")
+						other_po_result = db.execute(
+							other_po_qty_query, 
+							{"indent_dtl_id": update_indent_dtl_id, "po_dtl_id": po_dtl_id_val}
+						).fetchone()
+						other_po_qty = other_po_result[0] if other_po_result else 0
+						
+						# Check if new quantity + other POs exceeds indent qty
+						available_for_this_line = indent_total_qty - other_po_qty
+						if item["qty"] > available_for_this_line:
+							raise HTTPException(
+								status_code=400, 
+								detail=f"items[...].quantity {item['qty']} exceeds indent balance {available_for_this_line} for indent_dtl_id {update_indent_dtl_id}"
+							)
+				
 				# Delete old GST for this line
 				db.execute(delete_po_gst_by_dtl_id(), {"po_dtl_id": po_dtl_id_val})
 
@@ -1742,10 +1847,12 @@ async def update_po(
 					"discount_mode": item["discount_mode"],
 					"discount_value": item["discount_value"],
 					"discount_amount": item["discount_amount"],
-					"indent_dtl_id": item["indent_dtl_id"],
+					"indent_dtl_id": update_indent_dtl_id,
 					"updated_by": updated_by,
 					"updated_date_time": updated_at,
 				})
+				
+
 
 				# Re-insert GST if applicable
 				if india_gst and item["gst_amounts"]:
@@ -1765,6 +1872,34 @@ async def update_po(
 					db.execute(gst_query, gst_params)
 			else:
 				# ── New row — insert ──
+				# ── Validate indent balance qty if indent_dtl_id exists ──
+				if item["indent_dtl_id"]:
+					# Get indent detail info
+					indent_dtl_query = text("""
+						SELECT qty FROM proc_indent_dtl WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_dtl_result = db.execute(indent_dtl_query, {"indent_dtl_id": item["indent_dtl_id"]}).fetchone()
+					
+					if indent_dtl_result:
+						indent_total_qty = indent_dtl_result[0]
+						
+						# Get sum of all PO quantities for this indent
+						po_qty_query = text("""
+							SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+							WHERE ppd.indent_dtl_id = :indent_dtl_id
+								AND ppd.active = 1
+						""")
+						po_result = db.execute(po_qty_query, {"indent_dtl_id": item["indent_dtl_id"]}).fetchone()
+						po_qty = po_result[0] if po_result else 0
+						
+						# Available for this new line = indent qty - existing POs
+						available_for_new_line = indent_total_qty - po_qty
+						if item["qty"] > available_for_new_line:
+							raise HTTPException(
+								status_code=400, 
+								detail=f"items[...].quantity {item['qty']} exceeds indent balance {available_for_new_line} for indent_dtl_id {item['indent_dtl_id']}"
+							)
+				
 				detail_query = insert_proc_po_dtl()
 				detail_params = {
 					"po_id": po_id,
@@ -1807,8 +1942,15 @@ async def update_po(
 		# Soft-delete rows that were removed by the user
 		removed_dtl_ids = existing_dtl_ids - incoming_dtl_ids
 		for dtl_id in removed_dtl_ids:
+			# Get indent_dtl_id and qty before deleting
+			removed_line = db.execute(
+				text("SELECT indent_dtl_id, qty FROM proc_po_dtl WHERE po_dtl_id = :dtl_id"),
+				{"dtl_id": dtl_id}
+			).fetchone()
+			
 			# Delete GST for removed line
 			db.execute(delete_po_gst_by_dtl_id(), {"po_dtl_id": dtl_id})
+			
 			# Soft-delete the detail row
 			db.execute(
 				text(

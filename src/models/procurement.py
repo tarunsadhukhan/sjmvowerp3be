@@ -488,6 +488,7 @@ class ProcInward(Base):
     invoice_recvd_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     invoice_due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     invoice_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     challan_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     challan_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     consignment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
