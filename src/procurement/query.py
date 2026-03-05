@@ -175,6 +175,7 @@ LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
 LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
 LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
 WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
     AND (
                 :search_like IS NULL
                 OR pi.indent_no LIKE :search_like
@@ -215,6 +216,7 @@ FROM proc_indent AS pi
 LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
 LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
 WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
     AND (
                 :search_like IS NULL
                 OR pi.indent_no LIKE :search_like
@@ -351,6 +353,7 @@ def get_inward_by_id_query():
         pm.supp_name AS supplier_name,
         pi.challan_no,
         pi.challan_date,
+        pi.invoice_no,
         pi.invoice_date,
         pi.invoice_amount,
         pi.invoice_recvd_date,
@@ -1415,6 +1418,7 @@ def insert_proc_inward():
     updated_by,
     challan_no,
     challan_date,
+    invoice_no,
     invoice_amount,
     invoice_date,
     invoice_recvd_date,
@@ -1442,6 +1446,7 @@ def insert_proc_inward():
     :updated_by,
     :challan_no,
     :challan_date,
+    :invoice_no,
     :invoice_amount,
     :invoice_date,
     :invoice_recvd_date,
@@ -1513,6 +1518,7 @@ def update_proc_inward():
     receipts_remarks = :receipts_remarks,
     challan_no = :challan_no,
     challan_date = :challan_date,
+    invoice_no = :invoice_no,
     invoice_date = :invoice_date,
     invoice_recvd_date = :invoice_recvd_date,
     consignment_no = :consignment_no,
@@ -1812,6 +1818,7 @@ def get_inward_for_sr_query():
         pi.invoice_date,
         pi.invoice_amount,
         pi.invoice_recvd_date,
+        pi.invoice_no,
         pi.challan_no,
         pi.challan_date,
         pi.vehicle_number,
@@ -2205,6 +2212,7 @@ def get_bill_pass_list_query():
         pi.sr_date AS bill_pass_date,
         pi.invoice_date,
         pi.invoice_amount,
+        pi.invoice_no,
         pi.supplier_id,
         pm.supp_name AS supplier_name,
         pi.branch_id,
@@ -2313,6 +2321,7 @@ def get_bill_pass_by_id_query():
         pi.sr_date AS bill_pass_date,
         pi.invoice_date,
         pi.invoice_amount,
+        pi.invoice_no,
         pi.invoice_recvd_date,
         pi.invoice_due_date,
         pi.supplier_id,
@@ -2521,6 +2530,7 @@ def update_bill_pass_query():
     sql = """
     UPDATE proc_inward
     SET
+        invoice_no = COALESCE(:invoice_no, invoice_no),
         invoice_date = COALESCE(:invoice_date, invoice_date),
         invoice_amount = COALESCE(:invoice_amount, invoice_amount),
         invoice_recvd_date = COALESCE(:invoice_recvd_date, invoice_recvd_date),
