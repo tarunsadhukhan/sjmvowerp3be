@@ -103,8 +103,9 @@ class SRSaveRequest(BaseModel):
 
 
 class SRApproveRequest(BaseModel):
-    """Request body for approving SR."""
+    """Request body for approving/rejecting SR."""
     inward_id: int
+    reason: Optional[str] = None
 
 
 # =============================================================================
@@ -892,12 +893,14 @@ async def reject_sr(
         
         query = text("""
             UPDATE proc_inward
-            SET sr_status = :status_id, updated_by = :updated_by, updated_date_time = :updated_date_time
+            SET sr_status = :status_id, sr_remarks = :reason,
+                updated_by = :updated_by, updated_date_time = :updated_date_time
             WHERE inward_id = :inward_id
         """)
         db.execute(query, {
             "inward_id": request_body.inward_id,
             "status_id": STATUS_REJECTED,
+            "reason": request_body.reason or "No reason provided",
             "updated_by": user_id,
             "updated_date_time": now,
         })
