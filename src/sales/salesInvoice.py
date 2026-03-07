@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime
+from src.common.utils import now_ist
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.masters.query import get_branch_list, get_item_group_drodown
@@ -1006,7 +1007,7 @@ async def open_sales_invoice(
             "approval_level": None,
             "invoice_no": new_no,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
 
@@ -1050,7 +1051,7 @@ async def cancel_draft_sales_invoice(
             "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 6, "message": "Draft cancelled successfully."}
@@ -1087,7 +1088,7 @@ async def send_sales_invoice_for_approval(
             "approval_level": 1,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 20, "new_approval_level": 1, "message": "Sales invoice sent for approval."}
@@ -1199,7 +1200,7 @@ async def reopen_sales_invoice(
             "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": new_status_id, "message": f"Sales invoice reopened (status: {new_status_id})."}

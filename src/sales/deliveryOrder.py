@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime
+from src.common.utils import now_ist
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.masters.query import get_branch_list, get_item_group_drodown
@@ -488,7 +489,7 @@ async def create_delivery_order(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        created_at = datetime.utcnow()
+        created_at = now_ist()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
@@ -644,7 +645,7 @@ async def update_delivery_order_endpoint(
         existing = dict(check_result._mapping)
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
@@ -812,7 +813,7 @@ async def open_delivery_order(
             max_no = dict(max_result._mapping).get("max_doc_no") or 0 if max_result else 0
             new_no = str(max_no + 1)
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_delivery_order_status()
         db.execute(update_q, {
             "sales_delivery_order_id": sales_delivery_order_id,
@@ -857,7 +858,7 @@ async def cancel_draft_delivery_order(
         if dict(doc_result._mapping).get("status_id") != 21:
             raise HTTPException(status_code=400, detail="Cannot cancel. Expected status 21 (Draft).")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_delivery_order_status()
         db.execute(update_q, {
             "sales_delivery_order_id": sales_delivery_order_id, "status_id": 6, "approval_level": None,
@@ -891,7 +892,7 @@ async def send_delivery_order_for_approval(
         if dict(doc_result._mapping).get("status_id") != 1:
             raise HTTPException(status_code=400, detail="Cannot send for approval. Expected status 1 (Open).")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_delivery_order_status()
         db.execute(update_q, {
             "sales_delivery_order_id": sales_delivery_order_id, "status_id": 20, "approval_level": 1,
@@ -1000,7 +1001,7 @@ async def reopen_delivery_order(
         else:
             raise HTTPException(status_code=400, detail=f"Cannot reopen with status_id {current_status}. Only 6 or 4.")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_delivery_order_status()
         db.execute(update_q, {
             "sales_delivery_order_id": sales_delivery_order_id, "status_id": new_status_id, "approval_level": None,

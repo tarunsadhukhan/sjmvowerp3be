@@ -7,6 +7,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, datetime, time, timedelta
+from src.common.utils import now_ist
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -531,9 +532,9 @@ async def jute_gate_entry_create(
                     time(int(time_parts[0]), int(time_parts[1]))
                 )
             except (ValueError, IndexError):
-                in_time_dt = datetime.now()
+                in_time_dt = now_ist()
         else:
-            in_time_dt = datetime.now()
+            in_time_dt = now_ist()
         
         # Create jute_mr record (combined gate entry + MR)
         # At gate entry stage: gate entry fields are populated, MR fields (branch_mr_no, jute_mr_date) are null
@@ -579,7 +580,7 @@ async def jute_gate_entry_create(
             remarks=payload.remarks,
             # Audit
             updated_by=user_id,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
         )
         
         db.add(jute_mr)
@@ -604,7 +605,7 @@ async def jute_gate_entry_create(
                 # Status and audit
                 remarks=li.remarks,
                 active=1,
-                updated_date_time=datetime.now(),
+                updated_date_time=now_ist(),
             )
             db.add(mr_line_item)
             total_actual_weight += float(li.actual_weight or 0)
@@ -747,7 +748,7 @@ async def jute_gate_entry_update(
                 "out_date": out_date,
                 "out_time": out_time_dt,
                 "user_id": user_id,
-                "updated_dt": datetime.now(),
+                "updated_dt": now_ist(),
                 "id": jute_mr_id,
             }
             
@@ -796,7 +797,7 @@ async def jute_gate_entry_update(
         
         # Regular update (not OUT action)
         update_fields = []
-        update_params = {"id": jute_mr_id, "user_id": user_id, "updated_dt": datetime.now()}
+        update_params = {"id": jute_mr_id, "user_id": user_id, "updated_dt": now_ist()}
         
         if payload.branch_id is not None:
             update_fields.append("branch_id = :branch_id")
@@ -957,7 +958,7 @@ async def jute_gate_entry_update(
                     allowable_moisture=li.allowable_moisture,
                     remarks=li.remarks,
                     active=1,
-                    updated_date_time=datetime.now(),
+                    updated_date_time=now_ist(),
                 )
                 db.add(mr_line_item)
                 total_actual_weight += float(li.actual_weight or 0)

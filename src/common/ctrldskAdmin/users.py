@@ -5,6 +5,7 @@ from sqlalchemy.sql import text
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Path
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
+from src.common.utils import now_ist
 from src.config.db import default_engine, extract_subdomain_from_request
 from src.authorization.utils import verify_access_token, get_password_hash
 from src.common.query import (get_users_tenant_admin_query, get_users_ctrldesk_admin_query)
@@ -265,7 +266,7 @@ async def create_user_tenant_admin(
                 con_role_id=user_data.roleId,
                 con_user_id=new_user.con_user_id,
                 created_by=user_id,
-                created_date_time=datetime.utcnow()
+                created_date_time=now_ist()
             )
             
             session.add(role_mapping)
@@ -460,7 +461,7 @@ async def create_portal_admin_user(
                     status=1,
                     is_enable=1,
                     created_by=creator_id,
-                    created_date_time=datetime.utcnow()
+                    created_date_time=now_ist()
                 )
                 session.add(superadmin_role)
                 session.flush()  # get the role id
@@ -519,7 +520,7 @@ async def create_portal_admin_user(
                 con_role_id=superadmin_role.con_role_id,
                 con_user_id=new_user.con_user_id,
                 created_by=creator_id,
-                created_date_time=datetime.utcnow()
+                created_date_time=now_ist()
             )
             session.add(user_role_map)
 

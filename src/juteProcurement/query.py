@@ -224,6 +224,7 @@ def get_jute_po_line_items_query():
             jpli.rate,
             jpli.allowable_moisture,
             jpli.value AS amount,
+            jpli.jute_uom,
             jpli.active,
             jpli.status_id,
             sm.status_name AS status
@@ -701,7 +702,8 @@ def get_jute_po_line_items_for_gate_entry_query():
             im.item_name AS quality_name,
             jpli.quantity,
             jpli.value AS amount,
-            jpli.allowable_moisture
+            jpli.allowable_moisture,
+            jpli.jute_uom
         FROM jute_po_li jpli
         LEFT JOIN item_mst im ON im.item_id = jpli.item_id
         LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id

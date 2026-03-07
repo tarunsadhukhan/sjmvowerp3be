@@ -7,6 +7,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, date
+from src.common.utils import now_ist
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -365,7 +366,7 @@ async def update_jute_mr(
 
         # Get user info for audit
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
 
         # Update line items and calculate accepted weights
         total_accepted_weight = 0.0
@@ -567,7 +568,7 @@ async def change_mr_status(
                     detail="Cannot change status: Party branch must be selected. Please add a branch for this party in Party Master if none exist."
                 )
 
-        now = datetime.now()
+        now = now_ist()
 
         # Update the status
         update_query = text("""
@@ -910,7 +911,7 @@ async def open_mr(
                 detail="Cannot open MR: Party branch must be selected before opening. Please add a branch for this party in Party Master if none exist."
             )
 
-        now = datetime.now()
+        now = now_ist()
 
         # Update status to Open
         update_query = text("""
@@ -984,7 +985,7 @@ async def pending_mr(
         if current_status != MR_STATUS_OPEN:
             raise HTTPException(status_code=400, detail="MR can only be set to Pending from Open status")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Update status to Pending
         update_query = text("""
@@ -1094,7 +1095,7 @@ async def approve_mr(
                 detail="Cannot approve MR: Please select a party branch before approving.",
             )
 
-        now = datetime.now()
+        now = now_ist()
 
         # Determine approval status via shared utility or direct approval
         if menu_id is not None:
@@ -1365,7 +1366,7 @@ async def reject_mr(
                     detail="MR can only be rejected from Open or Pending Approval status",
                 )
 
-            now = datetime.now()
+            now = now_ist()
             update_query = text("""
                 UPDATE jute_mr
                 SET status_id = :new_status,
@@ -1445,7 +1446,7 @@ async def cancel_mr(
         if current_status != MR_STATUS_OPEN:
             raise HTTPException(status_code=400, detail="Only Open MRs can be cancelled")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Update status to Cancelled
         update_query = text("""
