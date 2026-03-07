@@ -28,8 +28,10 @@ from src.procurement.material_inspection import router as material_inspection_ro
 from src.procurement.sr import router as sr_router
 from src.procurement.drcr_note import router as drcr_note_router
 from src.procurement.billpass import router as billpass_router
+from src.procurement.reports import router as procurement_reports_router
 from src.masters.party import router as party_router
 from src.inventory.issue import router as issue_router
+from src.inventory.reports import router as inventory_reports_router
 
 from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
@@ -124,6 +126,7 @@ app.include_router(material_inspection_router, prefix="/api/materialInspection",
 app.include_router(sr_router, prefix="/api/storesReceipt", tags=["procurement-stores-receipt"])
 app.include_router(drcr_note_router, prefix="/api/drcrNote", tags=["procurement-drcr-note"])
 app.include_router(billpass_router, prefix="/api/billPass", tags=["procurement-bill-pass"])
+app.include_router(procurement_reports_router, prefix="/api/procurementReports", tags=["procurement-reports"])
 
 # Jute Procurement routers
 app.include_router(jute_po_router, prefix="/api/jutePO", tags=["jute-procurement-po"])
@@ -141,6 +144,7 @@ app.include_router(morrah_wt_router, prefix="/api/juteSQC", tags=["jute-sqc-morr
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
+app.include_router(inventory_reports_router, prefix="/api/inventoryReports", tags=["inventory-reports"])
 
 # Sales routers
 app.include_router(quotation_router, prefix="/api/salesQuotation", tags=["sales-quotation"])
