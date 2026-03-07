@@ -31,6 +31,7 @@ from src.procurement.billpass import router as billpass_router
 from src.procurement.reports import router as procurement_reports_router
 from src.masters.party import router as party_router
 from src.inventory.issue import router as issue_router
+from src.inventory.reports import router as inventory_reports_router
 
 from src.masters.items import router as item_router
 from src.masters.warehouse import router as warehouse_router
@@ -143,6 +144,7 @@ app.include_router(morrah_wt_router, prefix="/api/juteSQC", tags=["jute-sqc-morr
 
 # Inventory routers
 app.include_router(issue_router, prefix="/api/inventoryIssue", tags=["inventory-issue"])
+app.include_router(inventory_reports_router, prefix="/api/inventoryReports", tags=["inventory-reports"])
 
 # Sales routers
 app.include_router(quotation_router, prefix="/api/salesQuotation", tags=["sales-quotation"])

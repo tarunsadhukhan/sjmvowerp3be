@@ -224,3 +224,95 @@ def get_po_itemwise_report_count_query():
         );
     """
     return text(sql)
+
+
+def get_sr_itemwise_report_query():
+    """
+    Item-wise SR report query.
+
+    Returns one row per inward detail line with SR header info,
+    item details, and quantities.
+
+    Parameters:
+        :co_id (int) - required
+        :branch_id (int or NULL) - optional branch filter
+        :date_from (str or NULL) - date range start (YYYY-MM-DD)
+        :date_to (str or NULL) - date range end (YYYY-MM-DD)
+        :search_like (str or NULL) - LIKE pattern for item_name, branch_name, supplier_name
+        :limit (int) - pagination limit
+        :offset (int) - pagination offset
+    """
+    sql = """
+    SELECT
+        pid.inward_dtl_id,
+        pi.inward_id,
+        pi.inward_sequence_no,
+        pi.inward_date,
+        bm.branch_name,
+        bm.branch_prefix,
+        cm.co_prefix,
+        pm.supp_name AS supplier_name,
+        im.item_name,
+        igm.item_grp_name,
+        um.uom_name,
+        pid.approved_qty,
+        pid.rejected_qty,
+        pid.accepted_rate AS rate,
+        pid.amount,
+        sm.status_name
+    FROM proc_inward AS pi
+    INNER JOIN proc_inward_dtl AS pid ON pid.inward_id = pi.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
+    LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
+    WHERE pid.active = 1
+        AND bm.co_id = :co_id
+        AND pi.sr_status IN (1, 3, 5, 20)
+        AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
+        AND (:date_from IS NULL OR pi.inward_date >= :date_from)
+        AND (:date_to IS NULL OR pi.inward_date <= :date_to)
+        AND (
+            :search_like IS NULL
+            OR im.item_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+            OR igm.item_grp_name LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+        )
+    ORDER BY pi.inward_date DESC, pi.inward_id DESC, pid.inward_dtl_id
+    LIMIT :limit OFFSET :offset;
+    """
+    return text(sql)
+
+
+def get_sr_itemwise_report_count_query():
+    """
+    Count query for item-wise SR report pagination.
+    Same joins and filters as the data query, returns total count.
+    """
+    sql = """
+    SELECT COUNT(1) AS total
+    FROM proc_inward AS pi
+    INNER JOIN proc_inward_dtl AS pid ON pid.inward_id = pi.inward_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
+    LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    WHERE pid.active = 1
+        AND bm.co_id = :co_id
+        AND pi.sr_status IN (1, 3, 5, 20)
+        AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
+        AND (:date_from IS NULL OR pi.inward_date >= :date_from)
+        AND (:date_to IS NULL OR pi.inward_date <= :date_to)
+        AND (
+            :search_like IS NULL
+            OR im.item_name LIKE :search_like
+            OR bm.branch_name LIKE :search_like
+            OR igm.item_grp_name LIKE :search_like
+            OR pm.supp_name LIKE :search_like
+        );
+    """
+    return text(sql)
