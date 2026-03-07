@@ -4,6 +4,7 @@ Handles quality check of received goods - update accepted/rejected quantities.
 """
 import logging
 from datetime import datetime, date
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -230,7 +231,7 @@ async def complete_inspection(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         today = date.today()
         
         # Get current line item data to calculate approved_qty if not provided

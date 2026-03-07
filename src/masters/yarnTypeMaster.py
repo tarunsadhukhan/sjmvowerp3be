@@ -13,6 +13,7 @@ from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.masters.models import ItemGrpMst
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -281,7 +282,7 @@ async def yarn_type_create(
             parent_grp_id=None,
             active="1",
             updated_by=user_id,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
         )
         db.add(new_yarn_type)
         db.commit()
@@ -375,7 +376,7 @@ async def yarn_type_edit(
         existing.item_grp_name = item_grp_name
         existing.item_grp_code = item_grp_code
         existing.updated_by = user_id
-        existing.updated_date_time = datetime.now()
+        existing.updated_date_time = now_ist()
         
         db.commit()
 

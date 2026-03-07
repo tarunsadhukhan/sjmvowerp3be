@@ -27,6 +27,7 @@ from src.inventory.query import (
     get_searchable_inventory_count_query,
 )
 from datetime import datetime, date
+from src.common.utils import now_ist
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
@@ -582,7 +583,7 @@ async def create_issue(
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Get next issue pass number for branch
         max_query = get_max_issue_pass_no_for_branch()
@@ -666,7 +667,7 @@ async def update_issue_endpoint(
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Check if issue exists
         check_query = get_issue_by_id_query()
@@ -755,7 +756,7 @@ async def update_issue_status_endpoint(
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Check if issue exists
         check_query = get_issue_by_id_query()

@@ -2,6 +2,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, datetime
+from src.common.utils import now_ist
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -317,7 +318,7 @@ async def jute_po_create_setup(
         ]
 
         # Generate crop year options (current year -1 to +2)
-        current_year = datetime.now().year % 100  # Get last 2 digits
+        current_year = now_ist().year % 100  # Get last 2 digits
         crop_year_options = []
         for i in range(-1, 3):
             start_year = current_year + i - 1
@@ -435,6 +436,7 @@ class JutePOLineItemCreate(BaseModel):
     quantity: float
     rate: float
     allowable_moisture: Optional[float] = None
+    jute_unit: str = "LOOSE"  # "LOOSE" or "BALE", per line item
 
 
 class JutePOCreate(BaseModel):
@@ -443,7 +445,7 @@ class JutePOCreate(BaseModel):
     branch_id: int
     po_date: date
     mukam_id: int
-    jute_unit: str  # LOOSE or BALE
+    jute_unit: Optional[str] = None  # DEPRECATED: use per-line-item jute_unit
     supplier_id: int
     party_id: Optional[int] = None
     vehicle_type_id: int
@@ -504,21 +506,21 @@ async def jute_po_create(
         line_items_data = []
         
         for li in payload.line_items:
-            # Calculate weight based on unit type (fixed weights)
-            weight_kg = calculate_line_item_weight(li.quantity, payload.jute_unit)
-            
+            # Calculate weight based on line item's unit type (fixed weights)
+            weight_kg = calculate_line_item_weight(li.quantity, li.jute_unit)
+
             # Rate is per quintal (100 kg), so convert weight to quintals
             weight_in_quintals = weight_kg / 100
             amount = weight_in_quintals * li.rate
             total_weight_kg += weight_kg
             total_value += amount
-            
+
             line_items_data.append({
                 "li": li,
                 "weight_kg": weight_kg,
                 "amount": amount,
             })
-        
+
         # Validate vehicle weight tolerance (±5%)
         is_valid, error_message = validate_vehicle_weight(
             total_weight_kg, vehicle_capacity_qtl, payload.vehicle_quantity
@@ -563,7 +565,7 @@ async def jute_po_create(
             po_no=next_po_no,
             po_date=payload.po_date,
             jute_mukam_id=payload.mukam_id,
-            jute_uom=payload.jute_unit,
+            jute_uom=None,  # Deprecated: unit now stored per line item
             supplier_id=payload.supplier_id,
             party_id=payload.party_id,
             vehicle_type_id=payload.vehicle_type_id,
@@ -593,6 +595,7 @@ async def jute_po_create(
                 quantity=li.quantity,
                 rate=li.rate,
                 allowable_moisture=li.allowable_moisture,
+                jute_uom=li.jute_unit,
                 value=item_data["amount"],
                 status_id=21,  # Draft status (same as header)
             )
@@ -681,8 +684,6 @@ async def jute_po_update(
             jute_po.po_date = payload.po_date
         if payload.mukam_id is not None:
             jute_po.jute_mukam_id = payload.mukam_id
-        if payload.jute_unit is not None:
-            jute_po.jute_uom = payload.jute_unit
         if payload.supplier_id is not None:
             jute_po.supplier_id = payload.supplier_id
         if payload.party_id is not None:
@@ -703,7 +704,7 @@ async def jute_po_update(
             jute_po.remarks = payload.remarks
         
         jute_po.updated_by = user_id
-        jute_po.updated_date_time = datetime.now()
+        jute_po.updated_date_time = now_ist()
         
         # Update line items if provided
         if payload.line_items is not None:
@@ -714,16 +715,14 @@ async def jute_po_update(
             ).fetchone()
             vehicle_capacity_qtl = vehicle_result.weight if vehicle_result else 0
             
-            jute_unit = payload.jute_unit or jute_po.jute_uom
-            
             # Calculate total weight and value FIRST for validation
             total_weight_kg = 0.0
             total_value = 0.0
             line_items_data = []
-            
+
             for li in payload.line_items:
-                # Calculate weight based on unit type (fixed weights)
-                weight_kg = calculate_line_item_weight(li.quantity, jute_unit)
+                # Calculate weight based on line item's unit type (fixed weights)
+                weight_kg = calculate_line_item_weight(li.quantity, li.jute_unit)
                 
                 # Rate is per quintal (100 kg), so convert weight to quintals
                 weight_in_quintals = weight_kg / 100
@@ -758,6 +757,7 @@ async def jute_po_update(
                     quantity=li.quantity,
                     rate=li.rate,
                     allowable_moisture=li.allowable_moisture,
+                    jute_uom=li.jute_unit,
                     value=item_data["amount"],
                     status_id=jute_po.status_id,  # Same status as header
                 )
@@ -833,7 +833,7 @@ async def open_jute_po(
         
         jute_po.status_id = 1  # Open status
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.updated_date_time = datetime.now()
+        jute_po.updated_date_time = now_ist()
         
         db.commit()
         
@@ -917,7 +917,7 @@ async def approve_jute_po(
 
             jute_po.status_id = 3  # Approved status
             jute_po.updated_by = user_id
-            jute_po.updated_date_time = datetime.now()
+            jute_po.updated_date_time = now_ist()
 
             db.commit()
 
@@ -991,7 +991,7 @@ async def reject_jute_po(
             jute_po.status_id = 4  # Rejected status
             jute_po.approval_level = None
             jute_po.updated_by = user_id
-            jute_po.updated_date_time = datetime.now()
+            jute_po.updated_date_time = now_ist()
 
             db.commit()
 
@@ -1052,7 +1052,7 @@ async def cancel_draft_jute_po(
         
         jute_po.status_id = 6  # Cancelled status
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.updated_date_time = datetime.now()
+        jute_po.updated_date_time = now_ist()
         
         db.commit()
         
@@ -1099,7 +1099,7 @@ async def reopen_jute_po(
         
         jute_po.status_id = 21  # Back to Draft
         jute_po.updated_by = token_data.get("user_id")
-        jute_po.updated_date_time = datetime.now()
+        jute_po.updated_date_time = now_ist()
         
         db.commit()
         

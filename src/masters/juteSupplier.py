@@ -11,6 +11,7 @@ from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteSupplierMst
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -217,7 +218,7 @@ async def jute_supplier_create(
             "email": email,
             "contact_no": contact_no,
             "updated_by": user_id,
-            "updated_date_time": datetime.now(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
 
@@ -294,7 +295,7 @@ async def jute_supplier_edit(
             "email": email,
             "contact_no": contact_no,
             "updated_by": user_id,
-            "updated_date_time": datetime.now(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
 

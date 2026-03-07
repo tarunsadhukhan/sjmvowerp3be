@@ -19,6 +19,7 @@ from src.masters.query import (
     # ...existing imports...
 )
 from datetime import datetime
+from src.common.utils import now_ist
 import json
 import re
 from urllib.parse import unquote, urlparse, parse_qs
@@ -126,7 +127,7 @@ async def mechine_type_master_create(
         new_mech_type_master = MachineTypeMst(
             machine_type_name=payload.get("mechine_type"),
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
             active=payload.get("active", 1),
         )
         print(f"New MechineTypeMaster object: {new_mech_type_master}", flush=True)
@@ -297,7 +298,7 @@ async def mechine_master_create(
             machine_type_id=mechine_type_id,
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
             remarks=remarks,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
             active=active,
             mech_posting_code=mech_posting_code,
             mech_code=mechine_code,
