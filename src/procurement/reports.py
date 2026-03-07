@@ -11,8 +11,11 @@ from src.authorization.utils import get_current_user_with_refresh
 from src.procurement.reportQueries import (
     get_indent_itemwise_report_query,
     get_indent_itemwise_report_count_query,
+    get_po_itemwise_report_query,
+    get_po_itemwise_report_count_query,
 )
 from src.procurement.indent import format_indent_no
+from src.procurement.po import format_po_no
 
 logger = logging.getLogger(__name__)
 
@@ -148,4 +151,132 @@ async def get_indent_itemwise_report(
         raise
     except Exception as e:
         logger.error(f"Error fetching indent itemwise report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/po-itemwise")
+async def get_po_itemwise_report(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+    page: int = 1,
+    limit: int = 10,
+    co_id: int | None = None,
+    branch_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    po_type: str | None = None,
+    outstanding_filter: str | None = None,
+    search: str | None = None,
+):
+    """
+    Item-wise PO report.
+
+    Returns one row per PO detail line with PO header info,
+    item details, rate, and outstanding quantity tracking.
+
+    Query params:
+    - co_id: Company ID (required)
+    - branch_id: Branch ID (optional, NULL = all branches)
+    - date_from: Start date YYYY-MM-DD (optional)
+    - date_to: End date YYYY-MM-DD (optional)
+    - po_type: 'Regular', 'Open', or omit for all
+    - outstanding_filter: 'outstanding', 'non_outstanding', or omit for all
+    - search: Search term for item name, branch name, item group, supplier name
+    - page: Page number (default 1)
+    - limit: Page size (default 10, max 10000)
+    """
+    try:
+        if not co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        page = max(page, 1)
+        limit = max(min(limit, 10000), 1)
+        offset = (page - 1) * limit
+
+        search_like = None
+        if search:
+            search_like = f"%{search.strip()}%"
+
+        if outstanding_filter and outstanding_filter not in ("outstanding", "non_outstanding"):
+            raise HTTPException(status_code=400, detail="outstanding_filter must be 'outstanding' or 'non_outstanding'")
+
+        if po_type and po_type not in ("Regular", "Open"):
+            raise HTTPException(status_code=400, detail="po_type must be 'Regular' or 'Open'")
+
+        params = {
+            "co_id": int(co_id),
+            "branch_id": int(branch_id) if branch_id else None,
+            "date_from": date_from if date_from else None,
+            "date_to": date_to if date_to else None,
+            "po_type": po_type if po_type else None,
+            "outstanding_filter": outstanding_filter if outstanding_filter else None,
+            "search_like": search_like,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        list_query = get_po_itemwise_report_query()
+        rows = db.execute(list_query, params).fetchall()
+
+        data = []
+        for row in rows:
+            mapped = dict(row._mapping)
+            po_date_obj = mapped.get("po_date")
+            po_date = po_date_obj
+            if hasattr(po_date_obj, "isoformat"):
+                po_date = po_date_obj.isoformat()
+
+            raw_po_no = mapped.get("po_no")
+            formatted_po_no = ""
+            if raw_po_no is not None and raw_po_no != 0:
+                try:
+                    formatted_po_no = format_po_no(
+                        po_no=int(raw_po_no),
+                        co_prefix=mapped.get("co_prefix"),
+                        branch_prefix=mapped.get("branch_prefix"),
+                        po_date=po_date_obj,
+                    )
+                except Exception:
+                    logger.exception("Error formatting PO number in report")
+                    formatted_po_no = str(raw_po_no)
+
+            data.append({
+                "po_dtl_id": mapped.get("po_dtl_id"),
+                "po_id": mapped.get("po_id"),
+                "po_no": formatted_po_no,
+                "po_date": po_date,
+                "branch_name": mapped.get("branch_name"),
+                "supplier_name": mapped.get("supplier_name"),
+                "item_name": mapped.get("item_name"),
+                "item_grp_name": mapped.get("item_grp_name"),
+                "uom_name": mapped.get("uom_name"),
+                "po_qty": mapped.get("po_qty"),
+                "rate": mapped.get("rate"),
+                "inward_consumed_qty": mapped.get("inward_consumed_qty"),
+                "outstanding_qty": mapped.get("outstanding_qty"),
+                "po_type": mapped.get("po_type"),
+                "expense_type_name": mapped.get("expense_type_name"),
+                "status_name": mapped.get("status_name"),
+            })
+
+        count_query = get_po_itemwise_report_count_query()
+        count_params = {
+            "co_id": int(co_id),
+            "branch_id": int(branch_id) if branch_id else None,
+            "date_from": date_from if date_from else None,
+            "date_to": date_to if date_to else None,
+            "po_type": po_type if po_type else None,
+            "outstanding_filter": outstanding_filter if outstanding_filter else None,
+            "search_like": search_like,
+        }
+        count_result = db.execute(count_query, count_params).scalar()
+        total = int(count_result) if count_result is not None else 0
+
+        return {"data": data, "total": total}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PO itemwise report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
