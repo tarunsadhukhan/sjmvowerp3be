@@ -18,6 +18,7 @@ from src.masters.query import (
     # ...existing imports...
 )
 from datetime import datetime
+from src.common.utils import now_ist
 import json
 import re
 from urllib.parse import unquote, urlparse, parse_qs
@@ -279,7 +280,7 @@ async def dept_master_create(
             dept_desc=dept_desc,
             dept_code=dept_code,
             order_id=1,
-            created_date=datetime.utcnow()
+            created_date=now_ist()
         )
         print(f"New DeptMst object: {new_dept_master}", flush=True)
         db.add(new_dept_master)
@@ -387,7 +388,7 @@ async def subdept_master_create(
             sub_dept_code=subdept_code,
             sub_dept_desc=subdept_name,
             dept_id=dept_id,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
             order_no=order_by_int,
         )
         print(f"New SubDeptMst object: {new_subdept_master}", flush=True)

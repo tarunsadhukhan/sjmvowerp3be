@@ -4,6 +4,7 @@ Handles accountant review of inspected goods, adds rates/taxes, creates official
 """
 import logging
 from datetime import datetime, date
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -136,7 +137,7 @@ def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
         return f"SR-{year}-{next_no:05d}"
     except Exception:
         # Fallback to timestamp-based number
-        return f"SR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        return f"SR-{now_ist().strftime('%Y%m%d%H%M%S')}"
 
 
 # =============================================================================
@@ -404,7 +405,7 @@ async def save_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         sr_date = datetime.strptime(request_body.sr_date, '%Y-%m-%d').date()
         
         # Calculate totals
@@ -673,7 +674,7 @@ async def open_sr(
     """Open SR for approval."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         # Update status to Open
         query = text("""
@@ -713,7 +714,7 @@ async def approve_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         today = date.today()
         
         # Get line items to check for rate differences and rejections
@@ -889,7 +890,7 @@ async def reject_sr(
     """Reject SR."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         query = text("""
             UPDATE proc_inward

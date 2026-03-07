@@ -49,6 +49,7 @@ from src.common.approval_utils import (
 from src.common.approval_query import get_max_approval_level
 from datetime import datetime, date
 from typing import Optional
+from src.common.utils import now_ist
 import math
 
 logger = logging.getLogger(__name__)
@@ -1017,7 +1018,7 @@ async def create_indent(
 			raise HTTPException(status_code=400, detail="At least one item row is required")
 
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 		indent_title_raw = payload.get("name") or payload.get("requester")
 		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
 		header_remarks_raw = payload.get("remarks")
@@ -1237,7 +1238,7 @@ async def update_indent(
 			raise HTTPException(status_code=400, detail="At least one item row is required")
 
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		indent_title_raw = payload.get("name")
 		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
 		header_remarks_raw = payload.get("remarks")
@@ -1529,7 +1530,7 @@ def calculate_financial_year(indent_date) -> str:
 	except Exception as e:
 		logger.exception(f"Error calculating financial year from {indent_date}")
 		# Fallback to current year if date parsing fails
-		now = datetime.now()
+		now = now_ist()
 		current_year = now.year
 		current_month = now.month
 		if current_month >= 4:
@@ -1865,7 +1866,7 @@ async def open_indent(
 				new_indent_no = 1
 		
 		# Update status to Open (1) and set indent_no if generated
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		update_params = {
 			"indent_id": indent_id,
@@ -1947,7 +1948,7 @@ async def cancel_draft_indent(
 			)
 		
 		# Update status to Cancelled (6)
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,
@@ -2025,7 +2026,7 @@ async def reopen_indent(
 			)
 		
 		# Update status
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,
@@ -2099,7 +2100,7 @@ async def send_indent_for_approval(
 			)
 		
 		# Update status to Pending Approval (20) with level 1
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,

@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -696,7 +697,7 @@ async def create_inward(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        created_at = datetime.utcnow()
+        created_at = now_ist()
 
         # Normalize line items
         normalized_items = []
@@ -889,7 +890,7 @@ async def update_inward(
             )
 
         updated_by = token_data.get("user_id") if token_data else None
-        updated_at = datetime.now()
+        updated_at = now_ist()
 
         # Parse header fields
         branch_id = body.get("branch")

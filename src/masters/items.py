@@ -10,6 +10,7 @@ from src.masters.query import get_item_group, get_item_group_drodown, india_gst_
 from src.masters.query import get_item_group_details_by_id, get_item_minmax_mapping, get_item, get_item_uom_mapping, get_uom_list, get_item_by_id
 from src.masters.query import get_item_group_path, get_item_make
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -103,7 +104,7 @@ async def create_item_group(
             co_id=co_id,
             active=1,
             updated_by=updated_by,
-            updated_date_time=payload.get("updated_date_time", datetime.utcnow()),
+            updated_date_time=payload.get("updated_date_time", now_ist()),
             item_grp_name=item_grp_name,
             item_grp_code=item_grp_code,
             item_type_id=item_type_id,
@@ -444,7 +445,7 @@ async def item_update_full(
         existing.manufacturable = bool(manufacturable)
         existing.assembly = bool(assembly)
         existing.updated_by = int(user_id) if user_id and str(user_id).isdigit() else existing.updated_by
-        existing.updated_date_time = datetime.utcnow()
+        existing.updated_date_time = now_ist()
 
         # UOM mappings: replace existing
         uom_mappings = payload.get("uom_mappings") or []
@@ -467,7 +468,7 @@ async def item_update_full(
                 "relation_value": relation_value,
                 "rounding": rounding,
                 "updated_by": int(user_id) if user_id and str(user_id).isdigit() else None,
-                "updated_date_time": datetime.utcnow()
+                "updated_date_time": now_ist()
             })
 
         # Minmax mappings: replace existing
@@ -491,7 +492,7 @@ async def item_update_full(
                 "min_order_qty": min_order_qty,
                 "lead_time": lead_time,
                 "updated_by": int(user_id) if user_id and str(user_id).isdigit() else None,
-                "updated_date_time": datetime.utcnow(),
+                "updated_date_time": now_ist(),
                 "active": 1
             })
 
@@ -573,7 +574,7 @@ async def item_make_create(
             item_grp_id=item_grp_id,
             item_make_name=item_make_name,
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
-            updated_date_time=datetime.utcnow()
+            updated_date_time=now_ist()
         )
         db.add(new_item_make)
         db.commit()

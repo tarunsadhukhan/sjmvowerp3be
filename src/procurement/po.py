@@ -4,6 +4,7 @@ import math
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime, date
+from src.common.utils import now_ist
 from typing import Optional
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -968,7 +969,7 @@ async def create_po(
 		raw_additional = payload.get("additional_charges", [])
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 
 		# Calculate totals
 		net_amount = 0.0
@@ -1604,7 +1605,7 @@ async def update_po(
 		raw_additional = payload.get("additional_charges", [])
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 
 		# Calculate totals (same logic as create)
 		net_amount = 0.0
@@ -2207,7 +2208,7 @@ async def open_po(
 				new_po_no = 1
 		
 		# Update status to Open (1) and set po_no if generated
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		update_params = {
 			"po_id": po_id,
@@ -2284,7 +2285,7 @@ async def cancel_draft_po(
 			)
 		
 		# Update status to Cancelled (6)
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2362,7 +2363,7 @@ async def reopen_po(
 			)
 		
 		# Update status
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2436,7 +2437,7 @@ async def send_po_for_approval(
 			)
 		
 		# Update status to Pending Approval (20) with level 1
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2552,7 +2553,7 @@ async def clone_po(
 		dtl_results = db.execute(dtl_query, {"po_id": po_id}).fetchall()
 		
 		# Create new PO header (as Draft, no PO number yet)
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 		new_po_no = None  # Will be generated when opened/approved
 		
 		insert_header = insert_proc_po()
@@ -2561,7 +2562,7 @@ async def clone_po(
 			"delivery_instructions": original.get("delivery_instructions"),
 			"expected_delivery_days": original.get("expected_delivery_days"),
 			"footer_notes": original.get("footer_notes"),
-			"po_date": datetime.utcnow().date(),  # Use current date
+			"po_date": now_ist().date(),  # Use current date
 			"po_no": new_po_no,
 			"remarks": original.get("remarks"),
 			"delivery_mode": original.get("delivery_mode"),

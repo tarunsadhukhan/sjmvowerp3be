@@ -1,4 +1,5 @@
 from datetime import datetime
+from src.common.utils import now_ist
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Cookie
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
@@ -203,7 +204,7 @@ async def machine_spg_details_create(
             is_active=int(is_active) if is_active else 1,
             branch_id=int(branch_id) if branch_id is not None else None,
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
         )
 
         db.add(new_record)
@@ -309,7 +310,7 @@ async def machine_spg_details_edit(
         existing.weight_per_spindle = float(weight_per_spindle) if weight_per_spindle is not None else existing.weight_per_spindle
         existing.is_active = int(is_active) if is_active else existing.is_active
         existing.updated_by = int(user_id) if user_id and str(user_id).isdigit() else existing.updated_by
-        existing.updated_date_time = datetime.utcnow()
+        existing.updated_date_time = now_ist()
 
         db.commit()
         db.refresh(existing)

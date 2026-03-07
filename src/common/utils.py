@@ -2,7 +2,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from fastapi import HTTPException, status
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def now_ist() -> datetime:
+    """Returns current datetime in IST (UTC+5:30), timezone-naive for MySQL compatibility."""
+    return datetime.now(IST).replace(tzinfo=None)
 
 def create_response(data=None, master=None, message="Success", status="success"):
     """
@@ -63,7 +69,7 @@ def get_current_timestamp():
     """
     Returns the current timestamp in 'YYYY-MM-DD HH:MM:SS' format.
     """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return now_ist().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_org_id_from_subdomain(subdomain: str, db: Session) -> int:
     """

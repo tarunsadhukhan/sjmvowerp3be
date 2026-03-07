@@ -68,7 +68,11 @@
       "Bash(xxd)",
       "Read(//c/Program Files/**)",
       "Bash(python -m pytest src/test/test_procurement_sr_approve.py src/test/test_procurement_sr_warehouse.py -v)",
-      "Bash(.venv/Scripts/python -m pytest src/test/test_procurement_reports.py -v)"
+      "Bash(.venv/Scripts/python -m pytest src/test/test_procurement_reports.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_sales_order_hessian.py -v --tb=long)",
+      "Bash(PYTHONPATH=. pytest src/test/test_sales_order_hessian.py::TestCreateSalesOrderHessian::test_create_with_hessian_calls_hessian_insert -v --tb=long)",
+      "Bash(PYTHONPATH=. pytest src/test/test_main.py src/test/test_portal_admin_user.py -v --tb=line)",
+      "Read(//c/code//**)"
     ]
   }
 }

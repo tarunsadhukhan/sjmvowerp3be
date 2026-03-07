@@ -12,7 +12,11 @@ except Exception as e:
 
 def get_engine(db_url: str):
     try:
-        return create_engine(db_url, pool_pre_ping=True)
+        return create_engine(
+            db_url,
+            pool_pre_ping=True,
+            connect_args={"init_command": "SET SESSION time_zone='+05:30'"}
+        )
     except Exception as e:
         print(f"Error creating database engine: {e}")
         raise
