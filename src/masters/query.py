@@ -994,7 +994,114 @@ def check_yarn_quality_code_exists(branch_id: int, quality_code: str, exclude_id
     """
     if exclude_id:
         sql += " AND yarn_quality_id != :exclude_id"
-    
+
     query = text(sql)
     return query
+
+
+# =============================================================================
+# ITEM BOM MASTER QUERIES
+# =============================================================================
+
+def get_bom_items_with_children(co_id: int = None):
+    """List all items that have at least one active BOM child (for index page)."""
+    sql = """
+    SELECT
+      im.item_id,
+      im.item_code,
+      im.item_name,
+      ig.item_grp_name AS item_group_name,
+      COUNT(ib.bom_id) AS component_count
+    FROM item_mst im
+    INNER JOIN item_bom ib ON ib.parent_item_id = im.item_id AND ib.co_id = :co_id AND ib.active = 1
+    LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    WHERE (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
+    GROUP BY im.item_id, im.item_code, im.item_name, ig.item_grp_name
+    ORDER BY im.item_code;
+    """
+    return text(sql)
+
+
+def get_bom_children_query():
+    """Get direct children of a parent item (one level, active only)."""
+    sql = """
+    SELECT
+      ib.bom_id,
+      ib.parent_item_id,
+      ib.child_item_id,
+      ib.qty,
+      ib.uom_id,
+      um.uom_name,
+      ib.sequence_no,
+      im.item_code AS child_item_code,
+      im.item_name AS child_item_name,
+      im.assembly AS child_is_assembly,
+      EXISTS(
+        SELECT 1 FROM item_bom ib2
+        WHERE ib2.parent_item_id = ib.child_item_id
+        AND ib2.co_id = :co_id AND ib2.active = 1
+      ) AS has_children
+    FROM item_bom ib
+    INNER JOIN item_mst im ON im.item_id = ib.child_item_id
+    LEFT JOIN uom_mst um ON um.uom_id = ib.uom_id
+    WHERE ib.parent_item_id = :parent_item_id
+      AND ib.co_id = :co_id
+      AND ib.active = 1
+    ORDER BY ib.sequence_no, ib.bom_id;
+    """
+    return text(sql)
+
+
+def get_bom_parents_query():
+    """Where-used: get all parent assemblies that contain a given child item."""
+    sql = """
+    SELECT
+      ib.bom_id,
+      ib.parent_item_id,
+      im.item_code AS parent_item_code,
+      im.item_name AS parent_item_name,
+      ib.qty,
+      ib.uom_id,
+      um.uom_name
+    FROM item_bom ib
+    INNER JOIN item_mst im ON im.item_id = ib.parent_item_id
+    LEFT JOIN uom_mst um ON um.uom_id = ib.uom_id
+    WHERE ib.child_item_id = :child_item_id
+      AND ib.co_id = :co_id
+      AND ib.active = 1
+    ORDER BY im.item_code;
+    """
+    return text(sql)
+
+
+def get_items_for_bom_dropdown():
+    """Get items list for BOM component selection dropdown."""
+    sql = """
+    SELECT
+      im.item_id,
+      im.item_code,
+      im.item_name,
+      im.uom_id,
+      um.uom_name
+    FROM item_mst im
+    LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
+    LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    WHERE ig.co_id = :co_id
+      AND im.active = 1
+      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
+    ORDER BY im.item_code
+    LIMIT 50;
+    """
+    return text(sql)
+
+
+def get_bom_uom_list():
+    """Get active UOM list for BOM dropdowns."""
+    sql = """
+    SELECT uom_id, uom_name
+    FROM uom_mst
+    WHERE active = 1
+    ORDER BY uom_name;
+    """
+    return text(sql)
 

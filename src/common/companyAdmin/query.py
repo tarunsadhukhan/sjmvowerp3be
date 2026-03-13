@@ -93,24 +93,13 @@ left join branch_mst bm on bm.branch_id = dm.branch_id
 
 
 
-def get_branch_all_query(search: str = None, limit: int = None, offset: int = None):
+def get_branch_all_query(search: str = None):
     sql = f"""select bm.co_id as co_id, cm.co_name as co_name , bm.branch_id, bm.branch_name , bm.active
 from branch_mst bm left join co_mst cm on cm.co_id = bm.co_id
-    WHERE (:search IS NULL OR 
+    WHERE (:search IS NULL OR
              bm.branch_name LIKE :search OR
              co_name LIKE :search)
-             
-        ORDER BY bm.branch_id
-        LIMIT :limit OFFSET :offset;"""
-    query = text(sql)
-    return query
-
-def get_branch_all_count_query(search: str = None):
-    sql = f"""select count(*) as total from branch_mst bm left join co_mst cm on cm.co_id = bm.co_id
-    where (:search IS NULL OR 
-                    bm.branch_name LIKE :search OR 
-                    bm.co_id LIKE :search) 
-                      ;"""
+        ORDER BY bm.branch_id;"""
     query = text(sql)
     return query
 
