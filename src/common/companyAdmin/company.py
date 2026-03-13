@@ -24,7 +24,7 @@ class CoInvoiceTypeMapSavePayload(BaseModel):
 async def getOrgsFull(
     request: Request,
     page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1),
+    limit: int = Query(1000, ge=1),
     search: Optional[str] = None,
     token_data: dict = Depends(verify_access_token),  # Use the new dependency  
     db: Session = Depends(get_tenant_db)
@@ -120,6 +120,11 @@ async def create_org_data(
     Insert a new company record using the ORM model and return its id.
     """
     try:
+        # Check for duplicate co_prefix
+        existing = db.query(CoMst).filter(CoMst.co_prefix == payload.co_prefix).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Company prefix '{payload.co_prefix}' already exists")
+
         # Create the company using the tenant database
         new_company = CoMst(
             co_name=payload.co_name,
@@ -129,6 +134,7 @@ async def create_org_data(
             co_zipcode=payload.co_zipcode,
             country_id=payload.country_id,
             state_id=payload.state_id,
+            city_id=None,
             co_logo=payload.co_logo,
             co_cin_no=payload.co_cin_no,
             co_email_id=payload.co_email_id,
