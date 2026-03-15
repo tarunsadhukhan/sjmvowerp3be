@@ -1443,7 +1443,6 @@ def insert_sales_invoice():
         due_date, type_of_sale, tax_id,
         container_no, contract_no, contract_date,
         consignment_no, consignment_date,
-        status_id,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
@@ -1463,7 +1462,6 @@ def insert_sales_invoice():
         :due_date, :type_of_sale, :tax_id,
         :container_no, :contract_no, :contract_date,
         :consignment_no, :consignment_date,
-        :status_id,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1474,8 +1472,6 @@ def insert_invoice_line_item():
         invoice_id,
         hsn_code, item_id, item_make_id,
         quantity, uom_id, rate,
-        amount_without_tax, total_amount,
-        sales_weight
         discount_type, discounted_rate, discount_amount,
         amount_without_tax, total_amount,
         sales_weight, remarks, delivery_order_dtl_id
@@ -1483,8 +1479,6 @@ def insert_invoice_line_item():
         :invoice_id,
         :hsn_code, :item_id, :item_make_id,
         :quantity, :uom_id, :rate,
-        :amount_without_tax, :total_amount,
-        :sales_weight
         :discount_type, :discounted_rate, :discount_amount,
         :amount_without_tax, :total_amount,
         :sales_weight, :remarks, :delivery_order_dtl_id
@@ -1813,6 +1807,203 @@ def get_sales_invoice_jute_dtl_by_invoice_id():
         jd.qty_untit_conversion
     FROM sales_invoice_jute_dtl AS jd
     WHERE jd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# HESSIAN INVOICE EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_hessian():
+    """Insert header-level hessian data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_hessian (
+        invoice_id, qty_bales, rate_per_bale,
+        billing_rate_mt, billing_rate_bale,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_id, :qty_bales, :rate_per_bale,
+        :billing_rate_mt, :billing_rate_bale,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_hessian():
+    """Delete header-level hessian data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_hessian
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_hessian_by_id():
+    """Get header-level hessian data for a sales invoice."""
+    sql = """SELECT
+        sih.sales_invoice_hessian_id,
+        sih.invoice_id,
+        sih.qty_bales,
+        sih.rate_per_bale,
+        sih.billing_rate_mt,
+        sih.billing_rate_bale
+    FROM sales_invoice_hessian AS sih
+    WHERE sih.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_hessian_dtl():
+    """Insert per-line-item hessian detail data."""
+    sql = """INSERT INTO sales_invoice_hessian_dtl (
+        invoice_line_item_id,
+        qty_bales, rate_per_bale,
+        billing_rate_mt, billing_rate_bale,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :qty_bales, :rate_per_bale,
+        :billing_rate_mt, :billing_rate_bale,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_hessian_dtl():
+    """Delete per-line-item hessian detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_hessian_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_hessian_dtl_by_invoice_id():
+    """Get all per-line-item hessian detail rows for an invoice."""
+    sql = """SELECT
+        hd.sales_invoice_hessian_dtl_id,
+        hd.invoice_line_item_id,
+        hd.qty_bales,
+        hd.rate_per_bale,
+        hd.billing_rate_mt,
+        hd.billing_rate_bale
+    FROM sales_invoice_hessian_dtl AS hd
+    WHERE hd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# JUTE YARN INVOICE EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_juteyarn():
+    """Insert header-level jute yarn data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_juteyarn (
+        invoice_id, pcso_no, container_no, customer_ref_no,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_id, :pcso_no, :container_no, :customer_ref_no,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_juteyarn():
+    """Delete header-level jute yarn data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_juteyarn
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_juteyarn_by_id():
+    """Get header-level jute yarn data for a sales invoice."""
+    sql = """SELECT
+        sijy.sales_invoice_juteyarn_id,
+        sijy.invoice_id,
+        sijy.pcso_no,
+        sijy.container_no,
+        sijy.customer_ref_no
+    FROM sales_invoice_juteyarn AS sijy
+    WHERE sijy.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_juteyarn_dtl():
+    """Insert per-line-item jute yarn detail data."""
+    sql = """INSERT INTO sales_invoice_juteyarn_dtl (
+        invoice_line_item_id,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_juteyarn_dtl():
+    """Delete per-line-item jute yarn detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_juteyarn_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_juteyarn_dtl_by_invoice_id():
+    """Get all per-line-item jute yarn detail rows for an invoice."""
+    sql = """SELECT
+        jyd.sales_invoice_juteyarn_dtl_id,
+        jyd.invoice_line_item_id
+    FROM sales_invoice_juteyarn_dtl AS jyd
+    WHERE jyd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# GOVT SKG INVOICE DETAIL EXTENSION QUERIES
+# =============================================================================
+
+def insert_sale_invoice_govtskg_dtl():
+    """Insert per-line-item govt SKG detail data."""
+    sql = """INSERT INTO sale_invoice_govtskg_dtl (
+        invoice_line_item_id,
+        pack_sheet, net_weight, total_weight,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :pack_sheet, :net_weight, :total_weight,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sale_invoice_govtskg_dtl():
+    """Delete per-line-item govt SKG detail rows for an invoice."""
+    sql = """DELETE FROM sale_invoice_govtskg_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sale_invoice_govtskg_dtl_by_invoice_id():
+    """Get all per-line-item govt SKG detail rows for an invoice."""
+    sql = """SELECT
+        gd.sale_invoice_govtskg_dtl_id,
+        gd.invoice_line_item_id,
+        gd.pack_sheet,
+        gd.net_weight,
+        gd.total_weight
+    FROM sale_invoice_govtskg_dtl AS gd
+    WHERE gd.invoice_line_item_id IN (
         SELECT invoice_line_item_id FROM sales_invoice_dtl
         WHERE invoice_id = :invoice_id
     );"""
