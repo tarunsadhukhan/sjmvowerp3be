@@ -1,5 +1,6 @@
 from typing import List, Optional
 from datetime import datetime
+from src.common.utils import now_ist
 from sqlalchemy.orm import Session
 from sqlalchemy import  func
 from sqlalchemy.sql import text
@@ -240,7 +241,7 @@ async def approval_level_data_setup_submit(
                     day_max_amount=max_day,
                     month_max_amount=max_month,
                     updated_by=updated_by_user_id,
-                    updated_date_time=datetime.utcnow(),
+                    updated_date_time=now_ist(),
                 )
                 
                 tenant_session.add(new_approval)

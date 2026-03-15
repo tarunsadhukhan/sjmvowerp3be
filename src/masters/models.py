@@ -296,6 +296,21 @@ class WarehouseMst(Base):
     # Optionally, add relationship for parent warehouse if needed
     # parent_warehouse = relationship("WarehouseMst", remote_side=[warehouse_id])
 
+class ItemBom(Base):
+    __tablename__ = "item_bom"
+
+    bom_id = Column(Integer, primary_key=True, autoincrement=True)
+    parent_item_id = Column(Integer, ForeignKey("item_mst.item_id"), nullable=False)
+    child_item_id = Column(Integer, ForeignKey("item_mst.item_id"), nullable=False)
+    qty = Column(Float, nullable=False, default=1)
+    uom_id = Column(Integer, ForeignKey("uom_mst.uom_id"), nullable=False)
+    co_id = Column(Integer, nullable=False)
+    sequence_no = Column(Integer, default=0)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(DateTime, nullable=True)
+
+
 class CostFactorMst(Base):
     __tablename__ = "cost_factor_mst"
 

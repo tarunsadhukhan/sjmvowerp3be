@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime
 from typing import Optional
+from src.common.utils import now_ist
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.masters.query import get_branch_list, get_item_group_drodown
@@ -513,7 +514,7 @@ async def create_quotation(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        created_at = datetime.utcnow()
+        created_at = now_ist()
 
         # Optional header fields — accept both short and suffixed names
         sales_broker_id = sales_broker_id_check
@@ -674,7 +675,7 @@ async def update_quotation(
         existing = dict(check_result._mapping)
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
 
         # Optional fields — accept both short and suffixed names
         sales_broker_id = sales_broker_id_check
@@ -848,7 +849,7 @@ async def open_quotation(
             max_no = dict(max_result._mapping).get("max_doc_no") or 0 if max_result else 0
             new_no = str(max_no + 1)
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_quotation_status()
         db.execute(update_q, {
             "sales_quotation_id": sales_quotation_id,
@@ -895,7 +896,7 @@ async def cancel_draft_quotation(
         if doc.get("status_id") != 21:
             raise HTTPException(status_code=400, detail=f"Cannot cancel quotation with status_id {doc.get('status_id')}. Expected 21 (Draft).")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_quotation_status()
         db.execute(update_q, {
             "sales_quotation_id": sales_quotation_id,
@@ -936,7 +937,7 @@ async def send_quotation_for_approval(
         if doc.get("status_id") != 1:
             raise HTTPException(status_code=400, detail=f"Cannot send for approval with status_id {doc.get('status_id')}. Expected 1 (Open).")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_quotation_status()
         db.execute(update_q, {
             "sales_quotation_id": sales_quotation_id,
@@ -1054,7 +1055,7 @@ async def reopen_quotation(
         else:
             raise HTTPException(status_code=400, detail=f"Cannot reopen quotation with status_id {current_status}. Only 6 (Cancelled) or 4 (Rejected).")
 
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_quotation_status()
         db.execute(update_q, {
             "sales_quotation_id": sales_quotation_id,

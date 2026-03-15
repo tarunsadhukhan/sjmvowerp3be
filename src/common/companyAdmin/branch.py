@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from src.config.db import  get_tenant_db
 from src.authorization.utils import verify_access_token
 from src.common.companyAdmin.models import BranchMst
-from src.common.companyAdmin.query import get_branch_all_query, get_branch_all_count_query, get_branch_by_id_query
+from src.common.companyAdmin.query import get_branch_all_query, get_branch_by_id_query
 from src.common.companyAdmin.query import get_country_query, get_state_query, get_co_all_query_nosearch,get_branch_query_nosearch
 from src.common.companyAdmin.schemas import BranchCreate
 from typing import Optional, List
@@ -15,41 +15,27 @@ router = APIRouter()
 @router.get("/get_branch_data_all")
 async def getBranchFull(
     request: Request,
-    page: int = Query(1, ge=1),
-    
-    limit: int = Query(10, ge=1),
     search: Optional[str] = None,
-    token_data: dict = Depends(verify_access_token),  # Use the new dependency  
+    token_data: dict = Depends(verify_access_token),
     db: Session = Depends(get_tenant_db)
     ):
-    offset = (page - 1) * limit
     try:
-
-            query = get_branch_all_query(search, offset, limit)
-            # text(f"SELECT con_menu_id, con_menu_name, con_menu_parent_id FROM con_menu_master where active =1")
+            query = get_branch_all_query(search)
             params = {
                 "search": f"%{search}%" if search else None,
-                "limit": limit,
-                "offset": offset
-            }
-            query_count = get_branch_all_count_query(search)
-            count_params = {
-                "search": f"%{search}%" if search else None
             }
             coData = db.execute(query, params).fetchall()
-            result_count = db.execute(query_count, count_params).scalar()
-            # total_count = session.execute(count_query, count_params).scalar()
             result = [dict(r._mapping) for r in coData]
             return {
                 "data": result,
-                "total": result_count,
+                "total": len(result),
             }
 
     except HTTPException as he:
-        print(f"HTTP Exception in get_users_tenant_admin: {str(he)}")
+        print(f"HTTP Exception in get_branch_data_all: {str(he)}")
         raise
     except Exception as e:
-        print(f"Unexpected error in get_users_tenant_admin: {str(e)}")
+        print(f"Unexpected error in get_branch_data_all: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -67,10 +53,12 @@ async def get_branch_data_by_id(
     try:
             query = get_branch_by_id_query(branch_id)
             branch_details = db.execute(query, {"branch_id": branch_id}).fetchone()
+            company     = db.execute(get_co_all_query_nosearch()).fetchall()
             countries   = db.execute(get_country_query()).fetchall()
             states      = db.execute(get_state_query()).fetchall()
             return {
                 "data": dict(branch_details._mapping),
+                "company":         [dict(co._mapping) for co in company],
                 "countries":       [dict(c._mapping) for c in countries],
                 "states":          [dict(s._mapping) for s in states],
             }

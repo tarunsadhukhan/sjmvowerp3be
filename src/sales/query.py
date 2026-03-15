@@ -1304,8 +1304,7 @@ def get_invoice_table_query():
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
-    WHERE (si.active = 1 OR si.active IS NULL)
-        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
         AND (
             :search_like IS NULL
             OR CAST(si.invoice_no AS CHAR) LIKE :search_like
@@ -1322,8 +1321,7 @@ def get_invoice_table_count_query():
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
-    WHERE (si.active = 1 OR si.active IS NULL)
-        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    WHERE (:co_id IS NULL OR bm.co_id = :co_id)
         AND (
             :search_like IS NULL
             OR CAST(si.invoice_no AS CHAR) LIKE :search_like
@@ -1349,9 +1347,16 @@ def get_invoice_by_id_query():
         pm.supp_name AS party_name,
         si.sales_delivery_order_id,
         si.broker_id,
+        si.billing_to_id,
+        si.shipping_to_id,
+        si.internal_note,
         si.shipping_state_code,
         si.transporter_id,
         trns.supp_name AS transporter_name,
+        si.transporter_name AS transporter_name_stored,
+        si.transporter_address,
+        si.transporter_state_code,
+        si.transporter_state_name,
         si.vehicle_no,
         si.eway_bill_no,
         si.eway_bill_date,
@@ -1364,6 +1369,14 @@ def get_invoice_by_id_query():
         si.tax_payable,
         si.freight_charges,
         si.round_off,
+        si.due_date,
+        si.type_of_sale,
+        si.tax_id,
+        si.container_no,
+        si.contract_no,
+        si.contract_date,
+        si.consignment_no,
+        si.consignment_date,
         si.status_id,
         sm.status_name,
         si.updated_by,
@@ -1393,9 +1406,15 @@ def get_invoice_dtl_by_id_query():
         ili.uom_id,
         um.uom_name,
         ili.rate,
+        ili.discount_type,
+        ili.discounted_rate,
+        ili.discount_amount,
         ili.amount_without_tax,
         ili.total_amount,
         ili.sales_weight
+        ili.sales_weight,
+        ili.remarks,
+        ili.delivery_order_dtl_id
     FROM sales_invoice_dtl AS ili
     LEFT JOIN item_mst AS im ON im.item_id = ili.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = ili.uom_id
@@ -1409,29 +1428,42 @@ def insert_sales_invoice():
         invoice_date, invoice_no,
         branch_id, party_id,
         sales_delivery_order_id, broker_id,
+        billing_to_id, shipping_to_id,
         challan_no, challan_date,
         transporter_id, vehicle_no,
+        transporter_name, transporter_address,
+        transporter_state_code, transporter_state_name,
         eway_bill_no, eway_bill_date,
-        invoice_type, footer_notes, terms, terms_conditions,
+        invoice_type, footer_notes, internal_note, terms, terms_conditions,
         invoice_amount, tax_amount, tax_payable,
         freight_charges, round_off,
         shipping_state_code,
         intra_inter_state,
         status_id, active,
+        due_date, type_of_sale, tax_id,
+        container_no, contract_no, contract_date,
+        consignment_no, consignment_date,
+        status_id,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
         :branch_id, :party_id,
         :sales_delivery_order_id, :broker_id,
+        :billing_to_id, :shipping_to_id,
         :challan_no, :challan_date,
         :transporter_id, :vehicle_no,
+        :transporter_name, :transporter_address,
+        :transporter_state_code, :transporter_state_name,
         :eway_bill_no, :eway_bill_date,
-        :invoice_type, :footer_notes, :terms, :terms_conditions,
+        :invoice_type, :footer_notes, :internal_note, :terms, :terms_conditions,
         :invoice_amount, :tax_amount, :tax_payable,
         :freight_charges, :round_off,
         :shipping_state_code,
         :intra_inter_state,
-        :status_id, 1,
+        :due_date, :type_of_sale, :tax_id,
+        :container_no, :contract_no, :contract_date,
+        :consignment_no, :consignment_date,
+        :status_id,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1444,12 +1476,18 @@ def insert_invoice_line_item():
         quantity, uom_id, rate,
         amount_without_tax, total_amount,
         sales_weight
+        discount_type, discounted_rate, discount_amount,
+        amount_without_tax, total_amount,
+        sales_weight, remarks, delivery_order_dtl_id
     ) VALUES (
         :invoice_id,
         :hsn_code, :item_id, :item_make_id,
         :quantity, :uom_id, :rate,
         :amount_without_tax, :total_amount,
         :sales_weight
+        :discount_type, :discounted_rate, :discount_amount,
+        :amount_without_tax, :total_amount,
+        :sales_weight, :remarks, :delivery_order_dtl_id
     );"""
     return text(sql)
 
@@ -1461,14 +1499,21 @@ def update_sales_invoice():
         party_id = :party_id,
         sales_delivery_order_id = :sales_delivery_order_id,
         broker_id = :broker_id,
+        billing_to_id = :billing_to_id,
+        shipping_to_id = :shipping_to_id,
         challan_no = :challan_no,
         challan_date = :challan_date,
         transporter_id = :transporter_id,
         vehicle_no = :vehicle_no,
+        transporter_name = :transporter_name,
+        transporter_address = :transporter_address,
+        transporter_state_code = :transporter_state_code,
+        transporter_state_name = :transporter_state_name,
         eway_bill_no = :eway_bill_no,
         eway_bill_date = :eway_bill_date,
         invoice_type = :invoice_type,
         footer_notes = :footer_notes,
+        internal_note = :internal_note,
         terms = :terms,
         terms_conditions = :terms_conditions,
         invoice_amount = :invoice_amount,
@@ -1476,6 +1521,16 @@ def update_sales_invoice():
         tax_payable = :tax_payable,
         freight_charges = :freight_charges,
         round_off = :round_off,
+        shipping_state_code = :shipping_state_code,
+        intra_inter_state = :intra_inter_state,
+        due_date = :due_date,
+        type_of_sale = :type_of_sale,
+        tax_id = :tax_id,
+        container_no = :container_no,
+        contract_no = :contract_no,
+        contract_date = :contract_date,
+        consignment_no = :consignment_no,
+        consignment_date = :consignment_date,
         updated_by = :updated_by,
         updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
@@ -1485,6 +1540,49 @@ def update_sales_invoice():
 def delete_invoice_line_items():
     sql = """DELETE FROM sales_invoice_dtl
     WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_invoice_dtl_gst():
+    """Insert GST breakup for a sales invoice line item."""
+    sql = """INSERT INTO sales_invoice_dtl_gst (
+        invoice_line_item_id,
+        igst_amount, igst_percent,
+        cgst_amount, cgst_percent,
+        sgst_amount, sgst_percent,
+        gst_total
+    ) VALUES (
+        :invoice_line_item_id,
+        :igst_amount, :igst_percent,
+        :cgst_amount, :cgst_percent,
+        :sgst_amount, :sgst_percent,
+        :gst_total
+    );"""
+    return text(sql)
+
+
+def delete_invoice_dtl_gst():
+    """Delete GST breakup rows for all line items of an invoice."""
+    sql = """DELETE FROM sales_invoice_dtl_gst
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_invoice_dtl_gst_by_id_query():
+    """Get GST details for all line items of an invoice."""
+    sql = """SELECT
+        g.sales_invoice_dtl_gst_id,
+        g.invoice_line_item_id,
+        g.igst_amount, g.igst_percent,
+        g.cgst_amount, g.cgst_percent,
+        g.sgst_amount, g.sgst_percent,
+        g.gst_total
+    FROM sales_invoice_dtl_gst AS g
+    INNER JOIN sales_invoice_dtl AS d ON d.invoice_line_item_id = g.invoice_line_item_id
+    WHERE d.invoice_id = :invoice_id
+    ORDER BY g.invoice_line_item_id;"""
     return text(sql)
 
 

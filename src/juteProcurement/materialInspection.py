@@ -15,6 +15,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, date
+from src.common.utils import now_ist
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -576,7 +577,7 @@ async def complete_material_inspection(
 
         # Get user info for audit
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
 
         # Update jute_mr header fields if provided
         mr_updates = []

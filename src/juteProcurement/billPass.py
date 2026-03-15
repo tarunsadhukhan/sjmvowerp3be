@@ -9,6 +9,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 import logging
 from datetime import datetime
+from src.common.utils import now_ist
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from src.config.db import get_tenant_db
@@ -281,7 +282,7 @@ async def update_jute_bill_pass(
         if not result:
             raise HTTPException(status_code=404, detail="Bill pass not found or not in approved status")
 
-        now = datetime.now()
+        now = now_ist()
 
         # Build dynamic update query
         update_fields = ["updated_by = :updated_by", "updated_date_time = :updated_date_time"]

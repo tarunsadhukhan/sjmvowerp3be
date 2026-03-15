@@ -26,6 +26,7 @@ from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteYarnMst
 from src.models.item import ItemMst, ItemGrpMst
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -438,7 +439,7 @@ async def yarn_create(
         new_item = ItemMst(
             active=YARN_ITEM_DEFAULTS["active"],
             updated_by=updated_by or 0,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
             item_grp_id=parsed_grp_id,
             item_code=item_code,
             tangible=YARN_ITEM_DEFAULTS["tangible"],
@@ -466,7 +467,7 @@ async def yarn_create(
             item_id=new_item.item_id,
             co_id=int(co_id),  # backward compat
             updated_by=updated_by,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
         )
         db.add(new_yarn)
         db.commit()
@@ -557,7 +558,7 @@ async def yarn_edit(
                 item_record.item_code = item_code
                 item_record.item_grp_id = parsed_grp_id
                 item_record.updated_by = updated_by or item_record.updated_by
-                item_record.updated_date_time = datetime.now()
+                item_record.updated_date_time = now_ist()
         else:
             # --- Pre-migration row: no item_id yet — create item_mst ---
             _check_item_uniqueness(
@@ -571,7 +572,7 @@ async def yarn_edit(
             new_item = ItemMst(
                 active=YARN_ITEM_DEFAULTS["active"],
                 updated_by=updated_by or 0,
-                updated_date_time=datetime.now(),
+                updated_date_time=now_ist(),
                 item_grp_id=parsed_grp_id,
                 item_code=item_code,
                 tangible=YARN_ITEM_DEFAULTS["tangible"],
@@ -597,7 +598,7 @@ async def yarn_edit(
         existing.item_grp_id = parsed_grp_id
         existing.jute_yarn_remarks = jute_yarn_remarks
         existing.updated_by = updated_by
-        existing.updated_date_time = datetime.now()
+        existing.updated_date_time = now_ist()
         
         db.commit()
 

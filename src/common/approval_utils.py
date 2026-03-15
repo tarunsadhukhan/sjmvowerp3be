@@ -10,6 +10,7 @@ so the core approval logic remains module-agnostic.
 import logging
 from datetime import datetime
 from typing import Optional
+from src.common.utils import now_ist
 
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
@@ -93,7 +94,7 @@ def process_approval(
 
         # 3. Auto-transition from Open (1) to Pending Approval (20)
         if current_status_id == 1:
-            updated_at = datetime.utcnow()
+            updated_at = now_ist()
             update_q = update_status_fn()
             params = {
                 id_param_name: doc_id,
@@ -290,7 +291,7 @@ def process_approval(
             message = f"{doc_name} approved (no approval hierarchy configured)."
 
         # 12. Update document status
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_status_fn()
         params = {
             id_param_name: doc_id,
@@ -427,7 +428,7 @@ def process_rejection(
                     )
 
         # 3. Update status to Rejected (4), clear approval_level
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_status_fn()
         params = {
             id_param_name: doc_id,

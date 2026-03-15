@@ -4,6 +4,7 @@ Handles accountant review of inspected goods, adds rates/taxes, creates official
 """
 import logging
 from datetime import datetime, date
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -103,8 +104,9 @@ class SRSaveRequest(BaseModel):
 
 
 class SRApproveRequest(BaseModel):
-    """Request body for approving SR."""
+    """Request body for approving/rejecting SR."""
     inward_id: int
+    reason: Optional[str] = None
 
 
 # =============================================================================
@@ -135,7 +137,7 @@ def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
         return f"SR-{year}-{next_no:05d}"
     except Exception:
         # Fallback to timestamp-based number
-        return f"SR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        return f"SR-{now_ist().strftime('%Y%m%d%H%M%S')}"
 
 
 # =============================================================================
@@ -361,6 +363,7 @@ async def get_sr_by_inward_id(
                 "invoice_date": format_date(header.get("invoice_date")),
                 "invoice_amount": header.get("invoice_amount"),
                 "invoice_recvd_date": format_date(header.get("invoice_recvd_date")),
+                "invoice_no": header.get("invoice_no") or "",
                 "challan_no": header.get("challan_no") or "",
                 "challan_date": format_date(header.get("challan_date")),
                 "vehicle_number": header.get("vehicle_number") or "",
@@ -402,7 +405,7 @@ async def save_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         sr_date = datetime.strptime(request_body.sr_date, '%Y-%m-%d').date()
         
         # Calculate totals
@@ -671,7 +674,7 @@ async def open_sr(
     """Open SR for approval."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         # Update status to Open
         query = text("""
@@ -711,7 +714,7 @@ async def approve_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         today = date.today()
         
         # Get line items to check for rate differences and rejections
@@ -887,16 +890,18 @@ async def reject_sr(
     """Reject SR."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         query = text("""
             UPDATE proc_inward
-            SET sr_status = :status_id, updated_by = :updated_by, updated_date_time = :updated_date_time
+            SET sr_status = :status_id, sr_remarks = :reason,
+                updated_by = :updated_by, updated_date_time = :updated_date_time
             WHERE inward_id = :inward_id
         """)
         db.execute(query, {
             "inward_id": request_body.inward_id,
             "status_id": STATUS_REJECTED,
+            "reason": request_body.reason or "No reason provided",
             "updated_by": user_id,
             "updated_date_time": now,
         })

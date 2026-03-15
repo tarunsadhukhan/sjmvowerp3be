@@ -223,9 +223,8 @@ async def create_role_tenant_admin(
                 new_role = conRoleMaster(
                     con_role_name=role_data.roleName,
                     con_org_id=org_id,
-                    status=1,  # Assuming 1 means active
-                    updated_by=user_id,
-                    updated_date_time=func.now(),
+                    status=1,
+                    created_by=user_id,
                     is_enable=1
                 )
                 

@@ -25,6 +25,7 @@ from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteBatchPlan, JuteBatchPlanLi
 from datetime import datetime
+from src.common.utils import now_ist
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -493,7 +494,7 @@ async def batch_plan_create(
             branch_id=int(branch_id),
             plan_name=payload.plan_name.strip(),
             updated_by=user_id,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
         )
         db.add(batch_plan)
         db.flush()  # Get the auto-generated ID
@@ -505,7 +506,7 @@ async def batch_plan_create(
                 jute_quality_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
-                updated_date_time=datetime.now(),
+                updated_date_time=now_ist(),
             )
             db.add(line_item)
 
@@ -580,7 +581,7 @@ async def batch_plan_edit(
         # Update batch plan header
         batch_plan.plan_name = payload.plan_name.strip()
         batch_plan.updated_by = user_id
-        batch_plan.updated_date_time = datetime.now()
+        batch_plan.updated_date_time = now_ist()
 
         # Delete existing line items
         db.query(JuteBatchPlanLi).filter(
@@ -594,7 +595,7 @@ async def batch_plan_edit(
                 jute_quality_id=li.item_id,
                 percentage=li.percentage,
                 updated_by=user_id,
-                updated_date_time=datetime.now(),
+                updated_date_time=now_ist(),
             )
             db.add(line_item)
 

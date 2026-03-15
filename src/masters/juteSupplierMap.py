@@ -11,6 +11,7 @@ from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteSuppPartyMap
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -312,7 +313,7 @@ async def jute_supplier_map_create(
             "jute_supplier_id": int(jute_supplier_id),
             "party_id": int(party_id),
             "updated_by": user_id,
-            "updated_date_time": datetime.now(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
 

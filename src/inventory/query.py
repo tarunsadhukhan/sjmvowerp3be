@@ -117,7 +117,7 @@ def get_issue_details_query():
         il.machine_id,
         mm.machine_name,
         il.inward_dtl_id,
-        il.remarks
+        il.remarks,pi.inward_sequence_no as sr_no,pid.accepted_rate as rate
     FROM issue_li AS il
     LEFT JOIN item_mst AS im ON im.item_id = il.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
@@ -125,6 +125,8 @@ def get_issue_details_query():
     LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = il.expense_type_id
     LEFT JOIN cost_factor_mst AS cfm ON cfm.cost_factor_id = il.cost_factor_id
     LEFT JOIN machine_mst AS mm ON mm.machine_id = il.machine_id
+    left join proc_inward_dtl AS pid ON pid.inward_dtl_id = il.inward_dtl_id
+    left join proc_inward AS pi ON pi.inward_id = pid.inward_id
     WHERE il.issue_id = :issue_id
     ORDER BY il.issue_li_id;"""
     return text(sql)
