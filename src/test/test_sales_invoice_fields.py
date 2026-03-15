@@ -293,23 +293,25 @@ class TestGetSalesInvoiceById:
 
         gst_row = _mock_row({
             "invoice_line_item_id": 10,
-            "igst_amount": 0, "igst_percent": 0,
-            "cgst_amount": 180, "cgst_percent": 9,
-            "sgst_amount": 180, "sgst_percent": 9,
-            "gst_total": 360,
+            "igst_amount": 0, "igst_percentage": 0,
+            "cgst_amount": 180, "cgst_percentage": 9,
+            "sgst_amount": 180, "sgst_percentage": 9,
+            "tax_percentage": 18, "tax_amount": 360,
         })
 
-        # Mock execute side effects order: header, details, jute (caught exception), GST
+        # Mock execute side effects order: header, details, GST, jute header, jute detail
         header_exec = MagicMock()
         header_exec.fetchone.return_value = header
         detail_exec = MagicMock()
         detail_exec.fetchall.return_value = [detail]
-        jute_exec = MagicMock()
-        jute_exec.fetchone.return_value = None  # no jute data
         gst_exec = MagicMock()
         gst_exec.fetchall.return_value = [gst_row]
+        jute_exec = MagicMock()
+        jute_exec.fetchone.return_value = None  # no jute data
+        jute_dtl_exec = MagicMock()
+        jute_dtl_exec.fetchall.return_value = []
 
-        self._mock_session.execute.side_effect = [header_exec, detail_exec, jute_exec, gst_exec]
+        self._mock_session.execute.side_effect = [header_exec, detail_exec, gst_exec, jute_exec, jute_dtl_exec]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=1&co_id=1")
         assert response.status_code == 200
@@ -343,7 +345,7 @@ class TestGetSalesInvoiceById:
         assert "gst" in line
         assert line["gst"]["cgstAmount"] == 180
         assert line["gst"]["sgstPercent"] == 9
-        assert line["gst"]["gstTotal"] == 360
+        assert line["gst"]["taxAmount"] == 360
 
     def test_response_does_not_contain_tcs(self):
         """TCS fields should not be in the response."""
@@ -376,12 +378,14 @@ class TestGetSalesInvoiceById:
         header_exec.fetchone.return_value = header
         detail_exec = MagicMock()
         detail_exec.fetchall.return_value = []
-        jute_exec = MagicMock()
-        jute_exec.fetchone.return_value = None
         gst_exec = MagicMock()
         gst_exec.fetchall.return_value = []
+        jute_exec = MagicMock()
+        jute_exec.fetchone.return_value = None
+        jute_dtl_exec = MagicMock()
+        jute_dtl_exec.fetchall.return_value = []
 
-        self._mock_session.execute.side_effect = [header_exec, detail_exec, jute_exec, gst_exec]
+        self._mock_session.execute.side_effect = [header_exec, detail_exec, gst_exec, jute_exec, jute_dtl_exec]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=1&co_id=1")
         assert response.status_code == 200
@@ -401,7 +405,7 @@ class TestUpdateSalesInvoice:
         app.dependency_overrides.clear()
 
     def test_update_with_new_fields_succeeds(self):
-        # Mock: check exists, update header, delete GST, delete lines, insert line, insert GST
+        # Mock: check exists, update header, delete GST, delete jute_dtl, delete jute, delete lines, insert line, insert GST
         check_row = _mock_row({"invoice_id": 1, "status_id": 21, "active": 1})
         check_exec = MagicMock()
         check_exec.fetchone.return_value = check_row
@@ -412,6 +416,8 @@ class TestUpdateSalesInvoice:
             check_exec,    # check exists
             MagicMock(),   # update header
             MagicMock(),   # delete GST
+            MagicMock(),   # delete jute detail
+            MagicMock(),   # delete jute header
             MagicMock(),   # delete line items
             line_result,   # insert line item
             MagicMock(),   # insert GST

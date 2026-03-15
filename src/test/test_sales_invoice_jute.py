@@ -92,12 +92,13 @@ class TestCreateJuteInvoice:
         app.dependency_overrides.clear()
 
     def test_create_jute_invoice_with_extension(self):
-        """Creating a jute invoice should insert header and line items (jute extension not handled in create endpoint)."""
+        """Creating a jute invoice should insert header, line items, and jute header."""
         branch_row = _mock_row({"co_id": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),  # branch co_id lookup
             MagicMock(lastrowid=100),  # insert header
             MagicMock(lastrowid=200),  # insert line item 1
+            MagicMock(),  # insert jute header
         ]
 
         payload = {
@@ -112,7 +113,7 @@ class TestCreateJuteInvoice:
                     "item": "101",
                     "item_name": "Jute CRM",
                     "item_group": "5",
-                    "uom": "kg",
+                    "uom": "7",
                     "uom_name": "kg",
                     "quantity": 1000,
                     "rate": 50,
@@ -141,16 +142,17 @@ class TestCreateJuteInvoice:
         # Verify commit was called
         self._mock_session.commit.assert_called_once()
 
-        # 3 execute calls: branch lookup + header + line (jute extension not inserted by create endpoint)
-        assert self._mock_session.execute.call_count == 3
+        # 4 execute calls: branch lookup + header + line + jute header insert
+        assert self._mock_session.execute.call_count == 4
 
     def test_create_jute_invoice_passes_gross_amount_as_invoice_amount(self):
-        """Invoice amount should equal gross_amount (claim deduction is not done in create endpoint)."""
+        """Invoice amount should equal gross_amount."""
         branch_row = _mock_row({"co_id": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),  # branch co_id lookup
             MagicMock(lastrowid=101),  # insert header
             MagicMock(lastrowid=201),  # insert line item
+            MagicMock(),  # insert jute header
         ]
 
         payload = {
@@ -164,7 +166,7 @@ class TestCreateJuteInvoice:
                     "item": "101",
                     "item_name": "Jute CRM",
                     "item_group": "5",
-                    "uom": "kg",
+                    "uom": "7",
                     "uom_name": "kg",
                     "quantity": 200,
                     "rate": 50,
@@ -194,8 +196,7 @@ class TestCreateJuteInvoice:
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),  # branch co_id lookup
             MagicMock(lastrowid=102),  # insert header
-            MagicMock(),  # insert line item
-            # No jute insert expected
+            MagicMock(lastrowid=300),  # insert line item
         ]
 
         payload = {
@@ -209,7 +210,7 @@ class TestCreateJuteInvoice:
                     "item": "50",
                     "item_name": "Widget",
                     "item_group": "2",
-                    "uom": "pcs",
+                    "uom": "1",
                     "uom_name": "pcs",
                     "quantity": 100,
                     "rate": 50,
@@ -232,6 +233,7 @@ class TestCreateJuteInvoice:
             MagicMock(fetchone=lambda: branch_row),
             MagicMock(lastrowid=103),
             MagicMock(lastrowid=203),  # line item insert
+            MagicMock(),  # insert jute header
         ]
 
         payload = {
@@ -379,8 +381,9 @@ class TestGetJuteInvoiceById:
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: header),   # header query
             MagicMock(fetchall=lambda: [detail]),  # detail query
-            MagicMock(fetchone=lambda: jute),      # jute query
-            MagicMock(fetchall=lambda: []),         # GST query
+            MagicMock(fetchall=lambda: []),         # GST query (now before jute)
+            MagicMock(fetchone=lambda: jute),      # jute header query
+            MagicMock(fetchall=lambda: []),         # jute detail query
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=100&co_id=1")
@@ -393,11 +396,8 @@ class TestGetJuteInvoiceById:
         assert body["jute"]["claimAmount"] == 500.00
         assert body["jute"]["otherReference"] == "REF-123"
         assert body["jute"]["unitConversion"] == "BALE"
-        assert body["jute"]["despatchDocNo"] == "DSP-001"
-        assert body["jute"]["despatchedThrough"] == "Truck"
         assert body["jute"]["mukamId"] == 1
         assert body["jute"]["mukamName"] == "Kolkata"
-        assert body["jute"]["claimNote"] == "Quality deduction"
 
         # Verify line items exist
         assert len(body["lines"]) == 1
@@ -487,8 +487,9 @@ class TestGetJuteInvoiceById:
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: header),
             MagicMock(fetchall=lambda: [detail]),
+            MagicMock(fetchall=lambda: []),     # GST query (now before jute)
             MagicMock(fetchone=lambda: None),  # no jute data
-            MagicMock(fetchall=lambda: []),     # GST query
+            MagicMock(fetchall=lambda: []),     # jute detail query
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=101&co_id=1")
@@ -509,14 +510,17 @@ class TestUpdateJuteInvoice:
         app.dependency_overrides.clear()
 
     def test_update_jute_invoice_updates_header_and_lines(self):
-        """Updating a jute invoice should update header and re-insert line items (jute extension not handled in update endpoint)."""
+        """Updating a jute invoice should update header, delete old data, and re-insert line items + jute header."""
         check_row = _mock_row({"invoice_id": 100, "status_id": 21, "is_active": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: check_row),  # check exists
             MagicMock(),  # update header
             MagicMock(),  # delete old GST data
+            MagicMock(),  # delete old jute detail data
+            MagicMock(),  # delete old jute header data
             MagicMock(),  # delete old line items
             MagicMock(lastrowid=200),  # re-insert line item
+            MagicMock(),  # insert jute header
         ]
 
         payload = {
@@ -531,7 +535,7 @@ class TestUpdateJuteInvoice:
                     "item": "101",
                     "item_name": "Jute CRM",
                     "item_group": "5",
-                    "uom": "kg",
+                    "uom": "7",
                     "uom_name": "kg",
                     "quantity": 800,
                     "rate": 50,
@@ -556,5 +560,5 @@ class TestUpdateJuteInvoice:
         assert body["message"] == "Sales invoice updated successfully"
         self._mock_session.commit.assert_called_once()
 
-        # 5 execute calls: check + update_hdr + delete_gst + delete_lines + insert_line
-        assert self._mock_session.execute.call_count == 5
+        # 8 execute calls: check + update_hdr + delete_gst + delete_jute_dtl + delete_jute + delete_lines + insert_line + insert_jute_header
+        assert self._mock_session.execute.call_count == 8

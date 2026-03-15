@@ -172,29 +172,6 @@ class SaleInvoiceGovtskg(Base):
     # Relationships
     invoice: Mapped[Optional["InvoiceHdr"]] = relationship(
         "InvoiceHdr", back_populates="govtskg"
-        "SalesInvoiceDtlGst", back_populates="invoice_dtl"
-    )
-
-
-class SalesInvoiceDtlGst(Base):
-    """GST details for sales invoice line items."""
-    __tablename__ = "sales_invoice_dtl_gst"
-
-    sales_invoice_dtl_gst_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("sales_invoice_dtl.invoice_line_item_id"), nullable=True, index=True
-    )
-    igst_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    igst_percent: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    cgst_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    cgst_percent: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    sgst_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    sgst_percent: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-    gst_total: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
-
-    # Relationships
-    invoice_dtl: Mapped[Optional["InvoiceLineItem"]] = relationship(
-        "InvoiceLineItem", back_populates="gst_details"
     )
 
 
