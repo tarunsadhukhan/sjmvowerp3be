@@ -67,6 +67,8 @@
       "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/sr/createSR/components/SRLineItemsTable.tsx\")",
       "Bash(xxd)",
       "Read(//c/Program Files/**)",
+      "Bash(python -c \":*)",
+      "Bash(git -C /c/code/vowerp3be log --oneline -20)"
       "Bash(python -m pytest src/test/test_procurement_sr_approve.py src/test/test_procurement_sr_warehouse.py -v)",
       "Bash(.venv/Scripts/python -m pytest src/test/test_procurement_reports.py -v)",
       "Bash(PYTHONPATH=. pytest src/test/test_sales_order_hessian.py -v --tb=long)",

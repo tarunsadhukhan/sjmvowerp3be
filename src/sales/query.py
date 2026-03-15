@@ -1411,6 +1411,7 @@ def get_invoice_dtl_by_id_query():
         ili.discount_amount,
         ili.amount_without_tax,
         ili.total_amount,
+        ili.sales_weight
         ili.sales_weight,
         ili.remarks,
         ili.delivery_order_dtl_id
@@ -1438,6 +1439,7 @@ def insert_sales_invoice():
         freight_charges, round_off,
         shipping_state_code,
         intra_inter_state,
+        status_id, active,
         due_date, type_of_sale, tax_id,
         container_no, contract_no, contract_date,
         consignment_no, consignment_date,
@@ -1472,6 +1474,8 @@ def insert_invoice_line_item():
         invoice_id,
         hsn_code, item_id, item_make_id,
         quantity, uom_id, rate,
+        amount_without_tax, total_amount,
+        sales_weight
         discount_type, discounted_rate, discount_amount,
         amount_without_tax, total_amount,
         sales_weight, remarks, delivery_order_dtl_id
@@ -1479,6 +1483,8 @@ def insert_invoice_line_item():
         :invoice_id,
         :hsn_code, :item_id, :item_make_id,
         :quantity, :uom_id, :rate,
+        :amount_without_tax, :total_amount,
+        :sales_weight
         :discount_type, :discounted_rate, :discount_amount,
         :amount_without_tax, :total_amount,
         :sales_weight, :remarks, :delivery_order_dtl_id
@@ -1634,7 +1640,7 @@ def get_mukam_list():
 
 
 def insert_sale_invoice_jute():
-    """Insert jute-specific data for a sales invoice."""
+    """Insert jute-specific data for a sales invoice (DEPRECATED — use insert_sales_invoice_jute)."""
     sql = """INSERT INTO sale_invoice_jute (
         invoice_id, mr_no, mr_id,
         claim_amount, other_reference, unit_conversion,
@@ -1648,14 +1654,14 @@ def insert_sale_invoice_jute():
 
 
 def delete_sale_invoice_jute():
-    """Delete jute-specific data for a sales invoice (used in delete-reinsert on update)."""
+    """Delete jute-specific data for a sales invoice (DEPRECATED — use delete_sales_invoice_jute)."""
     sql = """DELETE FROM sale_invoice_jute
     WHERE invoice_id = :invoice_id;"""
     return text(sql)
 
 
 def get_sale_invoice_jute_by_id():
-    """Get jute-specific data for a sales invoice, including mukam name."""
+    """Get jute-specific data for a sales invoice (DEPRECATED — use get_sales_invoice_jute_by_id)."""
     sql = """SELECT
         sij.sale_invoice_jute_id,
         sij.invoice_id,
@@ -1672,4 +1678,142 @@ def get_sale_invoice_jute_by_id():
     FROM sale_invoice_jute AS sij
     LEFT JOIN jute_mukam_mst AS jm ON jm.mukam_id = sij.mukam_id
     WHERE sij.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE — GST (separate table)
+# =============================================================================
+
+def insert_sales_invoice_dtl_gst():
+    """Insert GST breakdown for a sales invoice line item."""
+    sql = """INSERT INTO sales_invoice_dtl_gst (
+        invoice_line_item_id,
+        tax_percentage,
+        cgst_amount, cgst_percentage,
+        sgst_amount, sgst_percentage,
+        igst_amount, igst_percentage,
+        tax_amount
+    ) VALUES (
+        :invoice_line_item_id,
+        :tax_percentage,
+        :cgst_amount, :cgst_percentage,
+        :sgst_amount, :sgst_percentage,
+        :igst_amount, :igst_percentage,
+        :tax_amount
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_dtl_gst():
+    """Hard delete GST rows for all line items of an invoice (re-inserted on update)."""
+    sql = """DELETE FROM sales_invoice_dtl_gst
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_dtl_gst_by_invoice_id():
+    """Get all GST rows for an invoice's line items."""
+    sql = """SELECT
+        g.sales_invoice_dtl_gst_id,
+        g.invoice_line_item_id,
+        g.tax_percentage,
+        g.cgst_amount, g.cgst_percentage,
+        g.sgst_amount, g.sgst_percentage,
+        g.igst_amount, g.igst_percentage,
+        g.tax_amount
+    FROM sales_invoice_dtl_gst AS g
+    WHERE g.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE — JUTE (new tables: sales_invoice_jute + sales_invoice_jute_dtl)
+# =============================================================================
+
+def insert_sales_invoice_jute():
+    """Insert header-level jute data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_jute (
+        invoice_id, mr_no, mr_id,
+        claim_amount, other_reference, unit_conversion,
+        claim_description, mukam_id
+    ) VALUES (
+        :invoice_id, :mr_no, :mr_id,
+        :claim_amount, :other_reference, :unit_conversion,
+        :claim_description, :mukam_id
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_jute():
+    """Delete header-level jute data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_jute
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_jute_by_id():
+    """Get header-level jute data for a sales invoice."""
+    sql = """SELECT
+        sij.sales_invoice_jute_id,
+        sij.invoice_id,
+        sij.mr_no,
+        sij.mr_id,
+        sij.claim_amount,
+        sij.other_reference,
+        sij.unit_conversion,
+        sij.claim_description,
+        sij.mukam_id,
+        jm.mukam_name
+    FROM sales_invoice_jute AS sij
+    LEFT JOIN jute_mukam_mst AS jm ON jm.mukam_id = sij.mukam_id
+    WHERE sij.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_jute_dtl():
+    """Insert per-line-item jute detail data."""
+    sql = """INSERT INTO sales_invoice_jute_dtl (
+        invoice_line_item_id,
+        claim_amount_dtl, claim_desc, claim_rate,
+        unit_conversion, qty_untit_conversion
+    ) VALUES (
+        :invoice_line_item_id,
+        :claim_amount_dtl, :claim_desc, :claim_rate,
+        :unit_conversion, :qty_untit_conversion
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_jute_dtl():
+    """Delete per-line-item jute detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_jute_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_jute_dtl_by_invoice_id():
+    """Get all per-line-item jute detail rows for an invoice."""
+    sql = """SELECT
+        jd.sales_invoice_jute_dtl_id,
+        jd.invoice_line_item_id,
+        jd.claim_amount_dtl,
+        jd.claim_desc,
+        jd.claim_rate,
+        jd.unit_conversion,
+        jd.qty_untit_conversion
+    FROM sales_invoice_jute_dtl AS jd
+    WHERE jd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
     return text(sql)

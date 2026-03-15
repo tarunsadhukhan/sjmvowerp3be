@@ -50,6 +50,8 @@ class InvoiceHdr(Base):
         Integer, ForeignKey("sales_delivery_order.sales_delivery_order_id"), nullable=True, index=True
     )
     broker_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    billing_to_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    shipping_to_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     challan_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     challan_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -57,6 +59,7 @@ class InvoiceHdr(Base):
     internal_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     freight_charges: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     intra_inter_state: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     shipping_state_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
@@ -91,6 +94,15 @@ class InvoiceHdr(Base):
         "InvoiceLineItem", back_populates="invoice", lazy="selectin"
     )
     delivery_order: Mapped[Optional["SalesDeliveryOrder"]] = relationship("SalesDeliveryOrder")
+    govtskg: Mapped[Optional["SaleInvoiceGovtskg"]] = relationship(
+        "SaleInvoiceGovtskg", back_populates="invoice", uselist=False
+    )
+    jute: Mapped[Optional["SaleInvoiceJute"]] = relationship(
+        "SaleInvoiceJute", back_populates="invoice", uselist=False
+    )
+    invoice_jute: Mapped[Optional["SalesInvoiceJute"]] = relationship(
+        "SalesInvoiceJute", back_populates="invoice", uselist=False
+    )
 
 
 class InvoiceLineItem(Base):
@@ -98,6 +110,18 @@ class InvoiceLineItem(Base):
     __tablename__ = "sales_invoice_dtl"
 
     invoice_line_item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    amount_without_tax: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    hsn_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=True, index=True
+    )
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_make_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quantity: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    total_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sales_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     invoice_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=True, index=True
     )
@@ -121,6 +145,33 @@ class InvoiceLineItem(Base):
         "InvoiceHdr", back_populates="line_items"
     )
     gst_details: Mapped[List["SalesInvoiceDtlGst"]] = relationship(
+        "SalesInvoiceDtlGst", back_populates="invoice_line_item"
+    )
+    jute_dtl: Mapped[List["SalesInvoiceJuteDtl"]] = relationship(
+        "SalesInvoiceJuteDtl", back_populates="invoice_line_item"
+    )
+
+
+class SaleInvoiceGovtskg(Base):
+    """Government/SKG-specific fields for sales invoices (shifted from sales_invoice)."""
+    __tablename__ = "sale_invoice_govtskg"
+
+    sale_invoice_govtskg_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=True, index=True
+    )
+    pcso_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pcso_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    administrative_office_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    destination_rail_head: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    loading_point: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pack_sheet: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
+    net_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
+    total_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
+
+    # Relationships
+    invoice: Mapped[Optional["InvoiceHdr"]] = relationship(
+        "InvoiceHdr", back_populates="govtskg"
         "SalesInvoiceDtlGst", back_populates="invoice_dtl"
     )
 
@@ -143,6 +194,71 @@ class SalesInvoiceDtlGst(Base):
 
     # Relationships
     invoice_dtl: Mapped[Optional["InvoiceLineItem"]] = relationship(
+        "InvoiceLineItem", back_populates="gst_details"
+    )
+
+
+class SalesInvoiceJute(Base):
+    """Jute-specific header fields for sales invoices (table: sales_invoice_jute)."""
+    __tablename__ = "sales_invoice_jute"
+
+    sales_invoice_jute_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=True, index=True
+    )
+    mr_no: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    mr_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    claim_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2), nullable=True)
+    other_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    unit_conversion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    claim_description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    mukam_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Relationships
+    invoice: Mapped[Optional["InvoiceHdr"]] = relationship(
+        "InvoiceHdr", back_populates="invoice_jute"
+    )
+
+
+class SalesInvoiceJuteDtl(Base):
+    """Jute-specific detail fields for invoice line items (table: sales_invoice_jute_dtl)."""
+    __tablename__ = "sales_invoice_jute_dtl"
+
+    sales_invoice_jute_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sales_invoice_dtl.invoice_line_item_id"), nullable=True
+    )
+    claim_amount_dtl: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    claim_desc: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    claim_rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    unit_conversion: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    qty_untit_conversion: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # production typo — do not rename
+
+    # Relationships
+    invoice_line_item: Mapped[Optional["InvoiceLineItem"]] = relationship(
+        "InvoiceLineItem", back_populates="jute_dtl"
+    )
+
+
+class SalesInvoiceDtlGst(Base):
+    """GST breakdown for sales invoice line items (table: sales_invoice_dtl_gst)."""
+    __tablename__ = "sales_invoice_dtl_gst"
+
+    sales_invoice_dtl_gst_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_line_item_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sales_invoice_dtl.invoice_line_item_id"), nullable=True
+    )
+    tax_percentage: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 2), nullable=True)
+    cgst_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    sgst_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    igst_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 2), nullable=True)
+    cgst_percentage: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 2), nullable=True)
+    sgst_percentage: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 2), nullable=True)
+    igst_percentage: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 2), nullable=True)
+    tax_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 2), nullable=True)
+
+    # Relationships
+    invoice_line_item: Mapped[Optional["InvoiceLineItem"]] = relationship(
         "InvoiceLineItem", back_populates="gst_details"
     )
 
