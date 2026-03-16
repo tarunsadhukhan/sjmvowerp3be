@@ -56,6 +56,8 @@ class TestSalesInvoiceSetupInvoiceTypes:
 
         mukam_list = []
 
+        approved_sos = []
+
         self._mock_session.execute.side_effect = [
             MagicMock(fetchall=lambda: branches),
             MagicMock(fetchall=lambda: customers),
@@ -65,6 +67,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: approved_sos),
             MagicMock(fetchall=lambda: mukam_list),
         ]
 
@@ -89,6 +92,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
         approved_dos = []
         item_groups = []
         invoice_types = []
+        approved_sos = []
         mukam_list = []
 
         self._mock_session.execute.side_effect = [
@@ -100,6 +104,7 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: approved_sos),
             MagicMock(fetchall=lambda: mukam_list),
         ]
 

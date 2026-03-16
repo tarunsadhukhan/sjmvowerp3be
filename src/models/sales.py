@@ -88,6 +88,11 @@ class InvoiceHdr(Base):
     eway_bill_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     eway_bill_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     round_off: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False, default=Decimal("0.00"))
+    payment_terms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sales_order_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sales_order.sales_order_id"), nullable=True, index=True
+    )
+    billing_state_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     line_items: Mapped[List["InvoiceLineItem"]] = relationship(
@@ -169,7 +174,7 @@ class InvoiceLineItem(Base):
 
 class SaleInvoiceGovtskg(Base):
     """Government/SKG-specific fields for sales invoices (shifted from sales_invoice)."""
-    __tablename__ = "sale_invoice_govtskg"
+    __tablename__ = "sales_invoice_govtskg"
 
     sale_invoice_govtskg_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     invoice_id: Mapped[Optional[int]] = mapped_column(

@@ -51,6 +51,7 @@ class TestQueryFunctions:
             ":due_date", ":type_of_sale", ":tax_id",
             ":container_no", ":contract_no", ":contract_date",
             ":consignment_no", ":consignment_date",
+            ":payment_terms", ":sales_order_id", ":billing_state_code",
         ]:
             assert bind in sql_str, f"Missing bind {bind} in insert_sales_invoice"
 
@@ -64,6 +65,7 @@ class TestQueryFunctions:
             ":container_no", ":contract_no", ":contract_date",
             ":consignment_no", ":consignment_date",
             ":shipping_state_code", ":intra_inter_state",
+            ":payment_terms", ":sales_order_id", ":billing_state_code",
         ]:
             assert bind in sql_str, f"Missing bind {bind} in update_sales_invoice"
 
@@ -83,6 +85,8 @@ class TestQueryFunctions:
             "due_date", "type_of_sale", "tax_id",
             "container_no", "contract_no", "contract_date",
             "consignment_no", "consignment_date",
+            "payment_terms", "sales_order_id", "billing_state_code",
+            "sales_order_date", "sales_order_no",
         ]:
             assert col in sql_str, f"Missing column {col} in get_invoice_by_id_query"
 
@@ -182,6 +186,9 @@ class TestCreateSalesInvoice:
             "gross_amount": 2000,
             "tax_amount": 360,
             "tax_payable": 360,
+            "payment_terms": 30,
+            "sales_order_id": 5,
+            "billing_state_code": 27,
         }
 
     def test_create_with_new_header_fields_succeeds(self):
@@ -271,6 +278,11 @@ class TestGetSalesInvoiceById:
             "status_id": 21, "status_name": "Draft",
             "updated_by": 1, "updated_date_time": None,
             "intra_inter_state": "intra",
+            "payment_terms": 30,
+            "sales_order_id": 5,
+            "billing_state_code": 27,
+            "sales_order_date": "2025-05-15",
+            "sales_order_no": 101,
         })
 
         detail = _mock_row({
@@ -332,6 +344,11 @@ class TestGetSalesInvoiceById:
         assert data["containerNo"] == "CONT123"
         assert data["contractNo"] == 456
         assert data["consignmentNo"] == "CG789"
+        assert data["paymentTerms"] == 30
+        assert data["salesOrderId"] == 5
+        assert data["billingStateCode"] == 27
+        assert data["salesOrderDate"] == "2025-05-15"
+        assert data["salesOrderNo"] == 101
 
         # Line items with new fields
         line = data["lines"][0]
@@ -372,6 +389,9 @@ class TestGetSalesInvoiceById:
             "status_id": 21, "status_name": "Draft",
             "updated_by": 1, "updated_date_time": None,
             "intra_inter_state": None,
+            "payment_terms": None, "sales_order_id": None,
+            "billing_state_code": None,
+            "sales_order_date": None, "sales_order_no": None,
         })
 
         header_exec = MagicMock()
@@ -418,6 +438,7 @@ class TestUpdateSalesInvoice:
             MagicMock(),   # delete GST
             MagicMock(),   # delete jute detail
             MagicMock(),   # delete jute header
+            MagicMock(),   # delete govtskg header
             MagicMock(),   # delete line items
             line_result,   # insert line item
             MagicMock(),   # insert GST

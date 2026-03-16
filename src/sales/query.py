@@ -46,6 +46,7 @@ def get_customer_branches_bulk(co_id: int = None):
         COALESCE(pbm.zip_code, '') AS zip_code,
         pbm.state_id,
         sm.state AS state_name,
+        sm.state_code,
         pbm.gst_no
     FROM party_branch_mst pbm
     LEFT JOIN party_mst pm ON pm.party_id = pbm.party_id
@@ -1235,11 +1236,15 @@ def get_approved_delivery_orders_query():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
-        sdo.net_amount
+        sdo.net_amount,
+        sdo.sales_order_id,
+        so.sales_order_date,
+        so.sales_no AS sales_order_no
     FROM sales_delivery_order AS sdo
     LEFT JOIN branch_mst AS bm ON bm.branch_id = sdo.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = sdo.party_id
+    LEFT JOIN sales_order AS so ON so.sales_order_id = sdo.sales_order_id
     WHERE sdo.status_id = 3
         AND sdo.active = 1
         AND (:branch_id IS NULL OR sdo.branch_id = :branch_id)
@@ -1280,6 +1285,32 @@ def get_delivery_order_lines_for_invoice():
     WHERE sdod.sales_delivery_order_id = :sales_delivery_order_id
         AND sdod.active = 1
     ORDER BY sdod.sales_delivery_order_dtl_id;"""
+    return text(sql)
+
+
+def get_approved_sales_orders_for_invoice():
+    """Get approved sales orders (status_id=3) for dropdown when creating invoice."""
+    sql = """SELECT
+        so.sales_order_id,
+        so.sales_no,
+        so.sales_order_date,
+        so.party_id,
+        pm.supp_name AS party_name,
+        so.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        so.payment_terms
+    FROM sales_order AS so
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = so.party_id
+    WHERE so.status_id = 3
+        AND so.active = 1
+        AND (:branch_id IS NULL OR so.branch_id = :branch_id)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    ORDER BY so.sales_order_date DESC, so.sales_order_id DESC;"""
     return text(sql)
 
 
@@ -1348,7 +1379,19 @@ def get_invoice_by_id_query():
         si.sales_delivery_order_id,
         si.broker_id,
         si.billing_to_id,
+        pbill.address AS billing_address,
+        pbill.gst_no AS billing_gst_no,
+        pbill.state_id AS billing_state_id,
+        sbill.state AS billing_state_name,
+        pbill.contact_person AS billing_contact_person,
+        pbill.contact_no AS billing_contact_no,
         si.shipping_to_id,
+        pship.address AS shipping_address,
+        pship.gst_no AS shipping_gst_no,
+        pship.state_id AS shipping_state_id,
+        sship.state AS shipping_state_name,
+        pship.contact_person AS shipping_contact_person,
+        pship.contact_no AS shipping_contact_no,
         si.internal_note,
         si.shipping_state_code,
         si.transporter_id,
@@ -1381,13 +1424,23 @@ def get_invoice_by_id_query():
         sm.status_name,
         si.updated_by,
         si.updated_date_time,
-        si.intra_inter_state
+        si.intra_inter_state,
+        si.payment_terms,
+        si.sales_order_id,
+        si.billing_state_code,
+        so.sales_order_date,
+        so.sales_no AS sales_order_no
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN party_mst AS trns ON trns.party_id = si.transporter_id
     LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
+    LEFT JOIN party_branch_mst AS pbill ON pbill.party_mst_branch_id = si.billing_to_id
+    LEFT JOIN state_mst AS sbill ON sbill.state_id = pbill.state_id
+    LEFT JOIN party_branch_mst AS pship ON pship.party_mst_branch_id = si.shipping_to_id
+    LEFT JOIN state_mst AS sship ON sship.state_id = pship.state_id
+    LEFT JOIN sales_order AS so ON so.sales_order_id = si.sales_order_id
     WHERE si.invoice_id = :invoice_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)
@@ -1411,7 +1464,6 @@ def get_invoice_dtl_by_id_query():
         ili.discount_amount,
         ili.amount_without_tax,
         ili.total_amount,
-        ili.sales_weight
         ili.sales_weight,
         ili.remarks,
         ili.delivery_order_dtl_id
@@ -1443,6 +1495,7 @@ def insert_sales_invoice():
         due_date, type_of_sale, tax_id,
         container_no, contract_no, contract_date,
         consignment_no, consignment_date,
+        payment_terms, sales_order_id, billing_state_code,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
@@ -1459,9 +1512,11 @@ def insert_sales_invoice():
         :freight_charges, :round_off,
         :shipping_state_code,
         :intra_inter_state,
+        :status_id, :active,
         :due_date, :type_of_sale, :tax_id,
         :container_no, :contract_no, :contract_date,
         :consignment_no, :consignment_date,
+        :payment_terms, :sales_order_id, :billing_state_code,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1525,6 +1580,9 @@ def update_sales_invoice():
         contract_date = :contract_date,
         consignment_no = :consignment_no,
         consignment_date = :consignment_date,
+        payment_terms = :payment_terms,
+        sales_order_id = :sales_order_id,
+        billing_state_code = :billing_state_code,
         updated_by = :updated_by,
         updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
@@ -1963,6 +2021,49 @@ def get_sales_invoice_juteyarn_dtl_by_invoice_id():
         SELECT invoice_line_item_id FROM sales_invoice_dtl
         WHERE invoice_id = :invoice_id
     );"""
+    return text(sql)
+
+
+# =============================================================================
+# GOVT SKG INVOICE HEADER EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_govtskg():
+    """Insert header-level govt SKG data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_govtskg (
+        invoice_id, pcso_no, pcso_date,
+        administrative_office_address, destination_rail_head,
+        loading_point, pack_sheet, net_weight, total_weight
+    ) VALUES (
+        :invoice_id, :pcso_no, :pcso_date,
+        :administrative_office_address, :destination_rail_head,
+        :loading_point, :pack_sheet, :net_weight, :total_weight
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_govtskg():
+    """Delete header-level govt SKG data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_govtskg
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_govtskg_by_id():
+    """Get header-level govt SKG data for a sales invoice."""
+    sql = """SELECT
+        sg.sale_invoice_govtskg_id,
+        sg.invoice_id,
+        sg.pcso_no,
+        sg.pcso_date,
+        sg.administrative_office_address,
+        sg.destination_rail_head,
+        sg.loading_point,
+        sg.pack_sheet,
+        sg.net_weight,
+        sg.total_weight
+    FROM sales_invoice_govtskg AS sg
+    WHERE sg.invoice_id = :invoice_id;"""
     return text(sql)
 
 

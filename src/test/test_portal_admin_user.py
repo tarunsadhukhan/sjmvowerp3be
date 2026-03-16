@@ -178,18 +178,16 @@ class TestCreatePortalAdminUser:
         assert response.status_code == 422
 
     def test_create_user_default_password_used(self):
-        """Should accept request with default password."""
-        payload = {
-            "org_id": 1,
-            "email": "admin@test.com",
-            "name": "Admin User"
-            # password omitted — should use default
-        }
+        """Should accept payload without password and apply default."""
+        from src.common.ctrldskAdmin.users import CreatePortalAdminUser
 
-        # This only checks that the schema accepts the payload (default applied)
-        response = client.post("/api/ctrldskAdmin/create_portal_admin_user", json=payload)
-        # Will fail at DB level since we don't mock, but validates schema acceptance
-        assert response.status_code in [200, 500]  # 500 = schema accepted, DB not mocked
+        model = CreatePortalAdminUser(
+            org_id=1,
+            email="admin@test.com",
+            name="Admin User"
+            # password omitted — should use default
+        )
+        assert model.password == "vowjute@1234"
 
 
 class TestGetPortalAdminUsers:
