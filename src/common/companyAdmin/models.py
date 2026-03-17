@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, TIMESTAMP, ForeignKey, func
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
@@ -75,7 +75,7 @@ class conRoleMaster(Base):
     con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=False)
     status = Column(Integer, nullable=False)
     updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     con_company_id = Column(Integer, nullable=True)
     is_enable = Column(Integer, nullable=False, default=1)
 
@@ -86,7 +86,7 @@ class ConUserRoleMapping(Base):
     con_role_id = Column(Integer, ForeignKey('con_role_master.con_role_id'), nullable=False, index=True)
     con_user_id = Column(Integer, ForeignKey('con_user_master.con_user_id'), nullable=False, index=True)
     updated_by = Column(Integer, nullable=False, index=True)
-    updated_date_time = Column(DateTime, nullable=True, server_default=func.now())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 class CoMst(Base):
@@ -199,7 +199,7 @@ class CoConfig(Base):
     do_required = Column(Boolean, default=False)
     gst_linked = Column(Boolean, default=False)
     updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     # Relationships
     company = relationship("CoMst", backref="config")

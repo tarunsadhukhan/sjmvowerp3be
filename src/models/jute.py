@@ -18,6 +18,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    TIMESTAMP,
     func,
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
@@ -192,7 +193,7 @@ class JuteMr(Base):
 
     # Audit fields
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     # Relationships
     line_items: Mapped[List["JuteMrLi"]] = relationship(
@@ -255,7 +256,7 @@ class JuteMrLi(Base):
     status: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
-    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     # Relationships
     jute_mr: Mapped[Optional["JuteMr"]] = relationship(

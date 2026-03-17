@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TIMESTAMP,
     func,
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
@@ -574,7 +575,7 @@ class ProcInwardDtl(Base):
     warehouse_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    updated_date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_date_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Relationships
@@ -657,7 +658,7 @@ class ProcPoDtl(Base):
     active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     indent_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     state: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
