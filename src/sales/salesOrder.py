@@ -309,6 +309,7 @@ async def get_sales_order_table(
                 "sales_order_id": mapped.get("sales_order_id"),
                 "sales_no": formatted_no,
                 "sales_order_date": format_date(mapped.get("sales_order_date")),
+                "branch_id": mapped.get("branch_id"),
                 "branch_name": mapped.get("branch_name"),
                 "party_name": mapped.get("party_name"),
                 "quotation_no": mapped.get("quotation_no"),

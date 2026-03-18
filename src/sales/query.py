@@ -94,7 +94,8 @@ def get_item_by_group_id_saleable(item_group_id: int):
     """Get saleable items for a given item group, including tax_percentage and hsn_code."""
     sql = """SELECT im.item_id, im.item_code, im.item_name,
         im.uom_id, um.uom_name,
-        im.tax_percentage, im.hsn_code
+        im.tax_percentage, im.hsn_code,
+        im.uom_rounding, im.rate_rounding
     FROM item_mst im
     LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
     WHERE im.item_grp_id = :item_group_id
