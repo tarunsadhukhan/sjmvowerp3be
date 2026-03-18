@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, TIMESTAMP, ForeignKey, func
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
@@ -200,7 +200,7 @@ class CoConfig(Base):
     do_required = Column(Boolean, default=False)
     gst_linked = Column(Boolean, default=False)
     updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     # Relationships
     company = relationship("CoMst", backref="config")

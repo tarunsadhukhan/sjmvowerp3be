@@ -13,7 +13,9 @@ from sqlalchemy import (
     Double,
     Boolean,
     DECIMAL,
+    TIMESTAMP,
     ForeignKey,
+    func,
 )
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -35,7 +37,7 @@ class ApprovalMst(Base):
     max_amount_single = Column(Double, nullable=True)
     day_max_amount = Column(Double, nullable=True)
     month_max_amount = Column(Double, nullable=True)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=False)
 
 
@@ -60,7 +62,7 @@ class BranchMst(Base):
     branch_email = Column(String(255), nullable=True)
     active = Column(Boolean, nullable=True)
     gst_verified = Column(Boolean, nullable=True)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=False)
     branch_prefix = Column(String(100), nullable=True)
 
@@ -91,7 +93,7 @@ class CoMst(Base):
     tally_sync = Column(String(255), nullable=True)
     alert_email_id = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -105,7 +107,7 @@ class CostFactorMst(Base):
     cost_factor_name = Column(String(255), nullable=True)
     cost_factor_desc = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=False, index=True)
     dept_id = Column(Integer, ForeignKey("dept_mst.dept_id"), nullable=True, index=True)
 
@@ -149,6 +151,75 @@ class DeptMst(Base):
 
 
 # =============================================================================
+# DESIGNATION MASTER
+# =============================================================================
+class DesignationMst(Base):
+    """Designation master - employee designations scoped by company and branch.
+    Migrated from vowsls.designation with branch_id replacing company_id."""
+    __tablename__ = "designation_mst"
+
+    designation_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    branch_id = Column(BigInteger, nullable=True, index=True)
+    dept_id = Column(BigInteger, nullable=True)
+    desig = Column(String(255), nullable=True)
+    norms = Column(String(255), nullable=True)
+    time_piece = Column(String(255), nullable=True)
+    direct_indirect = Column(String(255), nullable=True)
+    on_machine = Column(String(255), nullable=True)
+    machine_type = Column(String(255), nullable=True)
+    no_of_machines = Column(String(255), nullable=True)
+    cost_code = Column(String(255), nullable=True)
+    cost_description = Column(String(255), nullable=True)
+    piece_rate_type = Column(String(255), nullable=True)
+    active = Column(Integer, default=1, server_default="1")
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+
+
+# =============================================================================
+# WORKER CATEGORY MASTER
+# =============================================================================
+class CategoryMst(Base):
+    """Worker category master - employee worker categories."""
+    __tablename__ = "category_mst"
+
+    cata_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    cata_code = Column(String(255), nullable=True)
+    cata_desc = Column(String(255), nullable=True)
+    branch_id = Column(Integer, nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+
+
+# =============================================================================
+# CONTRACTOR MASTER
+# =============================================================================
+class ContractorMst(Base):
+    """Contractor master - contractor registration and details."""
+    __tablename__ = "contractor_mst"
+
+    cont_id = Column(Integer, primary_key=True, autoincrement=True)
+    address_1 = Column(String(255), nullable=True)
+    address_2 = Column(String(255), nullable=True)
+    address_3 = Column(String(255), nullable=True)
+    bank_acc_no = Column(String(255), nullable=True)
+    bank_name = Column(String(25), nullable=True)
+    ifsc_code = Column(String(25), nullable=True)
+    branch_id = Column(Integer, nullable=True)
+    email_id = Column(String(255), nullable=True)
+    esi_code = Column(String(25), nullable=True)
+    contractor_name = Column(String(50), nullable=True)
+    aadhar_no = Column(String(20), nullable=True)
+    pan_no = Column(String(25), nullable=True)
+    pf_code = Column(String(25), nullable=True)
+    phone_no = Column(String(255), nullable=True)
+    date_of_registration = Column(Date, nullable=True)
+    date_of_registration_mill = Column(Date, nullable=True)
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+
+
+# =============================================================================
 # ENTITY TYPE MASTER
 # =============================================================================
 class EntityTypeMst(Base):
@@ -183,7 +254,7 @@ class ItemGrpMst(Base):
     active = Column(String(255), nullable=True)
     co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=True, index=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     item_grp_name = Column(String(255), nullable=True)
     item_grp_code = Column(String(255), nullable=True)
     purchase_code = Column(BigInteger, nullable=True)
@@ -205,7 +276,7 @@ class ItemMinmaxMst(Base):
     min_order_qty = Column(Double, nullable=True)
     lead_time = Column(Integer, nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     active = Column(Integer, nullable=True)
 
 
@@ -218,7 +289,7 @@ class ItemMst(Base):
 
     item_id = Column(Integer, primary_key=True, autoincrement=True)
     active = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=False)
     item_grp_id = Column(BigInteger, ForeignKey("item_grp_mst.item_grp_id"), nullable=True, index=True)
     item_code = Column(String(255), nullable=True)
@@ -251,7 +322,7 @@ class MachineMst(Base):
     machine_type_id = Column(Integer, nullable=False)
     updated_by = Column(Integer, nullable=False)
     remarks = Column(String(255), nullable=True)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     active = Column(Integer, nullable=False)
     mech_posting_code = Column(Integer, nullable=True)
     mech_code = Column(String(100), nullable=False)
@@ -267,7 +338,7 @@ class MachineTypeMst(Base):
     machine_type_id = Column(Integer, primary_key=True, autoincrement=True)
     machine_type_name = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     active = Column(Integer, nullable=False)
 
 
@@ -333,7 +404,7 @@ class PartyBranchMst(Base):
     contact_no = Column(String(25), nullable=True)
     contact_person = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -346,7 +417,7 @@ class PartyMst(Base):
     party_id = Column(Integer, primary_key=True, autoincrement=True)
     active = Column(Integer, nullable=False)
     prefix = Column(String(25), nullable=True)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=False)
     phone_no = Column(String(25), nullable=True)
     cin = Column(String(25), nullable=True)
@@ -392,7 +463,7 @@ class ProjectMst(Base):
     active = Column(Integer, nullable=False)
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=True, index=True)
     updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     party_id = Column(Integer, ForeignKey("party_mst.party_id"), nullable=True, index=True)
     dept_id = Column(Integer, ForeignKey("dept_mst.dept_id"), nullable=True, index=True)
 
@@ -408,7 +479,7 @@ class RolesMst(Base):
     role_name = Column(String(255), nullable=False, unique=True)
     active = Column(Boolean, nullable=True)
     updated_by_con_user = Column(Integer, nullable=True)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -449,7 +520,7 @@ class SubDeptMst(Base):
     sub_dept_code = Column(String(25), nullable=True)
     sub_dept_desc = Column(String(30), nullable=True)
     dept_id = Column(Integer, ForeignKey("dept_mst.dept_id"), nullable=True, index=True)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     order_no = Column(Integer, nullable=True)
 
 
@@ -462,7 +533,7 @@ class TaxMst(Base):
 
     tax_id = Column(BigInteger, primary_key=True)  # No auto_increment
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     tax_name = Column(String(255), nullable=True)
     tax_percentage = Column(DECIMAL(10, 2), nullable=True)
     is_active = Column(Boolean, nullable=False)
@@ -510,7 +581,7 @@ class UomItemMapMst(Base):
     relation_value = Column(Double, nullable=True)
     rounding = Column(Integer, nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -524,7 +595,7 @@ class UomMst(Base):
     active = Column(Boolean, nullable=False)
     uom_name = Column(String(255), nullable=True)
     updated_by = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -541,7 +612,7 @@ class UserMst(Base):
     refresh_token = Column(String(255), nullable=True)
     active = Column(Boolean, nullable=False)
     updated_by_con_user = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=False)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 
 # =============================================================================
@@ -553,7 +624,7 @@ class WarehouseMst(Base):
 
     warehouse_id = Column(Integer, primary_key=True, autoincrement=True)
     warehouse_name = Column(String(30), nullable=True)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=True)
     warehouse_type = Column(String(20), nullable=True)
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=True, index=True)
@@ -571,5 +642,5 @@ class AdditionalChargesMst(Base):
     additional_charges_name = Column(String(100), nullable=True)
     default_value = Column(Double, nullable=True)  # Default tax percentage
     active = Column(Boolean, nullable=True, default=True)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by = Column(Integer, nullable=True)

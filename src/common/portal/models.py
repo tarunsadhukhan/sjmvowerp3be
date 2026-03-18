@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, func
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, TIMESTAMP, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy import Float
@@ -16,7 +16,7 @@ class ConUser(Base):
     refresh_token = Column(String(255))
     active = Column(Boolean, nullable=False)
     updated_by_con_user = Column(Integer)
-    updated_date_time = Column(DateTime, default=func.now())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 class conRoleMaster(Base):
     __tablename__ = "roles_mst"
@@ -25,7 +25,7 @@ class conRoleMaster(Base):
     role_name = Column(String(255), nullable=False, unique=True)
     active = Column(Boolean)
     updated_by_con_user = Column(Integer)
-    updated_date_time = Column(DateTime, default=func.now())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
 class ConRoleMenuMap(Base):
     __tablename__ = "role_menu_map"
@@ -46,7 +46,7 @@ class UserRoleMap(Base):
     co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False)
     branch_id = Column(Integer, ForeignKey("branch_mst.branch_id"), nullable=False)
     updated_by_con_user = Column(Integer)
-    updated_date_time = Column(DateTime, default=func.now())
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     user = relationship("ConUser", foreign_keys=[user_id], backref="role_maps")
 
@@ -130,7 +130,7 @@ class ApprovalMst(Base):
     day_max_amount    = Column(Float)
     month_max_amount  = Column(Float)
     updated_by        = Column(Integer, nullable=False)
-    updated_date_time = Column(DateTime, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
 
     # relationships
     menu   = relationship("MenuMst",   foreign_keys=[menu_id])
