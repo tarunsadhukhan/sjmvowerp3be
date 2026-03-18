@@ -221,6 +221,11 @@ async def get_sales_invoice_setup_1(
                 "payment_terms": mapped.get("payment_terms"),
             })
 
+        # Additional charges master
+        from src.sales.query import get_additional_charges_dropdown
+        charges_result = db.execute(get_additional_charges_dropdown()).fetchall()
+        additional_charges_master = [dict(r._mapping) for r in charges_result]
+
         return {
             "branches": branches,
             "customers": customers,
@@ -231,6 +236,7 @@ async def get_sales_invoice_setup_1(
             "invoice_types": invoice_types,
             "mukam_list": mukam_list,
             "approved_sales_orders": approved_sales_orders,
+            "additional_charges_master": additional_charges_master,
         }
     except HTTPException:
         raise
@@ -561,6 +567,14 @@ async def get_sales_invoice_by_id(
                 }
         except Exception:
             pass
+
+        # Load additional charges
+        try:
+            from src.sales.query import get_sales_invoice_additional_by_id
+            additional_results = db.execute(get_sales_invoice_additional_by_id(), {"invoice_id": invoice_id}).fetchall()
+            response["additionalCharges"] = [dict(r._mapping) for r in additional_results]
+        except Exception:
+            response["additionalCharges"] = []
 
         for detail in details:
             lineitem_id = detail.get("invoice_line_item_id")
@@ -904,6 +918,37 @@ async def create_sales_invoice(
                 "total_weight": to_float(govtskg_data.get("total_weight"), "total_weight"),
             })
 
+        # Insert additional charges
+        additional_charges_list = payload.get("additional_charges") or []
+        if additional_charges_list:
+            from src.sales.query import insert_sales_invoice_additional, insert_sales_invoice_additional_gst
+            add_query = insert_sales_invoice_additional()
+            add_gst_query = insert_sales_invoice_additional_gst()
+            for charge in additional_charges_list:
+                charge_result = db.execute(add_query, {
+                    "invoice_id": invoice_id,
+                    "additional_charges_id": to_int(charge.get("additional_charges_id"), "additional_charges_id"),
+                    "qty": to_float(charge.get("qty"), "qty"),
+                    "rate": to_float(charge.get("rate"), "rate"),
+                    "net_amount": to_float(charge.get("net_amount"), "net_amount"),
+                    "remarks": charge.get("remarks"),
+                    "updated_by": user_id,
+                    "updated_date_time": created_at,
+                })
+                charge_id = charge_result.lastrowid
+                gst_data = charge.get("gst")
+                if gst_data and isinstance(gst_data, dict) and charge_id:
+                    db.execute(add_gst_query, {
+                        "sales_invoice_additional_id": charge_id,
+                        "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                        "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                        "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                        "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                        "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                        "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                        "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                    })
+
         db.commit()
         return {"message": "Sales invoice created successfully", "invoice_id": invoice_id}
     except HTTPException as exc:
@@ -1052,6 +1097,11 @@ async def update_sales_invoice_endpoint(
         db.execute(delete_sales_invoice_jute(), {"invoice_id": invoice_id})
         db.execute(delete_sales_invoice_govtskg(), {"invoice_id": invoice_id})
 
+        # Delete old additional charges
+        from src.sales.query import delete_sales_invoice_additional_gst, delete_sales_invoice_additional
+        db.execute(delete_sales_invoice_additional_gst(), {"invoice_id": invoice_id})
+        db.execute(delete_sales_invoice_additional(), {"invoice_id": invoice_id})
+
         # Soft-delete old line items
         delete_q = delete_invoice_line_items()
         db.execute(delete_q, {"invoice_id": invoice_id})
@@ -1171,6 +1221,37 @@ async def update_sales_invoice_endpoint(
                 "net_weight": to_float(govtskg_data.get("net_weight"), "net_weight"),
                 "total_weight": to_float(govtskg_data.get("total_weight"), "total_weight"),
             })
+
+        # Re-insert additional charges
+        additional_charges_list = payload.get("additional_charges") or []
+        if additional_charges_list:
+            from src.sales.query import insert_sales_invoice_additional, insert_sales_invoice_additional_gst
+            add_query = insert_sales_invoice_additional()
+            add_gst_query = insert_sales_invoice_additional_gst()
+            for charge in additional_charges_list:
+                charge_result = db.execute(add_query, {
+                    "invoice_id": invoice_id,
+                    "additional_charges_id": to_int(charge.get("additional_charges_id"), "additional_charges_id"),
+                    "qty": to_float(charge.get("qty"), "qty"),
+                    "rate": to_float(charge.get("rate"), "rate"),
+                    "net_amount": to_float(charge.get("net_amount"), "net_amount"),
+                    "remarks": charge.get("remarks"),
+                    "updated_by": user_id,
+                    "updated_date_time": updated_at,
+                })
+                charge_id = charge_result.lastrowid
+                gst_data = charge.get("gst")
+                if gst_data and isinstance(gst_data, dict) and charge_id:
+                    db.execute(add_gst_query, {
+                        "sales_invoice_additional_id": charge_id,
+                        "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                        "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                        "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                        "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                        "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                        "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                        "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                    })
 
         db.commit()
         return {"message": "Sales invoice updated successfully", "invoice_id": invoice_id}

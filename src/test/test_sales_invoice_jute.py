@@ -21,7 +21,7 @@ def _mock_row(mapping: dict):
 
 
 def _setup_side_effects():
-    """Return the 10 mock DB calls for get_sales_invoice_setup_1."""
+    """Return the 11 mock DB calls for get_sales_invoice_setup_1."""
     return [
         MagicMock(fetchall=lambda: [_mock_row({"branch_id": 1, "branch_name": "Main"})]),  # branches
         MagicMock(fetchall=lambda: [_mock_row({"party_id": 10, "party_name": "Customer A"})]),  # customers
@@ -39,6 +39,7 @@ def _setup_side_effects():
             _mock_row({"mukam_id": 2, "mukam_name": "Siliguri"}),
         ]),  # mukam_list
         MagicMock(fetchall=lambda: []),  # approved_sales_orders
+        MagicMock(fetchall=lambda: []),  # additional_charges_master
     ]
 
 
@@ -520,6 +521,8 @@ class TestUpdateJuteInvoice:
             MagicMock(),  # delete old jute detail data
             MagicMock(),  # delete old jute header data
             MagicMock(),  # delete old govtskg header data
+            MagicMock(),  # delete old additional charges GST
+            MagicMock(),  # delete old additional charges
             MagicMock(),  # delete old line items
             MagicMock(lastrowid=200),  # re-insert line item
             MagicMock(),  # insert jute header
@@ -562,5 +565,5 @@ class TestUpdateJuteInvoice:
         assert body["message"] == "Sales invoice updated successfully"
         self._mock_session.commit.assert_called_once()
 
-        # 9 execute calls: check + update_hdr + delete_gst + delete_jute_dtl + delete_jute + delete_govtskg + delete_lines + insert_line + insert_jute_header
-        assert self._mock_session.execute.call_count == 9
+        # 11 execute calls: check + update_hdr + delete_gst + delete_jute_dtl + delete_jute + delete_govtskg + delete_additional_gst + delete_additional + delete_lines + insert_line + insert_jute_header
+        assert self._mock_session.execute.call_count == 11

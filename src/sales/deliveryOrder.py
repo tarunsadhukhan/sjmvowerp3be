@@ -147,6 +147,7 @@ async def get_delivery_order_setup_1(
                 "sales_order_date": format_date(mapped.get("sales_order_date")),
                 "party_name": mapped.get("party_name"),
                 "net_amount": mapped.get("net_amount"),
+                "invoice_type": mapped.get("invoice_type"),
             })
 
         # Item groups (for manual entry without sales order)
@@ -396,6 +397,7 @@ async def get_delivery_order_by_id(
             "deliveryOrderDate": format_date(header.get("delivery_order_date")),
             "expectedDeliveryDate": format_date(header.get("expected_delivery_date")),
             "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+            "invoiceType": str(header.get("invoice_type", "")) if header.get("invoice_type") else None,
             "salesOrder": str(header.get("sales_order_id", "")) if header.get("sales_order_id") else None,
             "salesNo": header.get("sales_no"),
             "party": str(header.get("party_id", "")) if header.get("party_id") else "",
@@ -420,6 +422,33 @@ async def get_delivery_order_by_id(
             "updatedAt": format_date(header.get("updated_date_time")),
             "lines": [],
         }
+
+        # Load SO extension data for read-only display on DO
+        so_extension = {}
+        so_id = header.get("sales_order_id")
+        inv_type = header.get("invoice_type")
+        if so_id and inv_type:
+            try:
+                if inv_type == 4:  # Jute
+                    from src.sales.query import get_sales_order_jute_by_id
+                    jute_row = db.execute(get_sales_order_jute_by_id(), {"sales_order_id": so_id}).fetchone()
+                    if jute_row:
+                        so_extension["jute"] = dict(jute_row._mapping)
+                elif inv_type == 5:  # Govt SKG
+                    from src.sales.query import get_sales_order_govtskg_by_id
+                    govtskg_row = db.execute(get_sales_order_govtskg_by_id(), {"sales_order_id": so_id}).fetchone()
+                    if govtskg_row:
+                        so_extension["govtskg"] = dict(govtskg_row._mapping)
+                elif inv_type == 3:  # Jute Yarn
+                    from src.sales.query import get_sales_order_juteyarn_by_id
+                    juteyarn_row = db.execute(get_sales_order_juteyarn_by_id(), {"sales_order_id": so_id}).fetchone()
+                    if juteyarn_row:
+                        so_extension["juteyarn"] = dict(juteyarn_row._mapping)
+            except Exception:
+                logger.exception("Error loading SO extension data for DO")
+
+        if so_extension:
+            response["soExtensionData"] = so_extension
 
         if permissions is not None:
             response["permissions"] = permissions
@@ -492,6 +521,7 @@ async def create_delivery_order(
         created_at = now_ist()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
+        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
@@ -539,6 +569,7 @@ async def create_delivery_order(
             "delivery_order_date": delivery_order_date,
             "delivery_order_no": None,
             "branch_id": branch_id,
+            "invoice_type": invoice_type,
             "sales_order_id": sales_order_id,
             "party_id": party_id,
             "billing_to_id": billing_to_id,
@@ -648,6 +679,7 @@ async def update_delivery_order_endpoint(
         updated_at = now_ist()
 
         sales_order_id = to_int(payload.get("sales_order"), "sales_order")
+        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
@@ -695,6 +727,7 @@ async def update_delivery_order_endpoint(
             "updated_date_time": updated_at,
             "delivery_order_date": delivery_order_date,
             "branch_id": branch_id,
+            "invoice_type": invoice_type,
             "sales_order_id": sales_order_id,
             "party_id": party_id,
             "billing_to_id": billing_to_id,

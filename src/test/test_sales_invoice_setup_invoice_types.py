@@ -67,8 +67,9 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
-            MagicMock(fetchall=lambda: approved_sos),
             MagicMock(fetchall=lambda: mukam_list),
+            MagicMock(fetchall=lambda: approved_sos),
+            MagicMock(fetchall=lambda: []),  # additional_charges_master
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_setup_1?co_id=1&branch_id=1")
@@ -104,8 +105,9 @@ class TestSalesInvoiceSetupInvoiceTypes:
             MagicMock(fetchall=lambda: approved_dos),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
-            MagicMock(fetchall=lambda: approved_sos),
             MagicMock(fetchall=lambda: mukam_list),
+            MagicMock(fetchall=lambda: approved_sos),
+            MagicMock(fetchall=lambda: []),  # additional_charges_master
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_setup_1?co_id=1&branch_id=1")

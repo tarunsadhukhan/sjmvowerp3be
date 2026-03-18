@@ -439,6 +439,8 @@ class TestUpdateSalesInvoice:
             MagicMock(),   # delete jute detail
             MagicMock(),   # delete jute header
             MagicMock(),   # delete govtskg header
+            MagicMock(),   # delete additional charges GST
+            MagicMock(),   # delete additional charges
             MagicMock(),   # delete line items
             line_result,   # insert line item
             MagicMock(),   # insert GST
@@ -510,10 +512,14 @@ class TestUpdateSalesInvoice:
                 return check_exec
             elif "UPDATE" in sql_str:
                 call_log.append("update")
+            elif "DELETE" in sql_str and "additional" in sql_str.lower():
+                call_log.append("delete_additional")
             elif "DELETE" in sql_str and "gst" in sql_str.lower():
                 call_log.append("delete_gst")
-            elif "DELETE" in sql_str:
+            elif "DELETE" in sql_str and "sales_invoice_dtl" in sql_str.lower():
                 call_log.append("delete_lines")
+            elif "DELETE" in sql_str:
+                call_log.append("delete_other")
             elif "INSERT" in sql_str and "gst" in sql_str.lower():
                 call_log.append("insert_gst")
             elif "INSERT" in sql_str:
