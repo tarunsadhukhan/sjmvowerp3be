@@ -70,25 +70,34 @@ def _update_status_fn():
     return text("UPDATE test_doc SET status_id = :status_id, approval_level = :approval_level WHERE doc_id = :doc_id")
 
 
-def _setup_db_for_approval(db, doc_status=20, doc_level=1, user_level=1, max_level=2, max_amount=None, doc_on_refresh=None, hierarchy_exists=True):
-    """Set up mock DB responses for a standard approval flow."""
-    doc_row = _mock_doc_row(status_id=doc_status, approval_level=doc_level)
-    count_row = _mock_count_row(count=2 if hierarchy_exists else 0)
-    approval_row = _mock_approval_row(approval_level=user_level, max_amount_single=max_amount)
-    max_level_row = _mock_max_level_row(max_level=max_level)
+def _make_result_proxy(fetchone_value=None, fetchall_value=None):
+    """Create a mock result proxy that supports both fetchone() and fetchall()."""
+    proxy = MagicMock()
+    proxy.fetchone = MagicMock(return_value=fetchone_value)
+    proxy.fetchall = MagicMock(return_value=fetchall_value if fetchall_value is not None else [])
+    return proxy
 
-    # Build the side effects for db.execute().fetchone()
-    # Sequence: doc, [refresh], count, [approval_row, max_level_row]
-    fetchone_results = [doc_row]
-    if doc_on_refresh:
-        fetchone_results.append(doc_on_refresh)
-    fetchone_results.append(count_row)
-    if hierarchy_exists:
-        fetchone_results.extend([approval_row, max_level_row])
 
-    execute_mock = MagicMock()
-    execute_mock.return_value.fetchone = MagicMock(side_effect=fetchone_results)
-    db.execute = execute_mock
+def _setup_db_execute(db, call_specs):
+    """Set up db.execute to return different result proxies per call.
+
+    call_specs: list of dicts, each with:
+        - 'fetchone': value for fetchone() (default None)
+        - 'fetchall': value for fetchall() (default [])
+
+    Example:
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},           # 1st execute -> fetchone returns doc_row
+            {'fetchone': count_row},          # 2nd execute -> fetchone returns count_row
+            {'fetchall': [approval_row]},     # 3rd execute -> fetchall returns [approval_row]
+            {'fetchone': max_level_row},      # 4th execute -> fetchone returns max_level_row
+        ])
+    """
+    proxies = [_make_result_proxy(
+        fetchone_value=spec.get('fetchone'),
+        fetchall_value=spec.get('fetchall'),
+    ) for spec in call_specs]
+    db.execute = MagicMock(side_effect=proxies)
     return db
 
 
@@ -103,15 +112,19 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_open = _mock_doc_row(status_id=1, approval_level=None)
-        doc_pending = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        # Sequence: fetch doc (Open), refresh doc (after transition), check hierarchy, user level, max level
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_open, doc_pending, count_row, approval_row, max_level_row]
-        )
+        # Sequence: doc (Open), auto-transition execute, count, user levels (fetchall), max level
+        _setup_db_execute(db, [
+            {'fetchone': doc_open},           # fetch doc
+            {},                               # auto-transition UPDATE (no fetch)
+            {'fetchone': count_row},           # check hierarchy exists
+            {'fetchall': [approval_row]},      # user approval levels
+            {'fetchone': max_level_row},       # max level
+            {},                               # final UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -133,9 +146,13 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=3)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -157,9 +174,13 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=3)
         max_level_row = _mock_max_level_row(max_level=3)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -180,9 +201,11 @@ class TestProcessApproval:
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=2)  # User is level 2
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},  # User has level 2, doc needs level 1
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -200,9 +223,11 @@ class TestProcessApproval:
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)  # Hierarchy exists
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, None]  # No approval entry for this user
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': []},  # No approval entries for this user
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -219,9 +244,9 @@ class TestProcessApproval:
 
         doc_row = _mock_doc_row(status_id=3, approval_level=2)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -232,17 +257,53 @@ class TestProcessApproval:
         assert exc_info.value.status_code == 400
         assert "already approved" in exc_info.value.detail.lower()
 
-    def test_amount_exceeds_limit(self):
-        """Document amount exceeding max_amount_single should get 403."""
+    def test_amount_exceeds_limit_escalates_when_higher_levels_exist(self):
+        """Document amount exceeding max_amount_single should escalate to
+        next level (not block) when higher approval levels exist.
+        """
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=50000.0)
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row]
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="PO",
+            document_amount=75000.0,
         )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated, not blocked
+        assert result["new_approval_level"] == 2
+
+    def test_amount_exceeds_limit_blocks_at_final_level(self):
+        """Document amount exceeding max_amount_single at the FINAL level
+        should get 403 (no higher level to escalate to).
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=2)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(approval_level=2, max_amount_single=50000.0)
+        max_level_row = _mock_max_level_row(max_level=2)  # This IS the final level
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -263,9 +324,14 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=100000.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        # Note: max_level is fetched BEFORE value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},  # max level (fetched first)
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -283,13 +349,16 @@ class TestProcessApproval:
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)
-        # max_amount_single is 0 which would normally block, but should be ignored
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=0.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -307,19 +376,23 @@ class TestProcessApproval:
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)
-        # max_amount_single is 0 - should NOT block
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=0.0)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
             get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
             id_param_name="doc_id", doc_name="PO",
-            document_amount=75000.0,  # Any amount should pass with limit=0
+            document_amount=75000.0,
         )
 
         assert result["status"] == "success"
@@ -334,9 +407,14 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1, max_amount_single=None)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -350,7 +428,10 @@ class TestProcessApproval:
     def test_doc_not_found(self):
         """Should raise 404 when doc doesn't exist."""
         db = MagicMock()
-        db.execute.return_value.fetchone = MagicMock(return_value=None)
+
+        _setup_db_execute(db, [
+            {'fetchone': None},  # Doc not found
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -365,7 +446,10 @@ class TestProcessApproval:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=4, approval_level=None)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[doc_row])
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -384,9 +468,13 @@ class TestProcessApproval:
         approval_row = _mock_approval_row(approval_level=1)
         max_level_row = _mock_max_level_row(max_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row, max_level_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -410,9 +498,12 @@ class TestProcessApproval:
         count_row = _mock_count_row(count=0)  # No hierarchy
         edit_access_row = _mock_edit_access_row(max_access_type_id=4)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, edit_access_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchone': edit_access_row},  # edit access check (fetchone)
+            {},  # UPDATE
+        ])
 
         result = process_approval(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -432,9 +523,11 @@ class TestProcessApproval:
         count_row = _mock_count_row(count=0)  # No hierarchy
         edit_access_row = _mock_edit_access_row(max_access_type_id=2)  # Read-only
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, edit_access_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchone': edit_access_row},  # edit access check
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_approval(
@@ -451,9 +544,12 @@ class TestProcessApproval:
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
         count_row = _mock_count_row(count=2)  # Hierarchy exists
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, None]  # No approval entry for user -> 403
-        )
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': []},  # No approval entries for user -> 403
+        ])
 
         with pytest.raises(HTTPException):
             process_approval(
@@ -463,6 +559,315 @@ class TestProcessApproval:
             )
 
         db.rollback.assert_called_once()
+
+    def test_auto_transition_rolled_back_on_level_mismatch(self):
+        """When a non-level-1 user tries to approve an Open doc,
+        the auto-transition to status=20 must be rolled back.
+        Regression test for the early-commit bug.
+        """
+        db = MagicMock()
+
+        doc_open = _mock_doc_row(status_id=1, approval_level=None)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
+        approval_row = _mock_approval_row(approval_level=2)  # User is level 2, doc needs level 1
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_open},
+            {},  # auto-transition UPDATE
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},  # User has level 2, doc needs level 1
+        ])
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_approval(
+                doc_id=1, user_id=20, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="TestDoc",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "level" in exc_info.value.detail.lower()
+
+        # CRITICAL: Verify rollback was called (undoes the auto-transition)
+        db.rollback.assert_called_once()
+
+        # CRITICAL: Verify commit was NOT called (the early commit was removed)
+        db.commit.assert_not_called()
+
+    def test_auto_transition_rolled_back_when_no_permission(self):
+        """When a user with no approval_mst entry tries to approve an Open doc,
+        the auto-transition to status=20 must be rolled back.
+        """
+        db = MagicMock()
+
+        doc_open = _mock_doc_row(status_id=1, approval_level=None)
+        count_row = _mock_count_row(count=2)  # Hierarchy exists
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_open},
+            {},  # auto-transition UPDATE
+            {'fetchone': count_row},
+            {'fetchall': []},  # No approval entries for user
+        ])
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_approval(
+                doc_id=1, user_id=99, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="TestDoc",
+            )
+
+        assert exc_info.value.status_code == 403
+        db.rollback.assert_called_once()
+        db.commit.assert_not_called()
+
+    def test_value_based_final_approval_skips_remaining_levels(self):
+        """Level 1 user with max_amount_single covering the PO amount should
+        get final approval (status 3) even when higher levels exist.
+        This is the core fix for the value-based approval bug.
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        # Level 1 user with max_amount_single = 10000
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Level 2 exists
+
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},  # max level (fetched first)
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # Within 10000 limit
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Should be APPROVED, not 20
+        assert result["new_approval_level"] == 1
+
+    def test_value_based_no_final_when_no_value_limits(self):
+        """When max_amount_single is None/0, value-based final should NOT apply,
+        and normal level escalation should occur.
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(approval_level=1, max_amount_single=None)
+        max_level_row = _mock_max_level_row(max_level=2)
+
+        # max_level fetched before value checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},  # max level (fetched first)
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="PO",
+            document_amount=5000.0,
+        )
+
+        assert result["new_status_id"] == 20  # Should escalate
+        assert result["new_approval_level"] == 2
+
+    def test_daily_limit_exceeded_escalates_when_higher_levels_exist(self):
+        """When daily limit exceeded but higher levels exist, should escalate."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=50000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 45000.0, "month_total": 45000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},  # consumed amounts query
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=8000.0,  # 45000 + 8000 = 53000 > 50000
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated
+        assert result["new_approval_level"] == 2
+
+    def test_daily_limit_exceeded_blocks_at_final_level(self):
+        """When daily limit exceeded at the final level, should get 403."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=50000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=1)  # This IS the final level
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 45000.0, "month_total": 45000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_approval(
+                doc_id=1, user_id=10, menu_id=5, db=db,
+                get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+                id_param_name="doc_id", doc_name="Purchase Order",
+                document_amount=8000.0,  # 45000 + 8000 = 53000 > 50000
+                get_consumed_amounts_fn=_consumed_fn,
+            )
+        assert exc_info.value.status_code == 403
+        assert "daily" in exc_info.value.detail.lower()
+
+    def test_monthly_limit_exceeded_escalates_when_higher_levels_exist(self):
+        """When monthly limit exceeded but higher levels exist, should escalate."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=50000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=2)  # Higher level exists
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 5000.0, "month_total": 48000.0}
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},
+            {'fetchone': consumed_row},
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # 48000 + 5000 = 53000 > 50000
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 20  # Escalated
+        assert result["new_approval_level"] == 2
+
+    def test_value_based_final_with_daily_monthly_within_limits(self):
+        """When all value limits (single, daily, monthly) pass, should approve directly."""
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=1)
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(
+            approval_level=1, max_amount_single=10000.0,
+            day_max_amount=100000.0, month_max_amount=1000000.0,
+        )
+        max_level_row = _mock_max_level_row(max_level=3)  # 3 levels exist
+        consumed_row = MagicMock()
+        consumed_row._mapping = {"day_total": 20000.0, "month_total": 200000.0}
+
+        # max_level fetched before value/consumed checks
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {'fetchone': max_level_row},   # max level (fetched first)
+            {'fetchone': consumed_row},    # consumed amounts
+            {},  # UPDATE
+        ])
+
+        def _consumed_fn():
+            return text("SELECT 0 as day_total, 0 as month_total")
+
+        result = process_approval(
+            doc_id=1, user_id=10, menu_id=5, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Purchase Order",
+            document_amount=5000.0,  # Within all limits
+            get_consumed_amounts_fn=_consumed_fn,
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Approved directly, skipping levels 2 & 3
+        assert result["new_approval_level"] == 1
+
+    def test_multi_level_user_can_approve_at_matching_level(self):
+        """User with entries at BOTH level 1 and level 2 should be able to
+        approve a doc at level 2. Regression test for LIMIT 1 bug.
+        """
+        db = MagicMock()
+
+        doc_row = _mock_doc_row(status_id=20, approval_level=2)
+        count_row = _mock_count_row(count=2)
+        # User has both level 1 and level 2 entries
+        level1_row = _mock_approval_row(approval_level=1)
+        level2_row = _mock_approval_row(approval_level=2)
+        max_level_row = _mock_max_level_row(max_level=2)
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [level1_row, level2_row]},  # Both levels returned
+            {'fetchone': max_level_row},
+            {},  # UPDATE
+        ])
+
+        result = process_approval(
+            doc_id=1, user_id=2, menu_id=8, db=db,
+            get_doc_fn=_get_doc_fn, update_status_fn=_update_status_fn,
+            id_param_name="doc_id", doc_name="Indent",
+        )
+
+        assert result["status"] == "success"
+        assert result["new_status_id"] == 3  # Final level → Approved
+        assert result["new_approval_level"] == 2
 
 
 # ===========================================================================
@@ -476,7 +881,11 @@ class TestProcessRejection:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=2)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[doc_row])
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {},  # UPDATE
+        ])
 
         result = process_rejection(
             doc_id=1, user_id=10, menu_id=None, db=db,
@@ -497,9 +906,12 @@ class TestProcessRejection:
         count_row = _mock_count_row(count=2)  # Hierarchy exists
         approval_row = _mock_approval_row(approval_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+            {},  # UPDATE
+        ])
 
         result = process_rejection(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -518,9 +930,11 @@ class TestProcessRejection:
         count_row = _mock_count_row(count=2)  # Hierarchy exists
         approval_row = _mock_approval_row(approval_level=1)  # Wrong level
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},  # User has level 1, doc needs level 2
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_rejection(
@@ -535,7 +949,10 @@ class TestProcessRejection:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=1, approval_level=None)  # Open, not pending
-        db.execute.return_value.fetchone = MagicMock(side_effect=[doc_row])
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_rejection(
@@ -548,7 +965,10 @@ class TestProcessRejection:
     def test_reject_doc_not_found(self):
         """Should raise 404 when doc doesn't exist."""
         db = MagicMock()
-        db.execute.return_value.fetchone = MagicMock(return_value=None)
+
+        _setup_db_execute(db, [
+            {'fetchone': None},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_rejection(
@@ -563,7 +983,11 @@ class TestProcessRejection:
         db = MagicMock()
 
         doc_row = _mock_doc_row(status_id=20, approval_level=1)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[doc_row])
+
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {},  # UPDATE
+        ])
 
         result = process_rejection(
             doc_id=1, user_id=10, menu_id=None, db=db,
@@ -583,9 +1007,12 @@ class TestProcessRejection:
         count_row = _mock_count_row(count=0)  # No hierarchy
         edit_access_row = _mock_edit_access_row(max_access_type_id=4)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, edit_access_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchone': edit_access_row},
+            {},  # UPDATE
+        ])
 
         result = process_rejection(
             doc_id=1, user_id=10, menu_id=5, db=db,
@@ -604,9 +1031,11 @@ class TestProcessRejection:
         count_row = _mock_count_row(count=0)  # No hierarchy
         edit_access_row = _mock_edit_access_row(max_access_type_id=2)  # Read-only
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[doc_row, count_row, edit_access_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': doc_row},
+            {'fetchone': count_row},
+            {'fetchone': edit_access_row},
+        ])
 
         with pytest.raises(HTTPException) as exc_info:
             process_rejection(
@@ -627,9 +1056,11 @@ class TestCalculateApprovalPermissions:
     def test_draft_permissions(self):
         """Status 21 (Draft): canOpen, canCancelDraft, canSave should be True."""
         db = MagicMock()
-        # Only need the approval_exists check
         count_row = _mock_count_row(count=0)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[count_row])
+
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -646,12 +1077,13 @@ class TestCalculateApprovalPermissions:
         """Status 1 (Open) with hierarchy: level 1 user should see canApprove."""
         db = MagicMock()
 
-        count_row = _mock_count_row(count=2)  # Approval config exists
-        approval_row = _mock_approval_row(approval_level=1)  # User is level 1
+        count_row = _mock_count_row(count=2)
+        approval_row = _mock_approval_row(approval_level=1)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},  # User has level 1
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -668,9 +1100,10 @@ class TestCalculateApprovalPermissions:
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=2)  # User is level 2
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -684,12 +1117,13 @@ class TestCalculateApprovalPermissions:
         """Status 1 (Open) without hierarchy: user with edit access can approve."""
         db = MagicMock()
 
-        count_row = _mock_count_row(count=0)  # No approval config
+        count_row = _mock_count_row(count=0)
         edit_access_row = _mock_edit_access_row(max_access_type_id=4)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row, edit_access_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+            {'fetchone': edit_access_row},
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -703,11 +1137,12 @@ class TestCalculateApprovalPermissions:
         db = MagicMock()
 
         count_row = _mock_count_row(count=2)
-        approval_row = _mock_approval_row(approval_level=2)  # Matches doc level
+        approval_row = _mock_approval_row(approval_level=2)
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},  # User has level 2, matches doc level
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -725,9 +1160,10 @@ class TestCalculateApprovalPermissions:
         count_row = _mock_count_row(count=2)
         approval_row = _mock_approval_row(approval_level=1)  # Doc is at level 2
 
-        db.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row, approval_row]
-        )
+        _setup_db_execute(db, [
+            {'fetchone': count_row},
+            {'fetchall': [approval_row]},
+        ])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -744,9 +1180,10 @@ class TestCalculateApprovalPermissions:
         db_a = MagicMock()
         count_row_a = _mock_count_row(count=2)
         approval_row_a = _mock_approval_row(approval_level=1)
-        db_a.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row_a, approval_row_a]
-        )
+        _setup_db_execute(db_a, [
+            {'fetchone': count_row_a},
+            {'fetchall': [approval_row_a]},
+        ])
 
         result_a = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -757,9 +1194,10 @@ class TestCalculateApprovalPermissions:
         db_b = MagicMock()
         count_row_b = _mock_count_row(count=2)
         approval_row_b = _mock_approval_row(approval_level=1)
-        db_b.execute.return_value.fetchone = MagicMock(
-            side_effect=[count_row_b, approval_row_b]
-        )
+        _setup_db_execute(db_b, [
+            {'fetchone': count_row_b},
+            {'fetchall': [approval_row_b]},
+        ])
 
         result_b = calculate_approval_permissions(
             user_id=11, menu_id=5, branch_id=1,
@@ -773,7 +1211,7 @@ class TestCalculateApprovalPermissions:
         """Status 3 (Approved): only canViewApprovalLog and canClone."""
         db = MagicMock()
         count_row = _mock_count_row(count=0)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[count_row])
+        _setup_db_execute(db, [{'fetchone': count_row}])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -789,7 +1227,7 @@ class TestCalculateApprovalPermissions:
         """Status 4 (Rejected): canReopen, canClone, canViewApprovalLog."""
         db = MagicMock()
         count_row = _mock_count_row(count=0)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[count_row])
+        _setup_db_execute(db, [{'fetchone': count_row}])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,
@@ -805,7 +1243,7 @@ class TestCalculateApprovalPermissions:
         """Status 6 (Cancelled): canReopen, canClone, canViewApprovalLog."""
         db = MagicMock()
         count_row = _mock_count_row(count=0)
-        db.execute.return_value.fetchone = MagicMock(side_effect=[count_row])
+        _setup_db_execute(db, [{'fetchone': count_row}])
 
         result = calculate_approval_permissions(
             user_id=10, menu_id=5, branch_id=1,

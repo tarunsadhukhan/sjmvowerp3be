@@ -2,6 +2,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter, Response, Cookie
 import os
 from sqlalchemy.orm import Session
 from datetime import datetime
+from src.common.utils import now_ist
 
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -159,7 +160,7 @@ async def yarn_quality_create(
             is_active=int(is_active) if is_active else 1,
             branch_id=int(branch_id) if branch_id else None,
             updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
         )
 
         db.add(new_yarn_quality)
@@ -328,7 +329,7 @@ async def yarn_quality_edit(
         existing.target_eff = float(target_eff) if target_eff else existing.target_eff
         existing.is_active = int(is_active) if is_active else existing.is_active
         existing.updated_by = int(user_id) if user_id and str(user_id).isdigit() else existing.updated_by
-        existing.updated_date_time = datetime.utcnow()
+        existing.updated_date_time = now_ist()
 
         db.commit()
         db.refresh(existing)

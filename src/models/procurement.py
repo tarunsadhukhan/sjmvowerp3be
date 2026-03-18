@@ -90,11 +90,12 @@ class ProcEnquiryDtl(Base):
 # =============================================================================
 
 class ProcGst(Base):
-    """GST details for procurement inward items."""
+    """GST details for procurement inward items and additional charges."""
     __tablename__ = "proc_gst"
 
     gst_invoice_type: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     proc_inward_dtl: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    proc_inward_additional_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     tax_pct: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     stax_percentage: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     s_tax_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
@@ -488,6 +489,7 @@ class ProcInward(Base):
     invoice_recvd_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     invoice_due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     invoice_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    invoice_no: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     challan_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     challan_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     consignment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -543,6 +545,7 @@ class ProcInwardAdditional(Base):
     qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
     net_amount: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
 
 class ProcInwardDtl(Base):

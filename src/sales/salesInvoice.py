@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime
+from src.common.utils import now_ist
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.masters.query import get_branch_list, get_item_group_drodown
@@ -42,12 +43,13 @@ from src.sales.query import (
     insert_invoice_line_item,
     update_sales_invoice,
     delete_invoice_line_items,
+    insert_invoice_dtl_gst,
+    delete_invoice_dtl_gst,
+    get_invoice_dtl_gst_by_id_query,
     update_invoice_status,
     get_invoice_with_approval_info,
     get_max_invoice_no_for_branch_fy,
     get_mukam_list,
-    insert_sale_invoice_jute,
-    delete_sale_invoice_jute,
     get_sale_invoice_jute_by_id,
 )
 from src.sales.constants import SALES_DOC_TYPES
@@ -394,16 +396,23 @@ async def get_sales_invoice_by_id(
             "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
             "salesDeliveryOrderId": header.get("sales_delivery_order_id"),
             "brokerId": header.get("broker_id"),
+            "billingToId": header.get("billing_to_id"),
+            "shippingToId": header.get("shipping_to_id"),
             "party": str(header.get("party_id", "")) if header.get("party_id") else "",
             "partyName": header.get("party_name"),
             "shippingStateCode": header.get("shipping_state_code"),
             "transporter": str(header.get("transporter_id", "")) if header.get("transporter_id") else None,
             "transporterName": header.get("transporter_name"),
+            "transporterNameStored": header.get("transporter_name_stored"),
+            "transporterAddress": header.get("transporter_address"),
+            "transporterStateCode": header.get("transporter_state_code"),
+            "transporterStateName": header.get("transporter_state_name"),
             "vehicleNo": header.get("vehicle_no"),
             "ewayBillNo": header.get("eway_bill_no"),
             "ewayBillDate": format_date(header.get("eway_bill_date")),
             "invoiceType": header.get("invoice_type"),
             "footerNote": header.get("footer_notes"),
+            "internalNote": header.get("internal_note"),
             "termsConditions": header.get("terms_conditions"),
             "grossAmount": header.get("invoice_amount"),
             "taxAmount": header.get("tax_amount"),
@@ -411,6 +420,14 @@ async def get_sales_invoice_by_id(
             "freightCharges": header.get("freight_charges"),
             "roundOff": header.get("round_off"),
             "intraInterState": header.get("intra_inter_state"),
+            "dueDate": format_date(header.get("due_date")),
+            "typeOfSale": header.get("type_of_sale"),
+            "taxId": header.get("tax_id"),
+            "containerNo": header.get("container_no"),
+            "contractNo": header.get("contract_no"),
+            "contractDate": format_date(header.get("contract_date")),
+            "consignmentNo": header.get("consignment_no"),
+            "consignmentDate": format_date(header.get("consignment_date")),
             "status": header.get("status_name"),
             "statusId": status_id,
             "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
@@ -421,52 +438,68 @@ async def get_sales_invoice_by_id(
         if permissions is not None:
             response["permissions"] = permissions
 
-        # Fetch jute-specific data if present
-        jute_query = get_sale_invoice_jute_by_id()
-        jute_result = db.execute(jute_query, {"invoice_id": invoice_id}).fetchone()
-        if jute_result:
-            jute = dict(jute_result._mapping)
-            response["jute"] = {
-                "mrNo": jute.get("mr_no"),
-                "mrId": jute.get("mr_id"),
-                "claimAmount": float(jute["claim_amount"]) if jute.get("claim_amount") is not None else None,
-                "otherReference": jute.get("other_reference"),
-                "unitConversion": jute.get("unit_conversion"),
-                "despatchDocNo": jute.get("despatch_doc_no"),
-                "despatchedThrough": jute.get("despatched_through"),
-                "mukamId": jute.get("mukam_id"),
-                "mukamName": jute.get("mukam_name"),
-                "claimNote": jute.get("claim_note"),
+        # Fetch jute-specific data if present (table may not exist in all tenants)
+        try:
+            jute_query = get_sale_invoice_jute_by_id()
+            jute_result = db.execute(jute_query, {"invoice_id": invoice_id}).fetchone()
+            if jute_result:
+                jute = dict(jute_result._mapping)
+                response["jute"] = {
+                    "mrNo": jute.get("mr_no"),
+                    "mrId": jute.get("mr_id"),
+                    "claimAmount": float(jute["claim_amount"]) if jute.get("claim_amount") is not None else None,
+                    "otherReference": jute.get("other_reference"),
+                    "unitConversion": jute.get("unit_conversion"),
+                    "despatchDocNo": jute.get("despatch_doc_no"),
+                    "despatchedThrough": jute.get("despatched_through"),
+                    "mukamId": jute.get("mukam_id"),
+                    "mukamName": jute.get("mukam_name"),
+                    "claimNote": jute.get("claim_note"),
+                }
+        except Exception:
+            pass
+
+        # Fetch GST data for all line items
+        gst_query = get_invoice_dtl_gst_by_id_query()
+        gst_results = db.execute(gst_query, {"invoice_id": invoice_id}).fetchall()
+        gst_by_line = {}
+        for g in gst_results:
+            gm = dict(g._mapping)
+            gst_by_line[gm["invoice_line_item_id"]] = {
+                "igstAmount": gm.get("igst_amount"),
+                "igstPercent": gm.get("igst_percent"),
+                "cgstAmount": gm.get("cgst_amount"),
+                "cgstPercent": gm.get("cgst_percent"),
+                "sgstAmount": gm.get("sgst_amount"),
+                "sgstPercent": gm.get("sgst_percent"),
+                "gstTotal": gm.get("gst_total"),
             }
 
         for detail in details:
+            line_id = detail.get("invoice_line_item_id")
             line = {
-                "id": str(detail.get("invoice_line_item_id", "")),
-                "deliveryOrderDtlId": detail.get("delivery_line_id"),
+                "id": str(line_id) if line_id else "",
                 "hsnCode": detail.get("hsn_code"),
-                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else str(detail.get("item_group", "")),
+                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
                 "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
                 "itemName": detail.get("item_name"),
-                "itemMake": str(detail.get("make", "")) if detail.get("make") else None,
+                "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
-                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else str(detail.get("uom", "")),
-                "uomName": detail.get("uom"),
+                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+                "uomName": detail.get("uom_name"),
                 "rate": detail.get("rate"),
+                "discountType": detail.get("discount_type"),
+                "discountedRate": detail.get("discounted_rate"),
+                "discountAmount": detail.get("discount_amount"),
                 "netAmount": detail.get("amount_without_tax"),
                 "totalAmount": detail.get("total_amount"),
-                "remarks": detail.get("item_description"),
-                "qty2": float(detail["qty_2"]) if detail.get("qty_2") is not None else None,
-                "uom2": detail.get("uom_2"),
-                "gst": {
-                    "igstAmount": detail.get("igst_amt"),
-                    "igstPercent": detail.get("igst_per"),
-                    "cgstAmount": detail.get("cgst_amt"),
-                    "cgstPercent": detail.get("cgst_per"),
-                    "sgstAmount": detail.get("sgst_amt"),
-                    "sgstPercent": detail.get("sgst_per"),
-                    "gstTotal": detail.get("tax_amount"),
-                },
+                "salesWeight": detail.get("sales_weight"),
+                "remarks": detail.get("remarks"),
+                "deliveryOrderDtlId": detail.get("delivery_order_dtl_id"),
             }
+            gst_info = gst_by_line.get(line_id)
+            if gst_info:
+                line["gst"] = gst_info
             response["lines"].append(line)
 
         return response
@@ -505,7 +538,9 @@ async def create_sales_invoice(
         # Optional fields
         transporter_id = to_int(payload.get("transporter"), "transporter")
         sales_delivery_order_id = to_int(payload.get("sales_delivery_order_id"), "sales_delivery_order_id")
-        broker_id = to_int(payload.get("broker_id"), "broker_id")
+        broker_id = to_int(payload.get("broker_id") or payload.get("broker"), "broker_id")
+        billing_to_id = to_int(payload.get("billing_to"), "billing_to")
+        shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
 
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
@@ -527,6 +562,27 @@ async def create_sales_invoice(
             except ValueError:
                 pass
 
+        due_date = None
+        if payload.get("due_date"):
+            try:
+                due_date = datetime.strptime(str(payload["due_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        contract_date = None
+        if payload.get("contract_date"):
+            try:
+                contract_date = datetime.strptime(str(payload["contract_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        consignment_date = None
+        if payload.get("consignment_date"):
+            try:
+                consignment_date = datetime.strptime(str(payload["consignment_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
         # Look up co_id from branch
         branch_row = db.execute(
             text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id"),
@@ -534,7 +590,7 @@ async def create_sales_invoice(
         ).fetchone()
         co_id = dict(branch_row._mapping).get("co_id") if branch_row else None
 
-        # Normalize items — sales_invoice_dtl uses String columns for item_id, item_group, uom, make
+        # Normalize items — sales_invoice_dtl uses int columns for item_id, item_make_id, uom_id
         normalized_items = []
         for idx, item in enumerate(raw_items, start=1):
             item_val = item.get("item")
@@ -547,93 +603,33 @@ async def create_sales_invoice(
             qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
             rate = to_float(item.get("rate"), f"items[{idx}].rate")
 
-            # Resolve item name/group from DB if not provided
-            item_name = item.get("item_name") or ""
-            item_group = item.get("item_group") or ""
-            uom_name = item.get("uom_name") or ""
-            make_name = item.get("item_make") or ""
-
-            # Try to look up item_name, item_grp_code, uom_name from DB
-            if not item_name or not uom_name:
-                item_row = db.execute(
-                    text("""SELECT im.item_name, im.item_code, ig.item_grp_id, ig.item_grp_code, um.uom_name
-                            FROM item_mst im
-                            LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
-                            LEFT JOIN uom_mst um ON um.uom_id = :uom_id
-                            WHERE im.item_id = :item_id"""),
-                    {"item_id": int(item_val), "uom_id": int(uom_val) if str(uom_val).isdigit() else None},
-                ).fetchone()
-                if item_row:
-                    row_data = dict(item_row._mapping)
-                    if not item_name:
-                        item_name = row_data.get("item_name", "")
-                    if not item_group:
-                        item_group = str(row_data.get("item_grp_id", ""))
-                    if not uom_name:
-                        uom_name = row_data.get("uom_name", "")
-
-            # Look up make name if make ID provided
-            if make_name and str(make_name).isdigit():
-                make_row = db.execute(
-                    text("SELECT item_make_name FROM item_make WHERE item_make_id = :id"),
-                    {"id": int(make_name)},
-                ).fetchone()
-                if make_row:
-                    make_name = dict(make_row._mapping).get("item_make_name", make_name)
-
             # Calculate line amounts
             amount_without_tax = to_float(item.get("net_amount"), f"items[{idx}].net_amount")
             if amount_without_tax is None and qty and rate:
                 amount_without_tax = round(qty * rate, 2)
-            line_tax_amount = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
             line_total_amount = to_float(item.get("total_amount"), f"items[{idx}].total_amount")
-
-            gst = item.get("gst") or {}
-            cgst_amt = to_float(gst.get("cgst_amount"), "cgst_amount")
-            cgst_per = to_float(gst.get("cgst_percent"), "cgst_percent")
-            sgst_amt = to_float(gst.get("sgst_amount"), "sgst_amount")
-            sgst_per = to_float(gst.get("sgst_percent"), "sgst_percent")
-            igst_amt = to_float(gst.get("igst_amount"), "igst_amount")
-            igst_per = to_float(gst.get("igst_percent"), "igst_percent")
-
-            if line_tax_amount is None:
-                line_tax_amount = (cgst_amt or 0) + (sgst_amt or 0) + (igst_amt or 0)
             if line_total_amount is None and amount_without_tax is not None:
-                line_total_amount = round((amount_without_tax or 0) + (line_tax_amount or 0), 2)
+                line_total_amount = amount_without_tax
 
             normalized_items.append({
-                "delivery_line_id": to_int(item.get("delivery_order_dtl_id"), "delivery_order_dtl_id"),
                 "hsn_code": item.get("hsn_code"),
-                "item_id": str(item_val),
-                "item_name": item_name,
-                "item_group": str(item_group) if item_group else "",
-                "item_description": str(item.get("remarks", "")).strip()[:500] if item.get("remarks") else None,
-                "make": str(make_name) if make_name else None,
+                "item_id": int(item_val),
+                "item_make_id": to_int(item.get("item_make"), "item_make"),
                 "quantity": qty,
-                "uom": uom_name if uom_name else str(uom_val),
+                "uom_id": int(uom_val) if str(uom_val).isdigit() else None,
                 "rate": rate,
+                "discount_type": to_int(item.get("discount_type"), f"items[{idx}].discount_type"),
+                "discounted_rate": to_float(item.get("discounted_rate"), f"items[{idx}].discounted_rate"),
+                "discount_amount": to_float(item.get("discount_amount"), f"items[{idx}].discount_amount"),
                 "amount_without_tax": amount_without_tax,
-                "tax_amount": line_tax_amount,
                 "total_amount": line_total_amount,
-                "cgst_amt": cgst_amt,
-                "cgst_per": cgst_per,
-                "sgst_amt": sgst_amt,
-                "sgst_per": sgst_per,
-                "igst_amt": igst_amt,
-                "igst_per": igst_per,
-                "qty_2": to_float(item.get("qty_2"), f"items[{idx}].qty_2"),
-                "uom_2": item.get("uom_2"),
+                "sales_weight": to_float(item.get("sales_weight"), f"items[{idx}].sales_weight"),
+                "remarks": item.get("remarks"),
+                "delivery_order_dtl_id": to_int(item.get("delivery_order_dtl_id"), f"items[{idx}].delivery_order_dtl_id"),
+                "gst": item.get("gst"),
             })
 
-        # Jute-specific: extract fields and adjust invoice_amount for claim deduction
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
-        jute_data = payload.get("jute") or {}
-        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
-
-        # For jute invoices, invoice_amount = gross_amount - claim_amount
-        effective_amount = gross_amount or 0
-        if invoice_type and jute_data and claim_amount:
-            effective_amount = round((gross_amount or 0) - claim_amount, 2)
 
         # Insert header
         insert_hdr = insert_sales_invoice()
@@ -644,23 +640,38 @@ async def create_sales_invoice(
             "party_id": party_id,
             "sales_delivery_order_id": sales_delivery_order_id,
             "broker_id": broker_id,
+            "billing_to_id": billing_to_id,
+            "shipping_to_id": shipping_to_id,
             "challan_no": payload.get("challan_no"),
             "challan_date": challan_date,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
+            "transporter_name": payload.get("transporter_name"),
+            "transporter_address": payload.get("transporter_address"),
+            "transporter_state_code": payload.get("transporter_state_code"),
+            "transporter_state_name": payload.get("transporter_state_name"),
             "eway_bill_no": payload.get("eway_bill_no"),
             "eway_bill_date": eway_bill_date,
             "invoice_type": invoice_type,
             "footer_notes": payload.get("footer_note"),
+            "internal_note": payload.get("internal_note"),
             "terms": payload.get("terms"),
             "terms_conditions": payload.get("terms_conditions"),
-            "invoice_amount": effective_amount,
+            "invoice_amount": gross_amount or 0,
             "tax_amount": tax_amount or 0,
             "tax_payable": tax_payable,
             "freight_charges": freight_charges or 0,
             "round_off": round_off or 0,
             "shipping_state_code": to_int(payload.get("shipping_state_code"), "shipping_state_code"),
             "intra_inter_state": payload.get("intra_inter_state"),
+            "due_date": due_date,
+            "type_of_sale": payload.get("type_of_sale"),
+            "tax_id": to_int(payload.get("tax_id"), "tax_id"),
+            "container_no": payload.get("container_no"),
+            "contract_no": to_int(payload.get("contract_no"), "contract_no"),
+            "contract_date": contract_date,
+            "consignment_no": payload.get("consignment_no"),
+            "consignment_date": consignment_date,
             "status_id": 21,
             "updated_by": user_id,
         }
@@ -670,50 +681,42 @@ async def create_sales_invoice(
         if not invoice_id:
             raise HTTPException(status_code=500, detail="Failed to create sales invoice header")
 
-        # Insert line items
+        # Insert line items and GST
         line_query = insert_invoice_line_item()
+        gst_query = insert_invoice_dtl_gst()
         for item in normalized_items:
-            db.execute(line_query, {
+            line_result = db.execute(line_query, {
                 "invoice_id": invoice_id,
-                "delivery_line_id": item["delivery_line_id"],
                 "hsn_code": item["hsn_code"],
                 "item_id": item["item_id"],
-                "item_name": item["item_name"],
-                "item_group": item["item_group"],
-                "item_description": item["item_description"],
-                "make": item["make"],
+                "item_make_id": item["item_make_id"],
                 "quantity": item["quantity"] or 0,
-                "uom": item["uom"],
+                "uom_id": item["uom_id"],
                 "rate": item["rate"] or 0,
+                "discount_type": item["discount_type"],
+                "discounted_rate": item["discounted_rate"],
+                "discount_amount": item["discount_amount"],
                 "amount_without_tax": item["amount_without_tax"] or 0,
-                "tax_amount": item["tax_amount"] or 0,
                 "total_amount": item["total_amount"] or 0,
-                "cgst_amt": item["cgst_amt"] or 0,
-                "cgst_per": item["cgst_per"] or 0,
-                "sgst_amt": item["sgst_amt"] or 0,
-                "sgst_per": item["sgst_per"] or 0,
-                "igst_amt": item["igst_amt"] or 0,
-                "igst_per": item["igst_per"] or 0,
-                "claim_rate": 0,
-                "qty_2": item["qty_2"],
-                "uom_2": item["uom_2"],
+                "sales_weight": item["sales_weight"],
+                "remarks": item["remarks"],
+                "delivery_order_dtl_id": item["delivery_order_dtl_id"],
             })
+            line_item_id = line_result.lastrowid
 
-        # Insert jute extension data if jute fields are provided
-        if jute_data:
-            jute_insert = insert_sale_invoice_jute()
-            db.execute(jute_insert, {
-                "invoice_id": invoice_id,
-                "mr_no": jute_data.get("mr_no"),
-                "mr_id": to_int(jute_data.get("mr_id"), "mr_id"),
-                "claim_amount": claim_amount,
-                "other_reference": jute_data.get("other_reference"),
-                "unit_conversion": jute_data.get("unit_conversion"),
-                "despatch_doc_no": jute_data.get("despatch_doc_no"),
-                "despatched_through": jute_data.get("despatched_through"),
-                "mukam_id": to_int(jute_data.get("mukam_id"), "mukam_id"),
-                "claim_note": jute_data.get("claim_note"),
-            })
+            # Insert GST breakup if provided
+            gst_data = item.get("gst")
+            if gst_data and isinstance(gst_data, dict) and line_item_id:
+                db.execute(gst_query, {
+                    "invoice_line_item_id": line_item_id,
+                    "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                    "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                    "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                    "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                    "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                    "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                    "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                })
 
         db.commit()
         return {"message": "Sales invoice created successfully", "invoice_id": invoice_id}
@@ -751,7 +754,7 @@ async def update_sales_invoice_endpoint(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         # Verify exists
-        check_query = text("SELECT invoice_id, status_id, is_active FROM sales_invoice WHERE invoice_id = :id AND (is_active = 1 OR is_active IS NULL)")
+        check_query = text("SELECT invoice_id, status_id, active FROM sales_invoice WHERE invoice_id = :id")
         check_result = db.execute(check_query, {"id": invoice_id}).fetchone()
         if not check_result:
             raise HTTPException(status_code=404, detail="Sales invoice not found or inactive")
@@ -760,7 +763,9 @@ async def update_sales_invoice_endpoint(
 
         transporter_id = to_int(payload.get("transporter"), "transporter")
         sales_delivery_order_id = to_int(payload.get("sales_delivery_order_id"), "sales_delivery_order_id")
-        broker_id = to_int(payload.get("broker_id"), "broker_id")
+        broker_id = to_int(payload.get("broker_id") or payload.get("broker"), "broker_id")
+        billing_to_id = to_int(payload.get("billing_to_id"), "billing_to_id")
+        shipping_to_id = to_int(payload.get("shipping_to_id"), "shipping_to_id")
 
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
@@ -782,15 +787,28 @@ async def update_sales_invoice_endpoint(
             except ValueError:
                 pass
 
-        # Jute-specific: extract fields and adjust invoice_amount for claim deduction
-        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
-        jute_data = payload.get("jute") or {}
-        claim_amount = to_float(jute_data.get("claim_amount"), "claim_amount")
+        due_date = None
+        if payload.get("due_date"):
+            try:
+                due_date = datetime.strptime(str(payload["due_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
 
-        # For jute invoices, invoice_amount = gross_amount - claim_amount
-        effective_amount = gross_amount or 0
-        if invoice_type and jute_data and claim_amount:
-            effective_amount = round((gross_amount or 0) - claim_amount, 2)
+        contract_date = None
+        if payload.get("contract_date"):
+            try:
+                contract_date = datetime.strptime(str(payload["contract_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        consignment_date = None
+        if payload.get("consignment_date"):
+            try:
+                consignment_date = datetime.strptime(str(payload["consignment_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
 
         # Update header
         update_hdr = update_sales_invoice()
@@ -801,30 +819,52 @@ async def update_sales_invoice_endpoint(
             "party_id": party_id,
             "sales_delivery_order_id": sales_delivery_order_id,
             "broker_id": broker_id,
+            "billing_to_id": billing_to_id,
+            "shipping_to_id": shipping_to_id,
             "challan_no": payload.get("challan_no"),
             "challan_date": challan_date,
             "transporter_id": transporter_id,
             "vehicle_no": payload.get("vehicle_no"),
+            "transporter_name": payload.get("transporter_name"),
+            "transporter_address": payload.get("transporter_address"),
+            "transporter_state_code": payload.get("transporter_state_code"),
+            "transporter_state_name": payload.get("transporter_state_name"),
             "eway_bill_no": payload.get("eway_bill_no"),
             "eway_bill_date": eway_bill_date,
             "invoice_type": invoice_type,
             "footer_notes": payload.get("footer_note"),
+            "internal_note": payload.get("internal_note"),
             "terms": payload.get("terms"),
             "terms_conditions": payload.get("terms_conditions"),
-            "invoice_amount": effective_amount,
+            "invoice_amount": gross_amount or 0,
             "tax_amount": tax_amount or 0,
             "tax_payable": tax_payable,
             "freight_charges": freight_charges or 0,
             "round_off": round_off or 0,
+            "shipping_state_code": to_int(payload.get("shipping_state_code"), "shipping_state_code"),
+            "intra_inter_state": payload.get("intra_inter_state"),
+            "due_date": due_date,
+            "type_of_sale": payload.get("type_of_sale"),
+            "tax_id": to_int(payload.get("tax_id"), "tax_id"),
+            "container_no": payload.get("container_no"),
+            "contract_no": to_int(payload.get("contract_no"), "contract_no"),
+            "contract_date": contract_date,
+            "consignment_no": payload.get("consignment_no"),
+            "consignment_date": consignment_date,
             "updated_by": user_id,
         })
 
-        # Soft-delete old line items
+        # Delete old GST data first (FK depends on line items existing)
+        delete_gst_q = delete_invoice_dtl_gst()
+        db.execute(delete_gst_q, {"invoice_id": invoice_id})
+
+        # Delete old line items
         delete_q = delete_invoice_line_items()
         db.execute(delete_q, {"invoice_id": invoice_id})
 
-        # Re-insert line items
+        # Re-insert line items and GST
         line_query = insert_invoice_line_item()
+        gst_query = insert_invoice_dtl_gst()
         for idx, item in enumerate(raw_items, start=1):
             item_val = item.get("item")
             if not item_val:
@@ -836,99 +876,45 @@ async def update_sales_invoice_endpoint(
             qty = to_positive_float(item.get("quantity"), f"items[{idx}].quantity")
             rate = to_float(item.get("rate"), f"items[{idx}].rate")
 
-            item_name = item.get("item_name") or ""
-            item_group = item.get("item_group") or ""
-            uom_name = item.get("uom_name") or ""
-            make_name = item.get("item_make") or ""
-
-            if not item_name or not uom_name:
-                item_row = db.execute(
-                    text("""SELECT im.item_name, ig.item_grp_id, um.uom_name
-                            FROM item_mst im
-                            LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
-                            LEFT JOIN uom_mst um ON um.uom_id = :uom_id
-                            WHERE im.item_id = :item_id"""),
-                    {"item_id": int(item_val), "uom_id": int(uom_val) if str(uom_val).isdigit() else None},
-                ).fetchone()
-                if item_row:
-                    row_data = dict(item_row._mapping)
-                    if not item_name:
-                        item_name = row_data.get("item_name", "")
-                    if not item_group:
-                        item_group = str(row_data.get("item_grp_id", ""))
-                    if not uom_name:
-                        uom_name = row_data.get("uom_name", "")
-
-            if make_name and str(make_name).isdigit():
-                make_row = db.execute(
-                    text("SELECT item_make_name FROM item_make WHERE item_make_id = :id"),
-                    {"id": int(make_name)},
-                ).fetchone()
-                if make_row:
-                    make_name = dict(make_row._mapping).get("item_make_name", make_name)
-
             amount_without_tax = to_float(item.get("net_amount"), f"items[{idx}].net_amount")
             if amount_without_tax is None and qty and rate:
                 amount_without_tax = round(qty * rate, 2)
-            line_tax = to_float(item.get("tax_amount"), f"items[{idx}].tax_amount")
             line_total = to_float(item.get("total_amount"), f"items[{idx}].total_amount")
-
-            gst = item.get("gst") or {}
-            cgst_amt = to_float(gst.get("cgst_amount"), "cgst_amount")
-            cgst_per = to_float(gst.get("cgst_percent"), "cgst_percent")
-            sgst_amt = to_float(gst.get("sgst_amount"), "sgst_amount")
-            sgst_per = to_float(gst.get("sgst_percent"), "sgst_percent")
-            igst_amt = to_float(gst.get("igst_amount"), "igst_amount")
-            igst_per = to_float(gst.get("igst_percent"), "igst_percent")
-
-            if line_tax is None:
-                line_tax = (cgst_amt or 0) + (sgst_amt or 0) + (igst_amt or 0)
             if line_total is None and amount_without_tax is not None:
-                line_total = round((amount_without_tax or 0) + (line_tax or 0), 2)
+                line_total = amount_without_tax
 
-            db.execute(line_query, {
+            line_result = db.execute(line_query, {
                 "invoice_id": invoice_id,
-                "delivery_line_id": to_int(item.get("delivery_order_dtl_id"), "delivery_order_dtl_id"),
                 "hsn_code": item.get("hsn_code"),
-                "item_id": str(item_val),
-                "item_name": item_name,
-                "item_group": str(item_group) if item_group else "",
-                "item_description": str(item.get("remarks", "")).strip()[:500] if item.get("remarks") else None,
-                "make": str(make_name) if make_name else None,
+                "item_id": int(item_val),
+                "item_make_id": to_int(item.get("item_make"), "item_make"),
                 "quantity": qty,
-                "uom": uom_name if uom_name else str(uom_val),
+                "uom_id": int(uom_val) if str(uom_val).isdigit() else None,
                 "rate": rate,
+                "discount_type": item.get("discount_type"),
+                "discounted_rate": to_float(item.get("discounted_rate"), f"items[{idx}].discounted_rate"),
+                "discount_amount": to_float(item.get("discount_amount"), f"items[{idx}].discount_amount"),
                 "amount_without_tax": amount_without_tax,
-                "tax_amount": line_tax,
                 "total_amount": line_total,
-                "cgst_amt": cgst_amt,
-                "cgst_per": cgst_per,
-                "sgst_amt": sgst_amt,
-                "sgst_per": sgst_per,
-                "igst_amt": igst_amt,
-                "igst_per": igst_per,
-                "claim_rate": 0,
-                "qty_2": to_float(item.get("qty_2"), f"items[{idx}].qty_2"),
-                "uom_2": item.get("uom_2"),
+                "sales_weight": to_float(item.get("sales_weight"), f"items[{idx}].sales_weight"),
+                "remarks": item.get("remarks"),
+                "delivery_order_dtl_id": to_int(item.get("delivery_order_dtl_id"), f"items[{idx}].delivery_order_dtl_id"),
             })
+            line_item_id = line_result.lastrowid
 
-        # Delete-reinsert jute extension data
-        jute_del = delete_sale_invoice_jute()
-        db.execute(jute_del, {"invoice_id": invoice_id})
-        if jute_data:
-            jute_insert = insert_sale_invoice_jute()
-            db.execute(jute_insert, {
-                "invoice_id": invoice_id,
-                "mr_no": jute_data.get("mr_no"),
-                "mr_id": to_int(jute_data.get("mr_id"), "mr_id"),
-                "claim_amount": claim_amount,
-                "other_reference": jute_data.get("other_reference"),
-                "unit_conversion": jute_data.get("unit_conversion"),
-                "despatch_doc_no": jute_data.get("despatch_doc_no"),
-                "despatched_through": jute_data.get("despatched_through"),
-                "mukam_id": to_int(jute_data.get("mukam_id"), "mukam_id"),
-                "claim_note": jute_data.get("claim_note"),
-            })
+            # Insert GST breakup if provided
+            gst_data = item.get("gst")
+            if gst_data and isinstance(gst_data, dict) and line_item_id:
+                db.execute(gst_query, {
+                    "invoice_line_item_id": line_item_id,
+                    "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                    "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                    "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                    "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                    "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                    "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                    "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                })
 
         db.commit()
         return {"message": "Sales invoice updated successfully", "invoice_id": invoice_id}
@@ -1006,7 +992,7 @@ async def open_sales_invoice(
             "approval_level": None,
             "invoice_no": new_no,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
 
@@ -1050,7 +1036,7 @@ async def cancel_draft_sales_invoice(
             "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 6, "message": "Draft cancelled successfully."}
@@ -1087,7 +1073,7 @@ async def send_sales_invoice_for_approval(
             "approval_level": 1,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": 20, "new_approval_level": 1, "message": "Sales invoice sent for approval."}
@@ -1199,7 +1185,7 @@ async def reopen_sales_invoice(
             "approval_level": None,
             "invoice_no": None,
             "updated_by": user_id,
-            "updated_date_time": datetime.utcnow(),
+            "updated_date_time": now_ist(),
         })
         db.commit()
         return {"status": "success", "new_status_id": new_status_id, "message": f"Sales invoice reopened (status: {new_status_id})."}

@@ -10,6 +10,7 @@ so the core approval logic remains module-agnostic.
 import logging
 from datetime import datetime
 from typing import Optional
+from src.common.utils import now_ist
 
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
@@ -35,6 +36,7 @@ def process_approval(
     doc_name: str,
     document_amount: float | None = None,
     extra_update_params: dict | None = None,
+    get_consumed_amounts_fn=None,
 ) -> dict:
     """Generic approval processing for any document type.
 
@@ -61,6 +63,10 @@ def process_approval(
             When None, amount checks are skipped entirely.
         extra_update_params: Optional dict of additional bind parameters
             to include in update_status_fn calls (e.g., {'indent_no': None}).
+        get_consumed_amounts_fn: Optional callable that returns a text() query
+            for fetching daily/monthly consumed amounts. The query must accept
+            bind param :user_id and return columns: day_total, month_total.
+            When provided, daily/monthly limits from approval_mst are enforced.
 
     Returns:
         Dict with keys: status, new_status_id, new_approval_level, message.
@@ -88,7 +94,7 @@ def process_approval(
 
         # 3. Auto-transition from Open (1) to Pending Approval (20)
         if current_status_id == 1:
-            updated_at = datetime.utcnow()
+            updated_at = now_ist()
             update_q = update_status_fn()
             params = {
                 id_param_name: doc_id,
@@ -99,13 +105,12 @@ def process_approval(
                 **merged_extra,
             }
             db.execute(update_q, params)
-            db.commit()
+            # Do NOT commit here — keep auto-transition + approval as one
+            # atomic transaction. The single commit at the end handles both.
+            # If validation fails, db.rollback() in the except block will
+            # undo this auto-transition.
             current_status_id = 20
             current_approval_level = 1
-            # Refresh document data after status change
-            doc_result = db.execute(doc_query, {id_param_name: doc_id}).fetchone()
-            if doc_result:
-                doc = dict(doc_result._mapping)
 
         # 4. Must be in Pending Approval (20) to proceed
         if current_status_id != 20:
@@ -129,48 +134,43 @@ def process_approval(
 
         if approval_exists:
             # 6a. Hierarchy exists — use level-based approval
+            # A user may have entries at multiple levels (e.g., level 1 AND level 2).
+            # Fetch all and find the row matching the document's current level.
             user_level_query = get_user_approval_level()
-            user_level_result = db.execute(
+            user_level_rows = db.execute(
                 user_level_query,
                 {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-            ).fetchone()
+            ).fetchall()
 
-            if not user_level_result:
+            if not user_level_rows:
                 raise HTTPException(
                     status_code=403,
                     detail="User does not have approval permission for this menu and branch."
                 )
 
-            user_data = dict(user_level_result._mapping)
-            user_approval_level = user_data.get("approval_level")
+            # Find the row matching the document's current approval level
+            user_data = None
+            for row in user_level_rows:
+                row_dict = dict(row._mapping)
+                if row_dict.get("approval_level") == current_approval_level:
+                    user_data = row_dict
+                    break
 
-            # 7. Level mismatch check
-            if user_approval_level != current_approval_level:
+            if user_data is None:
+                # User has approval entries but none at the current level
+                user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"User approval level ({user_approval_level}) does not match "
+                        f"User approval level(s) {user_levels} do not match "
                         f"current {doc_name} approval level ({current_approval_level})."
                     )
                 )
 
-            # 8. Value-based checks (only when document_amount is provided)
-            if document_amount is not None:
-                max_amount_single = user_data.get("max_amount_single")
-                if (
-                    max_amount_single is not None
-                    and max_amount_single > 0
-                    and document_amount > max_amount_single
-                ):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"Document amount ({document_amount}) exceeds maximum "
-                            f"single approval amount ({max_amount_single})."
-                        )
-                    )
+            user_approval_level = user_data.get("approval_level")
 
-            # 9. Get max approval level for this menu/branch
+            # 8. Get max approval level for this menu/branch (needed for
+            #    value-based decisions below)
             max_level_query = get_max_approval_level()
             max_level_result = db.execute(
                 max_level_query,
@@ -182,8 +182,95 @@ def process_approval(
                 else user_approval_level
             )
 
+            # 9. Value-based checks (only when document_amount is provided)
+            value_based_final = False
+            amount_exceeds_limit = False
+            if document_amount is not None:
+                max_amount_single = user_data.get("max_amount_single")
+                day_max_amount_limit = user_data.get("day_max_amount")
+                month_max_amount_limit = user_data.get("month_max_amount")
+
+                # Check single-document amount limit
+                has_value_limits = (
+                    max_amount_single is not None and max_amount_single > 0
+                )
+                if has_value_limits:
+                    if document_amount > max_amount_single:
+                        # Amount exceeds this user's limit. If higher levels
+                        # exist, escalate so someone with a higher limit can
+                        # approve. Only block when this IS the final level.
+                        if user_approval_level >= max_approval_level:
+                            raise HTTPException(
+                                status_code=403,
+                                detail=(
+                                    f"Document amount ({document_amount}) exceeds maximum "
+                                    f"single approval amount ({max_amount_single}) "
+                                    f"and no higher approval level exists."
+                                )
+                            )
+                        amount_exceeds_limit = True
+                    else:
+                        # Single amount is within limit — check daily/monthly
+                        value_based_final = True
+
+                        if get_consumed_amounts_fn is not None:
+                            needs_daily = (
+                                day_max_amount_limit is not None
+                                and day_max_amount_limit > 0
+                            )
+                            needs_monthly = (
+                                month_max_amount_limit is not None
+                                and month_max_amount_limit > 0
+                            )
+
+                            if needs_daily or needs_monthly:
+                                consumed_query = get_consumed_amounts_fn()
+                                consumed_result = db.execute(
+                                    consumed_query, {"user_id": user_id}
+                                ).fetchone()
+
+                                if consumed_result:
+                                    consumed = dict(consumed_result._mapping)
+                                    day_total = float(consumed.get("day_total", 0) or 0)
+                                    month_total = float(consumed.get("month_total", 0) or 0)
+
+                                    if needs_daily and (day_total + document_amount) > day_max_amount_limit:
+                                        if user_approval_level >= max_approval_level:
+                                            raise HTTPException(
+                                                status_code=403,
+                                                detail=(
+                                                    f"Approving this {doc_name} (amount {document_amount}) "
+                                                    f"would exceed daily approval limit "
+                                                    f"({day_total} + {document_amount} > {day_max_amount_limit})."
+                                                )
+                                            )
+                                        value_based_final = False
+                                        amount_exceeds_limit = True
+
+                                    if needs_monthly and (month_total + document_amount) > month_max_amount_limit:
+                                        if user_approval_level >= max_approval_level:
+                                            raise HTTPException(
+                                                status_code=403,
+                                                detail=(
+                                                    f"Approving this {doc_name} (amount {document_amount}) "
+                                                    f"would exceed monthly approval limit "
+                                                    f"({month_total} + {document_amount} > {month_max_amount_limit})."
+                                                )
+                                            )
+                                        value_based_final = False
+                                        amount_exceeds_limit = True
+
             # 10-11. Determine next status
-            if user_approval_level >= max_approval_level:
+            # - value_based_final: user's value limits cover the amount →
+            #   approve directly without requiring higher levels.
+            # - amount_exceeds_limit: user's limits are too low → force
+            #   escalation to next level regardless of level-based logic.
+            if amount_exceeds_limit:
+                # Must escalate — user's value authority is insufficient
+                new_status_id = 20  # Still Pending Approval
+                new_approval_level = current_approval_level + 1
+                message = f"{doc_name} moved to approval level {new_approval_level}."
+            elif user_approval_level >= max_approval_level or value_based_final:
                 new_status_id = 3  # Approved (final)
                 new_approval_level = user_approval_level
                 message = f"{doc_name} approved (final level)."
@@ -204,7 +291,7 @@ def process_approval(
             message = f"{doc_name} approved (no approval hierarchy configured)."
 
         # 12. Update document status
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_status_fn()
         params = {
             id_param_name: doc_id,
@@ -312,23 +399,23 @@ def process_rejection(
             if approval_exists:
                 # Hierarchy exists — use level-based check
                 user_level_query = get_user_approval_level()
-                user_level_result = db.execute(
+                user_level_rows = db.execute(
                     user_level_query,
                     {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                ).fetchone()
+                ).fetchall()
 
-                if not user_level_result:
+                if not user_level_rows:
                     raise HTTPException(
                         status_code=403,
                         detail="User does not have approval permission for this menu and branch."
                     )
 
-                user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                if user_approval_level != current_approval_level:
+                user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                if current_approval_level not in user_levels:
                     raise HTTPException(
                         status_code=403,
                         detail=(
-                            f"User approval level ({user_approval_level}) does not match "
+                            f"User approval level(s) {user_levels} do not match "
                             f"current {doc_name} approval level ({current_approval_level})."
                         )
                     )
@@ -341,7 +428,7 @@ def process_rejection(
                     )
 
         # 3. Update status to Rejected (4), clear approval_level
-        updated_at = datetime.utcnow()
+        updated_at = now_ist()
         update_q = update_status_fn()
         params = {
             id_param_name: doc_id,
@@ -435,14 +522,14 @@ def calculate_approval_permissions(
             if approval_exists:
                 # Approval hierarchy exists — check if user has approval level 1
                 user_level_query = get_user_approval_level()
-                user_level_result = db.execute(
+                user_level_rows = db.execute(
                     user_level_query,
                     {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                ).fetchone()
+                ).fetchall()
 
-                if user_level_result:
-                    user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                    if user_approval_level == 1:
+                if user_level_rows:
+                    user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                    if 1 in user_levels:
                         permissions["canApprove"] = True
             else:
                 # No approval hierarchy — check if user has edit access
@@ -465,24 +552,45 @@ def calculate_approval_permissions(
 
         # Approval/Reject permissions (only for status_id = 20)
         if status_id == 20:  # Pending Approval
+            permissions["canSave"] = True
             permissions["canViewApprovalLog"] = True
 
             if approval_exists:
                 # Approval hierarchy exists — check if user's level matches current level
                 if current_approval_level is not None:
                     user_level_query = get_user_approval_level()
-                    user_level_result = db.execute(
+                    user_level_rows = db.execute(
                         user_level_query,
                         {"menu_id": menu_id, "branch_id": branch_id, "user_id": user_id}
-                    ).fetchone()
+                    ).fetchall()
 
-                    if user_level_result:
-                        user_approval_level = dict(user_level_result._mapping).get("approval_level")
-                        if user_approval_level == current_approval_level:
+                    if user_level_rows:
+                        user_levels = [dict(r._mapping).get("approval_level") for r in user_level_rows]
+                        level_matches = current_approval_level in user_levels
+                        logger.info(
+                            f"[PermCheck] user_id={user_id} menu_id={menu_id} branch_id={branch_id} "
+                            f"user_levels={user_levels} doc_level={current_approval_level} "
+                            f"match={level_matches}"
+                        )
+                        if level_matches:
                             permissions["canApprove"] = True
                             permissions["canReject"] = True
+                    else:
+                        logger.warning(
+                            f"[PermCheck] No approval_mst entry for user_id={user_id} "
+                            f"menu_id={menu_id} branch_id={branch_id}"
+                        )
+                else:
+                    logger.warning(
+                        f"[PermCheck] current_approval_level is None for status=20, "
+                        f"menu_id={menu_id} branch_id={branch_id}"
+                    )
             else:
                 # No approval hierarchy — check if user has edit access
+                logger.info(
+                    f"[PermCheck] No approval hierarchy for menu_id={menu_id} "
+                    f"branch_id={branch_id}, checking edit access"
+                )
                 has_edit = _user_has_edit_access(user_id, branch_id, menu_id, db)
                 if has_edit:
                     permissions["canApprove"] = True

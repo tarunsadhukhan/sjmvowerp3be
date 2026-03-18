@@ -33,7 +33,11 @@ def get_approval_flow_by_menu_branch():
 
 
 def get_user_approval_level():
-    """Get the approval level of a specific user for a menu and branch."""
+    """Get approval level(s) of a specific user for a menu and branch.
+    A user may have entries at multiple approval levels (e.g., level 1 and level 2).
+    Returns all matching rows ordered by approval_level so callers can find the
+    row matching the document's current approval level.
+    """
     sql = """SELECT
         am.approval_level,
         am.max_amount_single,
@@ -43,7 +47,7 @@ def get_user_approval_level():
     WHERE am.menu_id = :menu_id
         AND am.branch_id = :branch_id
         AND am.user_id = :user_id
-    LIMIT 1;"""
+    ORDER BY am.approval_level ASC;"""
     return text(sql)
 
 

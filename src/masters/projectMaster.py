@@ -19,6 +19,7 @@ from src.masters.query import (
     # ...existing imports...
 )
 from datetime import datetime
+from src.common.utils import now_ist
 import json
 import re
 router = APIRouter()
@@ -213,7 +214,7 @@ async def project_master_create(
             active=active,
             branch_id=branch_id,
             updated_by=user_id,
-            updated_date_time=datetime.utcnow(),
+            updated_date_time=now_ist(),
             party_id=party_id,
             dept_id=dept_id
         )

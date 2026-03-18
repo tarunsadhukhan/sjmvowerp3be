@@ -58,26 +58,26 @@ class TestDetermineValidationLogic:
     def test_regular_overhaul_returns_1(self):
         assert determine_validation_logic("Regular", "Overhaul") == 1
 
-    def test_regular_capital_returns_3(self):
-        assert determine_validation_logic("Regular", "Capital") == 3
+    def test_regular_capital_returns_2(self):
+        assert determine_validation_logic("Regular", "Capital") == 2
 
-    def test_open_general_returns_2(self):
-        assert determine_validation_logic("Open", "General") == 2
+    def test_open_general_returns_3(self):
+        assert determine_validation_logic("Open", "General") == 3
 
-    def test_open_maintenance_returns_2(self):
-        assert determine_validation_logic("Open", "Maintenance") == 2
+    def test_open_maintenance_returns_3(self):
+        assert determine_validation_logic("Open", "Maintenance") == 3
 
-    def test_open_production_returns_2(self):
-        assert determine_validation_logic("Open", "Production") == 2
+    def test_open_production_returns_3(self):
+        assert determine_validation_logic("Open", "Production") == 3
 
     def test_bom_general_returns_1(self):
         assert determine_validation_logic("BOM", "General") == 1
 
-    def test_bom_capital_returns_3(self):
-        assert determine_validation_logic("BOM", "Capital") == 3
+    def test_bom_capital_returns_2(self):
+        assert determine_validation_logic("BOM", "Capital") == 2
 
-    def test_bom_overhaul_returns_3(self):
-        assert determine_validation_logic("BOM", "Overhaul") == 3
+    def test_bom_overhaul_returns_2(self):
+        assert determine_validation_logic("BOM", "Overhaul") == 2
 
     def test_unknown_combination_returns_3(self):
         assert determine_validation_logic("Unknown", "Whatever") == 3
@@ -206,19 +206,19 @@ class TestValidateItemEndpoint:
         assert "item_id" in response.json()["detail"].lower()
 
     def test_logic_3_returns_no_validation(self):
-        """Logic 3 (Regular+Capital) should return immediately with no warnings."""
+        """Logic 3 (Open+General) should return immediately with no warnings."""
         mock_session = MagicMock()
 
-        # Mock expense type name lookup returning "Capital"
+        # Mock expense type name lookup returning "General"
         expense_row = MagicMock()
-        expense_row._mapping = {"expense_type_name": "Capital"}
+        expense_row._mapping = {"expense_type_name": "General"}
         mock_session.execute.return_value.fetchone.return_value = expense_row
 
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
 
         response = client.get(
             "/api/procurementIndent/validate_item_for_indent"
-            "?branch_id=1&item_id=10&indent_type=Regular&expense_type_id=5"
+            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
         )
         assert response.status_code == 200
         data = response.json()
@@ -275,6 +275,7 @@ class TestValidateItemEndpoint:
             "open_indent_outstanding": 0,
             "outstanding_po_qty": 0,
             "open_po_outstanding": 0,
+            "po_outstanding_to_validate": 0,
             "minqty": 20,
             "maxqty": 100,
             "min_order_qty": 10,
@@ -369,7 +370,7 @@ class TestValidateItemEndpoint:
 
 
 class TestValidateItemEndpointLogic2:
-    """Tests for Logic 2 (Open indent) via GET /api/procurementIndent/validate_item_for_indent."""
+    """Tests for Logic 2 (BOM+Capital) via GET /api/procurementIndent/validate_item_for_indent."""
 
     def setup_method(self):
         app.dependency_overrides[get_current_user_with_refresh] = _override_auth
@@ -379,11 +380,11 @@ class TestValidateItemEndpointLogic2:
         app.dependency_overrides.pop(get_tenant_db, None)
 
     def test_logic2_fy_indent_exists_blocks(self):
-        """Logic 2 should block when an Open indent already exists in the FY."""
+        """Logic 2 should block when an indent already exists in the FY."""
         mock_session = MagicMock()
 
         expense_row = MagicMock()
-        expense_row._mapping = {"expense_type_name": "General"}
+        expense_row._mapping = {"expense_type_name": "Capital"}
 
         vdata_row = MagicMock()
         vdata_row._mapping = {
@@ -398,20 +399,20 @@ class TestValidateItemEndpointLogic2:
         }
 
         fy_row = MagicMock()
-        fy_row._mapping = {"indent_id": 5, "indent_no": "IND/OPEN/001", "status_id": 3, "indent_date": "2025-06-01"}
+        fy_row._mapping = {"indent_id": 5, "indent_no": "IND/BOM/001", "status_id": 3, "indent_date": "2025-06-01"}
 
         mock_session.execute.return_value.fetchone.side_effect = [expense_row, vdata_row, fy_row]
         app.dependency_overrides[get_tenant_db] = _make_mock_db_override(mock_session)
 
         response = client.get(
             "/api/procurementIndent/validate_item_for_indent"
-            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+            "?branch_id=1&item_id=10&indent_type=BOM&expense_type_id=5"
         )
         assert response.status_code == 200
         data = response.json()
         assert data["validation_logic"] == 2
         assert data["fy_indent_exists"] is True
-        assert data["fy_indent_no"] == "IND/OPEN/001"
+        assert data["fy_indent_no"] == "IND/BOM/001"
         assert len(data["errors"]) > 0
 
     def test_logic2_no_minmax_blocks(self):
@@ -419,7 +420,7 @@ class TestValidateItemEndpointLogic2:
         mock_session = MagicMock()
 
         expense_row = MagicMock()
-        expense_row._mapping = {"expense_type_name": "General"}
+        expense_row._mapping = {"expense_type_name": "Capital"}
 
         vdata_row = MagicMock()
         vdata_row._mapping = {
@@ -439,7 +440,7 @@ class TestValidateItemEndpointLogic2:
 
         response = client.get(
             "/api/procurementIndent/validate_item_for_indent"
-            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+            "?branch_id=1&item_id=10&indent_type=BOM&expense_type_id=5"
         )
         assert response.status_code == 200
         data = response.json()
@@ -452,7 +453,7 @@ class TestValidateItemEndpointLogic2:
         mock_session = MagicMock()
 
         expense_row = MagicMock()
-        expense_row._mapping = {"expense_type_name": "General"}
+        expense_row._mapping = {"expense_type_name": "Capital"}
 
         vdata_row = MagicMock()
         vdata_row._mapping = {
@@ -472,7 +473,7 @@ class TestValidateItemEndpointLogic2:
 
         response = client.get(
             "/api/procurementIndent/validate_item_for_indent"
-            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+            "?branch_id=1&item_id=10&indent_type=BOM&expense_type_id=5"
         )
         assert response.status_code == 200
         data = response.json()
@@ -489,7 +490,7 @@ class TestValidateItemEndpointLogic2:
         mock_session = MagicMock()
 
         expense_row = MagicMock()
-        expense_row._mapping = {"expense_type_name": "General"}
+        expense_row._mapping = {"expense_type_name": "Capital"}
 
         vdata_row = MagicMock()
         vdata_row._mapping = {
@@ -508,7 +509,7 @@ class TestValidateItemEndpointLogic2:
 
         response = client.get(
             "/api/procurementIndent/validate_item_for_indent"
-            "?branch_id=1&item_id=10&indent_type=Open&expense_type_id=1"
+            "?branch_id=1&item_id=10&indent_type=BOM&expense_type_id=5"
         )
         assert response.status_code == 200
         data = response.json()

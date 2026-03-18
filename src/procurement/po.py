@@ -1,8 +1,10 @@
 from fastapi import Depends, Request, HTTPException, APIRouter
 import logging
+import math
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from datetime import datetime, date
+from src.common.utils import now_ist
 from typing import Optional
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
@@ -29,9 +31,11 @@ from src.procurement.query import (
 	get_max_po_no_for_branch_fy,
 	get_po_with_approval_info,
 	update_po_status,
+	get_po_consumed_amounts,
 	get_item_by_group_id_purchaseable,
 	get_item_make_by_group_id,
 	get_item_uom_by_group_id,
+	get_last_purchase_rates_by_item_group,
 	get_expense_types,
 	get_project,
 	get_po_header_query,
@@ -45,6 +49,14 @@ from src.procurement.query import (
 	get_outstanding_po_qty_v2,
 	check_open_po_for_item_v2,
 	get_po_fy_check_v2,
+	# In-place update queries
+	update_proc_po_dtl,
+	delete_po_gst_by_dtl_id,
+	delete_po_gst_for_additional_charges,
+	# Edit-mode validation queries
+	get_current_po_item_outstanding,
+	check_open_po_for_item_v2_exclude,
+	get_po_fy_check_v2_exclude,
 )
 from src.masters.query import (
 	get_branch_list,
@@ -56,9 +68,38 @@ from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.indent import (
 	format_indent_no,
 	calculate_financial_year,
-	determine_validation_logic,
 	get_fy_boundaries,
 )
+
+# =============================================================================
+# PO-SPECIFIC VALIDATION HELPERS
+# =============================================================================
+
+# Mapping: (po_type, expense_type_name) -> validation logic
+# Logic 1: Max/Min Quantity Validation with Stock Check
+# Logic 2: FY Check + max qty as forced value (requires min/max)
+# Logic 3: No Validation / Free Entry
+#
+# NOTE: This differs from the indent VALIDATION_LOGIC_MAP in two key ways:
+#   - Regular + Capital -> Logic 3 (indent uses Logic 2)
+#   - Open + General/Maintenance/Production -> Logic 2 (indent uses Logic 3)
+PO_VALIDATION_LOGIC_MAP = {
+	# Regular PO
+	("Regular", "General"): 1,
+	("Regular", "Maintenance"): 1,
+	("Regular", "Production"): 1,
+	("Regular", "Overhaul"): 1,
+	("Regular", "Capital"): 3,
+	# Open PO — FY check + forced max qty
+	("Open", "General"): 2,
+	("Open", "Maintenance"): 2,
+	("Open", "Production"): 2,
+}
+
+
+def determine_po_validation_logic(po_type: str, expense_type_name: str) -> int:
+	"""Determine which validation logic applies for PO based on po_type + expense type."""
+	return PO_VALIDATION_LOGIC_MAP.get((po_type, expense_type_name), 3)
 from src.common.approval_utils import (
 	process_approval,
 	process_rejection,
@@ -243,6 +284,25 @@ async def get_po_setup_2(
 		uoms_result = db.execute(uoms_query, {"item_group_id": item_group_id}).fetchall()
 		uoms = [dict(r._mapping) for r in uoms_result]
 
+		# Enrich items with last purchase rate if co_id is provided
+		co_id = request.query_params.get("co_id")
+		if co_id:
+			rates_query = get_last_purchase_rates_by_item_group()
+			rates_result = db.execute(rates_query, {
+				"item_group_id": item_group_id, "co_id": int(co_id)
+			}).fetchall()
+			rates_map = {r._mapping["item_id"]: dict(r._mapping) for r in rates_result}
+			for item in items:
+				rate_info = rates_map.get(item["item_id"])
+				if rate_info:
+					item["last_purchase_rate"] = rate_info["last_purchase_rate"]
+					item["last_purchase_date"] = str(rate_info["last_purchase_date"]) if rate_info["last_purchase_date"] else None
+					item["last_supplier_name"] = rate_info["last_supplier_name"]
+				else:
+					item["last_purchase_rate"] = None
+					item["last_purchase_date"] = None
+					item["last_supplier_name"] = None
+
 		return {
 			"item_grp_code": item_grp_code,
 			"item_grp_name": item_grp_name,
@@ -268,7 +328,7 @@ async def validate_item_for_po(
 	Returns validation data including errors, warnings, and allowable qty range
 	based on (po_type + expense_type) → Logic 1, 2, or 3.
 
-	Logic mapping (mirrors indent validation matrix):
+	Logic mapping (PO-specific — differs from indent):
 	  Logic 1 (Regular + General/Maintenance/Production/Overhaul): Stock + max/min formula including outstanding_po_qty.
 	  Logic 2 (Open + General/Maintenance/Production): FY PO check + max qty forced.
 	  Logic 3 (Regular + Capital, others): No validation, free entry.
@@ -278,6 +338,7 @@ async def validate_item_for_po(
 		item_id = request.query_params.get("item_id")
 		po_type = request.query_params.get("po_type")  # "Regular" or "Open"
 		expense_type_id = request.query_params.get("expense_type_id")
+		po_id_raw = request.query_params.get("po_id")  # Optional — for edit mode
 
 		if not branch_id:
 			raise HTTPException(status_code=400, detail="branch_id is required")
@@ -295,6 +356,13 @@ async def validate_item_for_po(
 		except (TypeError, ValueError) as e:
 			raise HTTPException(status_code=400, detail=f"Invalid parameter format: {e}")
 
+		po_id = None
+		if po_id_raw:
+			try:
+				po_id = int(po_id_raw)
+			except (TypeError, ValueError):
+				raise HTTPException(status_code=400, detail="Invalid po_id format")
+
 		po_type = po_type.strip().capitalize()
 		if po_type not in ("Regular", "Open"):
 			raise HTTPException(status_code=400, detail=f"Invalid po_type '{po_type}'. Must be 'Regular' or 'Open'.")
@@ -308,8 +376,8 @@ async def validate_item_for_po(
 			raise HTTPException(status_code=400, detail=f"Invalid expense_type_id: {expense_type_id}")
 		expense_type_name = dict(expense_row._mapping)["expense_type_name"]
 
-		# Determine validation logic using the same mapping as indent
-		validation_logic = determine_validation_logic(po_type, expense_type_name)
+		# Determine validation logic using PO-specific mapping
+		validation_logic = determine_po_validation_logic(po_type, expense_type_name)
 
 		result = {
 			"validation_logic": validation_logic,
@@ -364,12 +432,51 @@ async def validate_item_for_po(
 		view_max_po = float(vdata.get("max_po_qty", -1))
 		view_min_po = float(vdata.get("min_po_qty", -1))
 
+		# ── Edit-mode adjustment ──
+		# When editing an existing PO, the view already includes this PO's qty.
+		# Subtract it so validation treats the current PO line as "not yet committed".
+		current_po_outstanding = 0.0
+		if po_id:
+			cpo_row = db.execute(
+				get_current_po_item_outstanding(),
+				{"po_id": po_id, "item_id": item_id, "branch_id": branch_id},
+			).fetchone()
+			if cpo_row:
+				current_po_outstanding = float(dict(cpo_row._mapping).get("current_po_outstanding", 0))
+			outstanding_po = max(outstanding_po - current_po_outstanding, 0.0)
+
 		result["branch_stock"] = branch_stock
 		result["outstanding_indent_qty"] = outstanding_indent
 		result["outstanding_po_qty"] = outstanding_po
 		result["minqty"] = float(minqty) if minqty is not None else None
 		result["maxqty"] = float(maxqty) if maxqty is not None else None
 		result["min_order_qty"] = float(min_order_qty) if min_order_qty is not None else None
+
+		# When editing, recalculate max/min PO qty instead of using pre-computed view values
+		if po_id and validation_logic == 1:
+			_maxqty = float(maxqty) if maxqty else 0
+			_minqty = float(minqty) if minqty else 0
+			_reorder = float(min_order_qty) if min_order_qty else 0
+
+			if _maxqty <= 0:
+				# No max configured — free entry (sentinel -1 behavior)
+				view_max_po = -1
+				view_min_po = -1
+			else:
+				available = _maxqty - branch_stock - outstanding_indent - outstanding_po
+				if available <= 0:
+					view_max_po = 0
+					view_min_po = _minqty if _minqty > 0 else -1
+				elif _reorder <= 0:
+					# No reorder qty — use available directly
+					view_max_po = available
+					view_min_po = _minqty if _minqty > 0 else -1
+				else:
+					if available < _reorder:
+						view_max_po = _reorder
+					else:
+						view_max_po = math.ceil(available / _reorder) * _reorder
+					view_min_po = _minqty if _minqty > 0 else -1
 
 		if validation_logic == 1:
 			# --- Logic 1: Max/Min + Stock Check (Regular PO, non-Capital expense) ---
@@ -395,10 +502,17 @@ async def validate_item_for_po(
 
 			# Step 2: Check if an active PO already exists for this item at this branch
 			# This is a non-blocking warning — the user may still create a new PO.
-			open_po_row = db.execute(
-				check_open_po_for_item_v2(),
-				{"branch_id": branch_id, "item_id": item_id},
-			).fetchone()
+			# Exclude the current PO during edit to avoid self-blocking.
+			if po_id:
+				open_po_row = db.execute(
+					check_open_po_for_item_v2_exclude(),
+					{"branch_id": branch_id, "item_id": item_id, "exclude_po_id": po_id},
+				).fetchone()
+			else:
+				open_po_row = db.execute(
+					check_open_po_for_item_v2(),
+					{"branch_id": branch_id, "item_id": item_id},
+				).fetchone()
 
 			if open_po_row:
 				open_po_data = dict(open_po_row._mapping)
@@ -442,10 +556,17 @@ async def validate_item_for_po(
 			# --- Logic 2: Open Entry + FY Check (Open PO, General/Maintenance/Production) ---
 
 			# Step 1: Check if an open PO already exists for this item in current FY
-			fy_po_row = db.execute(
-				get_po_fy_check_v2(),
-				{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
-			).fetchone()
+			# Exclude the current PO during edit to avoid self-blocking.
+			if po_id:
+				fy_po_row = db.execute(
+					get_po_fy_check_v2_exclude(),
+					{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end, "exclude_po_id": po_id},
+				).fetchone()
+			else:
+				fy_po_row = db.execute(
+					get_po_fy_check_v2(),
+					{"branch_id": branch_id, "item_id": item_id, "fy_start": fy_start, "fy_end": fy_end},
+				).fetchone()
 
 			if fy_po_row:
 				fy_po_data = dict(fy_po_row._mapping)
@@ -848,7 +969,7 @@ async def create_po(
 		raw_additional = payload.get("additional_charges", [])
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 
 		# Calculate totals
 		net_amount = 0.0
@@ -876,6 +997,11 @@ async def create_po(
 			if item_result:
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
+
+			# Allow frontend to override hsn_code
+			frontend_hsn = item.get("hsn_code")
+			if frontend_hsn is not None and str(frontend_hsn).strip():
+				hsn_code = str(frontend_hsn).strip()
 
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
@@ -941,10 +1067,12 @@ async def create_po(
 			gst_amounts = None
 			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
 			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
-				# Get tax percentage from additional_charges_mst or use default
-				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
-				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
-				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
+				# Use frontend-sent tax_pct if provided, fallback to master default_value
+				tax_pct = to_float(addl.get("tax_pct"), f"additional_charges[{idx}].tax_pct")
+				if tax_pct <= 0:
+					addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
+					addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
+					tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
 					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]
@@ -1218,6 +1346,7 @@ async def get_po_by_id(
 			"branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
 			"supplier": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
 			"supplierBranch": str(header.get("supplier_branch_id", "")) if header.get("supplier_branch_id") else "",
+			"supplierState": header.get("supplier_state_name") if header.get("supplier_state_name") else None,
 			"billingAddress": str(header.get("billing_branch_id", "")) if header.get("billing_branch_id") else "",
 			"billingState": header.get("billing_state_name") if header.get("billing_state_name") else None,
 			"shippingAddress": str(header.get("shipping_branch_id", "")) if header.get("shipping_branch_id") else "",
@@ -1252,13 +1381,26 @@ async def get_po_by_id(
 		# Map line items
 		for detail in details:
 			gst = gst_by_dtl_id.get(detail.get("po_dtl_id"))
+			
+			# Extract indent_dtl_id for balance calculation
+			indent_dtl_id_val = detail.get("indent_dtl_id")
+			if indent_dtl_id_val:
+				try:
+					indent_dtl_id_int = int(indent_dtl_id_val)
+				except (TypeError, ValueError):
+					indent_dtl_id_int = None
+			else:
+				indent_dtl_id_int = None
+			
 			line = {
 				"id": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else "",
 				"indentNo": detail.get("indent_no") if detail.get("indent_no") else None,
+				"indentDtlId": str(indent_dtl_id_val) if indent_dtl_id_val else None,
 				"department": str(detail.get("dept_id", "")) if detail.get("dept_id") else None,
 				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
 				"item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
 				"itemCode": detail.get("item_code") if detail.get("item_code") else "",
+				"hsnCode": detail.get("hsn_code") if detail.get("hsn_code") else "",
 				"itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
 				"quantity": float(detail.get("qty", 0)) if detail.get("qty") is not None else 0,
 				"rate": float(detail.get("rate", 0)) if detail.get("rate") is not None else 0,
@@ -1270,6 +1412,57 @@ async def get_po_by_id(
 				"remarks": detail.get("remarks") if detail.get("remarks") else None,
 				"taxPercentage": None,  # Will be calculated from GST if available
 			}
+			
+			# Fetch available indent balance if indent_dtl_id exists
+			if indent_dtl_id_int:
+				try:
+					# Try to fetch from vw_proc_indent_outstanding_new first
+					indent_balance_query = text("""
+						SELECT indent_bal_qty FROM vw_proc_indent_outstanding_new 
+						WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_balance_result = db.execute(
+						indent_balance_query, 
+						{"indent_dtl_id": indent_dtl_id_int}
+					).fetchone()
+					
+					# If view doesn't exist or no result, calculate manually
+					if not indent_balance_result:
+						# Get total indent qty from proc_indent_dtl
+						indent_dtl_query = text("""
+							SELECT qty FROM proc_indent_dtl 
+							WHERE indent_dtl_id = :indent_dtl_id
+						""")
+						indent_dtl_result = db.execute(
+							indent_dtl_query,
+							{"indent_dtl_id": indent_dtl_id_int}
+						).fetchone()
+						
+						if indent_dtl_result:
+							indent_total_qty = float(indent_dtl_result[0]) if indent_dtl_result[0] is not None else 0
+							
+							# Get sum of all PO quantities for this indent (excluding soft-deleted)
+							po_qty_query = text("""
+								SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+								WHERE ppd.indent_dtl_id = :indent_dtl_id 
+									AND ppd.active = 1
+							""")
+							po_result = db.execute(
+								po_qty_query,
+								{"indent_dtl_id": indent_dtl_id_int}
+							).fetchone()
+							po_qty = float(po_result[0]) if po_result else 0
+							
+							# indent_bal_qty = total_indent_qty - po_qty
+							indent_bal_qty = indent_total_qty - po_qty
+							line["availableIndentQty"] = indent_bal_qty
+					else:
+						line["availableIndentQty"] = float(indent_balance_result[0]) if indent_balance_result[0] is not None else 0
+						
+				except Exception as e:
+					# Log for debugging
+					logger.exception(f"Error fetching indent balance for indent_dtl_id {indent_dtl_id_int}: {e}")
+			
 			if gst:
 				line["taxPercentage"] = float(gst.get("tax_pct", 0)) if gst.get("tax_pct") else None
 				line["igst"] = float(gst.get("i_tax_amount", 0)) if gst.get("i_tax_amount") else 0
@@ -1297,6 +1490,9 @@ async def get_po_by_id(
 				addl_line["igst"] = float(gst.get("i_tax_amount", 0)) if gst.get("i_tax_amount") else 0
 				addl_line["sgst"] = float(gst.get("s_tax_amount", 0)) if gst.get("s_tax_amount") else 0
 				addl_line["cgst"] = float(gst.get("c_tax_amount", 0)) if gst.get("c_tax_amount") else 0
+				addl_line["tax_pct"] = float(gst.get("tax_pct", 0)) if gst.get("tax_pct") else 0
+				addl_line["tax_amount"] = float(gst.get("tax_amount", 0)) if gst.get("tax_amount") else 0
+				addl_line["apply_tax"] = True
 			response["additionalCharges"].append(addl_line)
 		
 		return response
@@ -1409,7 +1605,7 @@ async def update_po(
 		raw_additional = payload.get("additional_charges", [])
 		
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 
 		# Calculate totals (same logic as create)
 		net_amount = 0.0
@@ -1428,6 +1624,7 @@ async def update_po(
 			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
 			item_make_id = to_int(item.get("make"), f"items[{idx}].make")
 			indent_dtl_id = to_int(item.get("indent_dtl_id"), f"items[{idx}].indent_dtl_id")
+			po_dtl_id_raw = to_int(item.get("po_dtl_id"), f"items[{idx}].po_dtl_id")
 
 			# Get tax percentage from item_mst
 			item_query = text("SELECT tax_percentage, hsn_code FROM item_mst WHERE item_id = :item_id")
@@ -1437,6 +1634,11 @@ async def update_po(
 			if item_result:
 				tax_percentage = float(item_result[0] or 0.0)
 				hsn_code = item_result[1]
+
+			# Allow frontend to override hsn_code
+			frontend_hsn = item.get("hsn_code")
+			if frontend_hsn is not None and str(frontend_hsn).strip():
+				hsn_code = str(frontend_hsn).strip()
 
 			# Discount calculation
 			discount_mode = to_int(item.get("discount_mode"), f"items[{idx}].discount_mode")
@@ -1471,6 +1673,7 @@ async def update_po(
 			remarks_raw = item.get("remarks", "").strip() or None
 
 			normalized_items.append({
+				"po_dtl_id": po_dtl_id_raw,
 				"item_id": item_id,
 				"qty": qty,
 				"rate": rate,
@@ -1502,9 +1705,12 @@ async def update_po(
 			gst_amounts = None
 			apply_tax = addl.get("apply_tax", True)  # default to True for backwards compat
 			if india_gst and supplier_state_id and shipping_state_id and apply_tax:
-				addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
-				addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
-				tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
+				# Use frontend-sent tax_pct if provided, fallback to master default_value
+				tax_pct = to_float(addl.get("tax_pct"), f"additional_charges[{idx}].tax_pct")
+				if tax_pct <= 0:
+					addl_query = text("SELECT default_value FROM additional_charges_mst WHERE additional_charges_id = :id")
+					addl_result = db.execute(addl_query, {"id": additional_charges_id}).fetchone()
+					tax_pct = float(addl_result[0] or 0.0) if addl_result else 0.0
 				if tax_pct > 0:
 					gst_amounts = calculate_gst_amounts(net_amt, tax_pct, supplier_state_id, shipping_state_id)
 					total_igst += gst_amounts["i_tax_amount"]
@@ -1562,62 +1768,206 @@ async def update_po(
 			"po_type": po_type,
 		}
 		db.execute(update_header_query, header_params)
-		delete_detail_query = delete_proc_po_dtl()
-		db.execute(delete_detail_query, {
-			"po_id": po_id,
-			"updated_by": updated_by,
-			"updated_date_time": updated_at,
-		})
-		
-		# Delete existing GST records
-		delete_gst_query = delete_po_gst()
-		db.execute(delete_gst_query, {"po_id": po_id})
-		
+
+		# ── Update detail rows in place ──────────────────────────────────
+		# Existing rows are updated (preserving po_dtl_id for inward/GST
+		# traceability). New rows are inserted. Removed rows are soft-deleted.
+		# Triggers handle audit logging for updates and deletions.
+
+		# Get current active detail rows for this PO (including all fields)
+		existing_dtl_rows = db.execute(
+			text("""SELECT po_dtl_id, qty, indent_dtl_id FROM proc_po_dtl 
+					 WHERE po_id = :po_id AND active = 1"""),
+			{"po_id": po_id},
+		).fetchall()
+		existing_dtl_map = {row[0]: {"qty": row[1], "indent_dtl_id": row[2]} for row in existing_dtl_rows}
+		existing_dtl_ids = set(existing_dtl_map.keys())
+
+		incoming_dtl_ids = set()
+		for item in normalized_items:
+			po_dtl_id_val = item.get("po_dtl_id")
+
+			if po_dtl_id_val and po_dtl_id_val in existing_dtl_ids:
+				# ── Update existing row in-place ──
+				incoming_dtl_ids.add(po_dtl_id_val)
+
+				# Get original values for inventory tracking
+				existing_data = existing_dtl_map[po_dtl_id_val]
+				old_qty = existing_data["qty"]
+				original_indent_dtl_id = existing_data["indent_dtl_id"]
+				
+				# Preserve indent_dtl_id if not provided in update
+				update_indent_dtl_id = item["indent_dtl_id"] if item["indent_dtl_id"] else original_indent_dtl_id
+				
+				# ── Validate indent balance qty if indent_dtl_id exists ──
+				if update_indent_dtl_id:
+					# Get indent detail info
+					indent_dtl_query = text("""
+						SELECT qty FROM proc_indent_dtl WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_dtl_result = db.execute(indent_dtl_query, {"indent_dtl_id": update_indent_dtl_id}).fetchone()
+					
+					if indent_dtl_result:
+						indent_total_qty = indent_dtl_result[0]
+						
+						# Get sum of all OTHER PO quantities for this indent (excluding current line)
+						other_po_qty_query = text("""
+							SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+							WHERE ppd.indent_dtl_id = :indent_dtl_id 
+								AND ppd.po_dtl_id != :po_dtl_id
+								AND ppd.active = 1
+						""")
+						other_po_result = db.execute(
+							other_po_qty_query, 
+							{"indent_dtl_id": update_indent_dtl_id, "po_dtl_id": po_dtl_id_val}
+						).fetchone()
+						other_po_qty = other_po_result[0] if other_po_result else 0
+						
+						# Check if new quantity + other POs exceeds indent qty
+						available_for_this_line = indent_total_qty - other_po_qty
+						if item["qty"] > available_for_this_line:
+							raise HTTPException(
+								status_code=400, 
+								detail=f"items[...].quantity {item['qty']} exceeds indent balance {available_for_this_line} for indent_dtl_id {update_indent_dtl_id}"
+							)
+				
+				# Delete old GST for this line
+				db.execute(delete_po_gst_by_dtl_id(), {"po_dtl_id": po_dtl_id_val})
+
+				# Update the detail row
+				db.execute(update_proc_po_dtl(), {
+					"po_dtl_id": po_dtl_id_val,
+					"po_id": po_id,
+					"item_id": item["item_id"],
+					"hsn_code": item["hsn_code"],
+					"item_make_id": item["item_make_id"],
+					"qty": item["qty"],
+					"rate": item["rate"],
+					"uom_id": item["uom_id"],
+					"remarks": item["remarks"],
+					"discount_mode": item["discount_mode"],
+					"discount_value": item["discount_value"],
+					"discount_amount": item["discount_amount"],
+					"indent_dtl_id": update_indent_dtl_id,
+					"updated_by": updated_by,
+					"updated_date_time": updated_at,
+				})
+				
+
+
+				# Re-insert GST if applicable
+				if india_gst and item["gst_amounts"]:
+					gst_query = insert_po_gst()
+					gst_params = {
+						"po_dtl_id": po_dtl_id_val,
+						"po_additional_id": None,
+						"tax_pct": item["gst_amounts"]["tax_pct"],
+						"stax_percentage": item["gst_amounts"]["stax_percentage"],
+						"s_tax_amount": item["gst_amounts"]["s_tax_amount"],
+						"i_tax_amount": item["gst_amounts"]["i_tax_amount"],
+						"i_tax_percentage": item["gst_amounts"]["i_tax_percentage"],
+						"c_tax_amount": item["gst_amounts"]["c_tax_amount"],
+						"c_tax_percentage": item["gst_amounts"]["c_tax_percentage"],
+						"tax_amount": item["gst_amounts"]["tax_amount"],
+					}
+					db.execute(gst_query, gst_params)
+			else:
+				# ── New row — insert ──
+				# ── Validate indent balance qty if indent_dtl_id exists ──
+				if item["indent_dtl_id"]:
+					# Get indent detail info
+					indent_dtl_query = text("""
+						SELECT qty FROM proc_indent_dtl WHERE indent_dtl_id = :indent_dtl_id
+					""")
+					indent_dtl_result = db.execute(indent_dtl_query, {"indent_dtl_id": item["indent_dtl_id"]}).fetchone()
+					
+					if indent_dtl_result:
+						indent_total_qty = indent_dtl_result[0]
+						
+						# Get sum of all PO quantities for this indent
+						po_qty_query = text("""
+							SELECT COALESCE(SUM(ppd.qty), 0) FROM proc_po_dtl ppd
+							WHERE ppd.indent_dtl_id = :indent_dtl_id
+								AND ppd.active = 1
+						""")
+						po_result = db.execute(po_qty_query, {"indent_dtl_id": item["indent_dtl_id"]}).fetchone()
+						po_qty = po_result[0] if po_result else 0
+						
+						# Available for this new line = indent qty - existing POs
+						available_for_new_line = indent_total_qty - po_qty
+						if item["qty"] > available_for_new_line:
+							raise HTTPException(
+								status_code=400, 
+								detail=f"items[...].quantity {item['qty']} exceeds indent balance {available_for_new_line} for indent_dtl_id {item['indent_dtl_id']}"
+							)
+				
+				detail_query = insert_proc_po_dtl()
+				detail_params = {
+					"po_id": po_id,
+					"item_id": item["item_id"],
+					"hsn_code": item["hsn_code"],
+					"item_make_id": item["item_make_id"],
+					"qty": item["qty"],
+					"rate": item["rate"],
+					"uom_id": item["uom_id"],
+					"remarks": item["remarks"],
+					"discount_mode": item["discount_mode"],
+					"discount_value": item["discount_value"],
+					"discount_amount": item["discount_amount"],
+					"active": 1,
+					"indent_dtl_id": item["indent_dtl_id"],
+					"updated_by": updated_by,
+					"updated_date_time": updated_at,
+					"state": 1,
+				}
+				result = db.execute(detail_query, detail_params)
+				new_po_dtl_id = result.lastrowid
+
+				# Insert GST if applicable
+				if india_gst and item["gst_amounts"]:
+					gst_query = insert_po_gst()
+					gst_params = {
+						"po_dtl_id": new_po_dtl_id,
+						"po_additional_id": None,
+						"tax_pct": item["gst_amounts"]["tax_pct"],
+						"stax_percentage": item["gst_amounts"]["stax_percentage"],
+						"s_tax_amount": item["gst_amounts"]["s_tax_amount"],
+						"i_tax_amount": item["gst_amounts"]["i_tax_amount"],
+						"i_tax_percentage": item["gst_amounts"]["i_tax_percentage"],
+						"c_tax_amount": item["gst_amounts"]["c_tax_amount"],
+						"c_tax_percentage": item["gst_amounts"]["c_tax_percentage"],
+						"tax_amount": item["gst_amounts"]["tax_amount"],
+					}
+					db.execute(gst_query, gst_params)
+
+		# Soft-delete rows that were removed by the user
+		removed_dtl_ids = existing_dtl_ids - incoming_dtl_ids
+		for dtl_id in removed_dtl_ids:
+			# Get indent_dtl_id and qty before deleting
+			removed_line = db.execute(
+				text("SELECT indent_dtl_id, qty FROM proc_po_dtl WHERE po_dtl_id = :dtl_id"),
+				{"dtl_id": dtl_id}
+			).fetchone()
+			
+			# Delete GST for removed line
+			db.execute(delete_po_gst_by_dtl_id(), {"po_dtl_id": dtl_id})
+			
+			# Soft-delete the detail row
+			db.execute(
+				text(
+					"UPDATE proc_po_dtl SET active = 0, updated_by = :updated_by, "
+					"updated_date_time = :updated_date_time WHERE po_dtl_id = :dtl_id"
+				),
+				{"dtl_id": dtl_id, "updated_by": updated_by, "updated_date_time": updated_at},
+			)
+
+		# Delete GST for existing additional charges before removing them
+		db.execute(delete_po_gst_for_additional_charges(), {"po_id": po_id})
+
 		# Delete existing additional charges
 		delete_additional_query = delete_proc_po_additional()
 		db.execute(delete_additional_query, {"po_id": po_id})
-		
-		# Insert new line items (same as create)
-		detail_query = insert_proc_po_dtl()
-		for item in normalized_items:
-			detail_params = {
-				"po_id": po_id,
-				"item_id": item["item_id"],
-				"hsn_code": item["hsn_code"],
-				"item_make_id": item["item_make_id"],
-				"qty": item["qty"],
-				"rate": item["rate"],
-				"uom_id": item["uom_id"],
-				"remarks": item["remarks"],
-				"discount_mode": item["discount_mode"],
-				"discount_value": item["discount_value"],
-				"discount_amount": item["discount_amount"],
-				"active": 1,
-				"indent_dtl_id": item["indent_dtl_id"],
-				"updated_by": updated_by,
-				"updated_date_time": updated_at,
-				"state": 1,
-			}
-			result = db.execute(detail_query, detail_params)
-			po_dtl_id = result.lastrowid
-			
-			# Insert GST if applicable
-			if india_gst and item["gst_amounts"]:
-				gst_query = insert_po_gst()
-				gst_params = {
-					"po_dtl_id": po_dtl_id,
-					"po_additional_id": None,
-					"tax_pct": item["gst_amounts"]["tax_pct"],
-					"stax_percentage": item["gst_amounts"]["stax_percentage"],
-					"s_tax_amount": item["gst_amounts"]["s_tax_amount"],
-					"i_tax_amount": item["gst_amounts"]["i_tax_amount"],
-					"i_tax_percentage": item["gst_amounts"]["i_tax_percentage"],
-					"c_tax_amount": item["gst_amounts"]["c_tax_amount"],
-					"c_tax_percentage": item["gst_amounts"]["c_tax_percentage"],
-					"tax_amount": item["gst_amounts"]["tax_amount"],
-				}
-				db.execute(gst_query, gst_params)
-		
+
 		# Insert new additional charges (same as create)
 		additional_query = insert_proc_po_additional()
 		for addl in normalized_additional:
@@ -1740,6 +2090,7 @@ async def approve_po(
 			doc_name="Purchase Order",
 			document_amount=document_amount,
 			extra_update_params={"po_no": None},
+			get_consumed_amounts_fn=get_po_consumed_amounts,
 		)
 		
 		return result
@@ -1857,7 +2208,7 @@ async def open_po(
 				new_po_no = 1
 		
 		# Update status to Open (1) and set po_no if generated
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		update_params = {
 			"po_id": po_id,
@@ -1934,7 +2285,7 @@ async def cancel_draft_po(
 			)
 		
 		# Update status to Cancelled (6)
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2012,7 +2363,7 @@ async def reopen_po(
 			)
 		
 		# Update status
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2086,7 +2437,7 @@ async def send_po_for_approval(
 			)
 		
 		# Update status to Pending Approval (20) with level 1
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_po_status()
 		db.execute(
 			update_query,
@@ -2202,7 +2553,7 @@ async def clone_po(
 		dtl_results = db.execute(dtl_query, {"po_id": po_id}).fetchall()
 		
 		# Create new PO header (as Draft, no PO number yet)
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 		new_po_no = None  # Will be generated when opened/approved
 		
 		insert_header = insert_proc_po()
@@ -2211,7 +2562,7 @@ async def clone_po(
 			"delivery_instructions": original.get("delivery_instructions"),
 			"expected_delivery_days": original.get("expected_delivery_days"),
 			"footer_notes": original.get("footer_notes"),
-			"po_date": datetime.utcnow().date(),  # Use current date
+			"po_date": now_ist().date(),  # Use current date
 			"po_no": new_po_no,
 			"remarks": original.get("remarks"),
 			"delivery_mode": original.get("delivery_mode"),

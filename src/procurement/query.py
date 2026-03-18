@@ -35,12 +35,39 @@ where igm.co_id = :co_id;"""
 
 def get_item_by_group_id_purchaseable(item_group_id: int):
     sql = f"""Select im.item_id,
-im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage
+im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage, im.hsn_code
 from item_mst im
 left join uom_mst um on um.uom_id= im.uom_id
 where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;"""
     query = text(sql)
     return query
+
+def get_last_purchase_rates_by_item_group():
+    sql = """
+    SELECT ranked.item_id, ranked.last_purchase_rate,
+           ranked.last_purchase_date, ranked.last_supplier_name
+    FROM (
+        SELECT ppd.item_id,
+               ppd.rate AS last_purchase_rate,
+               pp.po_date AS last_purchase_date,
+               pm.supp_name AS last_supplier_name,
+               ROW_NUMBER() OVER (
+                   PARTITION BY ppd.item_id
+                   ORDER BY pp.po_date DESC, pp.po_id DESC
+               ) AS rn
+        FROM proc_po_dtl ppd
+        JOIN proc_po pp ON pp.po_id = ppd.po_id
+        JOIN branch_mst bm ON bm.branch_id = pp.branch_id
+        LEFT JOIN party_mst pm ON pm.party_id = pp.supplier_id
+        JOIN item_mst im ON im.item_id = ppd.item_id
+        WHERE im.item_grp_id = :item_group_id
+          AND pp.status_id = 3
+          AND ppd.active = 1
+          AND bm.co_id = :co_id
+    ) ranked
+    WHERE ranked.rn = 1
+    """
+    return text(sql)
 
 def get_item_make_by_group_id(item_group_id: int):
     sql = f"""select im.item_make_id, im.item_make_name 
@@ -148,6 +175,7 @@ LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
 LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
 LEFT JOIN status_mst AS sm ON sm.status_id = pi.status_id
 WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
     AND (
                 :search_like IS NULL
                 OR pi.indent_no LIKE :search_like
@@ -188,6 +216,7 @@ FROM proc_indent AS pi
 LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
 LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = pi.expense_type_id
 WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+    AND (:branch_id IS NULL OR pi.branch_id = :branch_id)
     AND (
                 :search_like IS NULL
                 OR pi.indent_no LIKE :search_like
@@ -324,6 +353,7 @@ def get_inward_by_id_query():
         pm.supp_name AS supplier_name,
         pi.challan_no,
         pi.challan_date,
+        pi.invoice_no,
         pi.invoice_date,
         pi.invoice_amount,
         pi.invoice_recvd_date,
@@ -372,6 +402,7 @@ def get_inward_detail_by_id_query():
         ig.item_grp_name,
         pid.item_make_id,
         imk.item_make_name,
+        pid.hsn_code,
         pid.inward_qty AS quantity,
         pid.uom_id,
         um.uom_name,
@@ -485,6 +516,33 @@ def delete_proc_indent_detail():
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
     WHERE indent_id = :indent_id;"""
+    return text(sql)
+
+
+def update_proc_indent_detail():
+    """Update an existing indent detail row in place (preserves indent_dtl_id)."""
+    sql = """UPDATE proc_indent_dtl SET
+        item_id = :item_id,
+        qty = :qty,
+        uom_id = :uom_id,
+        item_make_id = :item_make_id,
+        dept_id = :dept_id,
+        remarks = :remarks,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_dtl_id = :indent_dtl_id
+      AND indent_id = :indent_id;"""
+    return text(sql)
+
+
+def soft_delete_indent_detail_by_ids():
+    """Soft-delete specific indent detail rows by their IDs."""
+    sql = """UPDATE proc_indent_dtl SET
+        active = 0,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE indent_id = :indent_id
+      AND indent_dtl_id IN :dtl_ids;"""
     return text(sql)
 
 
@@ -648,7 +706,7 @@ def get_indent_line_items_for_po(indent_id: int):
         igm.item_grp_code,
         igm.item_grp_name,
         pid.qty,
-        COALESCE(oi.Bal_ind_qty, 0) AS outstanding_qty,
+        COALESCE(oi.bal_ind_qty, 0) AS outstanding_qty,
         pid.uom_id,
         um.uom_name,
         pid.item_make_id,
@@ -657,7 +715,7 @@ def get_indent_line_items_for_po(indent_id: int):
         dm.dept_desc AS dept_name,
         im.tax_percentage,
         pid.remarks,
-        oi.min_order_qty
+        ibv.min_po_qty AS min_order_qty
     FROM proc_indent_dtl AS pid
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
@@ -665,7 +723,8 @@ def get_indent_line_items_for_po(indent_id: int):
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
-    LEFT JOIN vw_proc_indent_outstanding oi ON oi.indent_dtl_id = pid.indent_dtl_id
+    LEFT JOIN vw_proc_indent_outstanding_new oi ON oi.indent_dtl_id = pid.indent_dtl_id
+    LEFT JOIN vw_item_balance_qty_by_branch_new ibv ON ibv.item_id = pid.item_id AND ibv.branch_id = pi.branch_id
     WHERE pid.indent_id = :indent_id
         AND pid.active = 1
     ORDER BY pid.indent_dtl_id;"""
@@ -780,6 +839,26 @@ def insert_proc_po_dtl():
     return text(sql)
 
 
+def update_proc_po_dtl():
+    """Update a single PO detail row in-place (preserving po_dtl_id)."""
+    sql = """UPDATE proc_po_dtl SET
+        item_id = :item_id,
+        hsn_code = :hsn_code,
+        item_make_id = :item_make_id,
+        qty = :qty,
+        rate = :rate,
+        uom_id = :uom_id,
+        remarks = :remarks,
+        discount_mode = :discount_mode,
+        discount_value = :discount_value,
+        discount_amount = :discount_amount,
+        indent_dtl_id = :indent_dtl_id,
+        updated_by = :updated_by,
+        updated_date_time = :updated_date_time
+    WHERE po_dtl_id = :po_dtl_id AND po_id = :po_id;"""
+    return text(sql)
+
+
 def insert_proc_po_additional():
     """Insert PO additional charges."""
     sql = """INSERT INTO proc_po_additional (
@@ -831,9 +910,10 @@ def insert_po_gst():
 
 
 def insert_proc_gst():
-    """Insert procurement inward GST record."""
+    """Insert procurement inward GST record (for line items or additional charges)."""
     sql = """INSERT INTO proc_gst (
         proc_inward_dtl,
+        proc_inward_additional_id,
         tax_pct,
         stax_percentage,
         s_tax_amount,
@@ -846,6 +926,7 @@ def insert_proc_gst():
         updated_by
     ) VALUES (
         :proc_inward_dtl,
+        :proc_inward_additional_id,
         :tax_pct,
         :stax_percentage,
         :s_tax_amount,
@@ -932,6 +1013,21 @@ def delete_po_gst():
     return text(sql)
 
 
+def delete_po_gst_by_dtl_id():
+    """Delete GST records for a specific PO detail line."""
+    sql = """DELETE FROM po_gst WHERE po_dtl_id = :po_dtl_id;"""
+    return text(sql)
+
+
+def delete_po_gst_for_additional_charges():
+    """Delete GST records linked to additional charges for a given PO."""
+    sql = """DELETE FROM po_gst
+    WHERE po_additional_id IN (
+        SELECT po_additional_id FROM proc_po_additional WHERE po_id = :po_id
+    );"""
+    return text(sql)
+
+
 def get_po_by_id_query():
     """Get PO header by ID."""
     sql = """SELECT
@@ -947,6 +1043,8 @@ def get_po_by_id_query():
         pm.supp_name AS supplier_name,
         pp.supplier_branch_id,
         pbm.address AS supplier_branch_address,
+        pbm.state_id AS supplier_state_id,
+        sm_supplier.state AS supplier_state_name,
         pp.billing_branch_id,
         bm_billing.branch_name AS billing_branch_name,
         bm_billing.state_id AS billing_state_id,
@@ -977,12 +1075,14 @@ def get_po_by_id_query():
             WHEN pp.status_id = 20 THEN pp.approval_level 
             ELSE NULL 
         END AS approval_level,
-        pp.expense_type_id
+        pp.expense_type_id,
+        pp.po_type
     FROM proc_po AS pp
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = pp.supplier_id
     LEFT JOIN party_branch_mst AS pbm ON pbm.party_mst_branch_id = pp.supplier_branch_id
+    LEFT JOIN state_mst AS sm_supplier ON sm_supplier.state_id = pbm.state_id
     LEFT JOIN branch_mst AS bm_billing ON bm_billing.branch_id = pp.billing_branch_id
     LEFT JOIN state_mst AS sm_billing ON sm_billing.state_id = bm_billing.state_id
     LEFT JOIN branch_mst AS bm_shipping ON bm_shipping.branch_id = pp.shipping_branch_id
@@ -1172,6 +1272,24 @@ def get_po_dtl_query():
     return text(sql)
 
 
+def get_po_consumed_amounts():
+    """Get total PO amounts approved by a user for the current day and month.
+    Used for daily/monthly value-based approval limit enforcement.
+    """
+    sql = """SELECT
+        COALESCE(SUM(CASE
+            WHEN DATE(pp.updated_date_time) = CURDATE()
+            THEN pp.total_amount ELSE 0 END), 0) as day_total,
+        COALESCE(SUM(CASE
+            WHEN YEAR(pp.updated_date_time) = YEAR(CURDATE())
+            AND MONTH(pp.updated_date_time) = MONTH(CURDATE())
+            THEN pp.total_amount ELSE 0 END), 0) as month_total
+    FROM proc_po pp
+    WHERE pp.updated_by = :user_id
+        AND pp.status_id = 3;"""
+    return text(sql)
+
+
 def update_po_status():
     """Update PO status and approval level. Optionally update po_no."""
     sql = """UPDATE proc_po SET
@@ -1256,6 +1374,7 @@ def get_po_line_items_for_inward_query():
         um.uom_name,
         pod.rate,
         pod.remarks,
+        pod.hsn_code,
         im.tax_percentage,
         COALESCE(recv.received_qty, 0) AS received_qty,
         (pod.qty - COALESCE(recv.received_qty, 0)) AS pending_qty,
@@ -1299,6 +1418,7 @@ def insert_proc_inward():
     updated_by,
     challan_no,
     challan_date,
+    invoice_no,
     invoice_amount,
     invoice_date,
     invoice_recvd_date,
@@ -1326,6 +1446,7 @@ def insert_proc_inward():
     :updated_by,
     :challan_no,
     :challan_date,
+    :invoice_no,
     :invoice_amount,
     :invoice_date,
     :invoice_recvd_date,
@@ -1350,6 +1471,7 @@ def insert_proc_inward_dtl():
     po_dtl_id,
     item_id,
     item_make_id,
+    hsn_code,
     description,
     remarks,
     challan_qty,
@@ -1367,6 +1489,7 @@ def insert_proc_inward_dtl():
     :po_dtl_id,
     :item_id,
     :item_make_id,
+    :hsn_code,
     :description,
     :remarks,
     :challan_qty,
@@ -1395,6 +1518,7 @@ def update_proc_inward():
     receipts_remarks = :receipts_remarks,
     challan_no = :challan_no,
     challan_date = :challan_date,
+    invoice_no = :invoice_no,
     invoice_date = :invoice_date,
     invoice_recvd_date = :invoice_recvd_date,
     consignment_no = :consignment_no,
@@ -1412,6 +1536,7 @@ def update_proc_inward_dtl():
     """Update an existing proc_inward_dtl line item record."""
     sql = """UPDATE proc_inward_dtl SET
     item_id = :item_id,
+    hsn_code = :hsn_code,
     remarks = :remarks,
     inward_qty = :inward_qty,
     uom_id = :uom_id,
@@ -1693,6 +1818,7 @@ def get_inward_for_sr_query():
         pi.invoice_date,
         pi.invoice_amount,
         pi.invoice_recvd_date,
+        pi.invoice_no,
         pi.challan_no,
         pi.challan_date,
         pi.vehicle_number,
@@ -1776,6 +1902,7 @@ def get_inward_dtl_for_sr_query():
         um.uom_name,
         pid.approved_qty,
         pid.rejected_qty,
+        pid.hsn_code,
         pid.rate,
         pid.accepted_rate,
         pid.amount,
@@ -1814,6 +1941,7 @@ def update_inward_dtl_sr():
         discount_mode = :discount_mode,
         discount_value = :discount_value,
         discount_amount = :discount_amount,
+        hsn_code = :hsn_code,
         warehouse_id = :warehouse_id,
         updated_by = :updated_by,
         updated_date_time = :updated_date_time
@@ -2084,6 +2212,7 @@ def get_bill_pass_list_query():
         pi.sr_date AS bill_pass_date,
         pi.invoice_date,
         pi.invoice_amount,
+        pi.invoice_no,
         pi.supplier_id,
         pm.supp_name AS supplier_name,
         pi.branch_id,
@@ -2192,6 +2321,7 @@ def get_bill_pass_by_id_query():
         pi.sr_date AS bill_pass_date,
         pi.invoice_date,
         pi.invoice_amount,
+        pi.invoice_no,
         pi.invoice_recvd_date,
         pi.invoice_due_date,
         pi.supplier_id,
@@ -2276,6 +2406,7 @@ def get_bill_pass_sr_lines_query():
     SELECT
         pid.inward_dtl_id,
         pid.item_id,
+        pid.hsn_code,
         im.item_name,
         im.item_code,
         igm.item_grp_name,
@@ -2399,6 +2530,7 @@ def update_bill_pass_query():
     sql = """
     UPDATE proc_inward
     SET
+        invoice_no = COALESCE(:invoice_no, invoice_no),
         invoice_date = COALESCE(:invoice_date, invoice_date),
         invoice_amount = COALESCE(:invoice_amount, invoice_amount),
         invoice_recvd_date = COALESCE(:invoice_recvd_date, invoice_recvd_date),
@@ -2433,9 +2565,9 @@ def get_additional_charges_mst_list():
 
 
 def get_inward_additional_charges_query():
-    """Get additional charges for an inward/SR by inward_id."""
+    """Get additional charges for an inward/SR by inward_id, including GST from proc_gst."""
     sql = """
-    SELECT 
+    SELECT
         pia.proc_inward_additional_id,
         pia.inward_id,
         pia.additional_charges_id,
@@ -2443,10 +2575,19 @@ def get_inward_additional_charges_query():
         acm.default_value AS default_tax_pct,
         pia.qty,
         pia.rate,
-        pia.net_amount
+        pia.net_amount,
+        pia.remarks,
+        pg.tax_pct,
+        pg.i_tax_amount AS igst_amount,
+        pg.s_tax_amount AS sgst_amount,
+        pg.c_tax_amount AS cgst_amount,
+        pg.tax_amount
     FROM proc_inward_additional pia
-    LEFT JOIN additional_charges_mst acm 
+    LEFT JOIN additional_charges_mst acm
         ON acm.additional_charges_id = pia.additional_charges_id
+    LEFT JOIN proc_gst pg
+        ON pg.proc_inward_additional_id = pia.proc_inward_additional_id
+        AND pg.active = 1
     WHERE pia.inward_id = :inward_id
     ORDER BY pia.proc_inward_additional_id;
     """
@@ -2461,42 +2602,36 @@ def insert_inward_additional():
         additional_charges_id,
         qty,
         rate,
-        net_amount
+        net_amount,
+        remarks
     ) VALUES (
         :inward_id,
         :additional_charges_id,
         :qty,
         :rate,
-        :net_amount
+        :net_amount,
+        :remarks
     );
     """
     return text(sql)
 
 
-def update_inward_additional():
-    """Update an existing additional charge for inward/SR."""
-    sql = """
-    UPDATE proc_inward_additional
-    SET 
-        qty = :qty,
-        rate = :rate,
-        net_amount = :net_amount
-    WHERE proc_inward_additional_id = :proc_inward_additional_id;
-    """
-    return text(sql)
-
-
-def delete_inward_additional():
-    """Delete an additional charge for inward/SR."""
+def delete_inward_additional_by_inward():
+    """Delete all additional charges for an inward (delete-all + re-insert pattern)."""
     sql = """
     DELETE FROM proc_inward_additional
-    WHERE proc_inward_additional_id = :proc_inward_additional_id;
+    WHERE inward_id = :inward_id;
     """
     return text(sql)
 
 
-# Note: GST for additional charges is not supported in current schema
-# proc_gst table does not have a link to proc_inward_additional
+def delete_proc_gst_for_sr_additional_charges():
+    """Delete GST records linked to additional charges for a given inward."""
+    sql = """DELETE FROM proc_gst
+    WHERE proc_inward_additional_id IN (
+        SELECT proc_inward_additional_id FROM proc_inward_additional WHERE inward_id = :inward_id
+    );"""
+    return text(sql)
 
 
 # =============================================================================
@@ -2704,6 +2839,7 @@ def get_item_validation_data_v2():
         bal_tot_ind_qty    → total_all_indent_outstanding  (all types incl. Open — informational only)
         open_bal_ind_tot_qty   → open_indent_outstanding
         bal_tot_po_qty     → total outstanding PO qty
+        bal_qty_po_to_validate → po_outstanding_to_validate (Regular POs only — used for max recalc)
 
     Pre-computed validation columns (added 2026-02-24):
         max_indent_qty  → sentinel -2 (open outstanding), -1 (no minmax), or >=0 (limit)
@@ -2723,6 +2859,7 @@ def get_item_validation_data_v2():
         COALESCE(v.open_bal_ind_tot_qty, 0)    AS open_indent_outstanding,
         COALESCE(v.bal_tot_po_qty, 0)          AS outstanding_po_qty,
         COALESCE(v.open_bal_tot_po_qty, 0)     AS open_po_outstanding,
+        COALESCE(v.bal_qty_po_to_validate, 0)  AS po_outstanding_to_validate,
         COALESCE(v.max_indent_qty, -1)         AS max_indent_qty,
         COALESCE(v.min_indent_qty, -1)         AS min_indent_qty,
         COALESCE(v.max_po_qty, -1)             AS max_po_qty,
@@ -2730,6 +2867,32 @@ def get_item_validation_data_v2():
     FROM vw_item_balance_qty_by_branch_new v
     WHERE v.branch_id = :branch_id
       AND v.item_id   = :item_id;
+    """
+    return text(sql)
+
+
+def get_indent_item_outstanding():
+    """
+    Get the outstanding indent quantity contributed by a specific indent
+    for a given (branch_id, item_id) pair.
+
+    Used during edit to exclude the current indent's own quantity from
+    the aggregate outstanding total, preventing a self-referencing
+    validation error.
+
+    Returns a single row with `indent_outstanding` (float).
+    """
+    sql = """
+    SELECT COALESCE(SUM(vpion.bal_ind_qty), 0) AS indent_outstanding
+    FROM vw_proc_indent_outstanding_new vpion
+    WHERE vpion.branch_id = :branch_id
+      AND vpion.item_id   = :item_id
+      AND vpion.indent_dtl_id IN (
+          SELECT pid.indent_dtl_id
+          FROM proc_indent_dtl pid
+          WHERE pid.indent_id = :indent_id
+            AND pid.active = 1
+      )
     """
     return text(sql)
 
@@ -2804,6 +2967,24 @@ def check_open_po_for_item_v2():
     return text(sql)
 
 
+def check_open_po_for_item_v2_exclude():
+    """
+    V2: Check if any active PO (other than the one being edited) with
+    outstanding qty exists for item + branch.
+    Returns po_id, po_no of first match.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.bal_po_qty > 0
+      AND v.po_id     != :exclude_po_id
+    LIMIT 1;
+    """
+    return text(sql)
+
+
 def get_po_fy_check_v2():
     """
     V2: Check if an Open PO exists for item + branch within the
@@ -2820,6 +3001,43 @@ def get_po_fy_check_v2():
       AND v.po_date   >= :fy_start
       AND v.po_date   <= :fy_end
     LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_po_fy_check_v2_exclude():
+    """
+    V2: Check if an Open PO (other than the one being edited) exists
+    for item + branch within the current FY.
+    """
+    sql = """
+    SELECT v.po_id, v.po_no
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.item_id    = :item_id
+      AND v.branch_id  = :branch_id
+      AND v.po_type    = 'Open'
+      AND v.bal_po_qty > 0
+      AND v.po_date   >= :fy_start
+      AND v.po_date   <= :fy_end
+      AND v.po_id     != :exclude_po_id
+    LIMIT 1;
+    """
+    return text(sql)
+
+
+def get_current_po_item_outstanding():
+    """
+    Get the current PO's outstanding qty for a specific item at a branch,
+    from vw_proc_po_outstanding_new.
+    Used during edit to subtract the current PO's qty from view aggregates,
+    preventing double-counting in validation.
+    """
+    sql = """
+    SELECT COALESCE(SUM(v.bal_po_qty), 0) AS current_po_outstanding
+    FROM vw_proc_po_outstanding_new v
+    WHERE v.po_id     = :po_id
+      AND v.item_id   = :item_id
+      AND v.branch_id = :branch_id;
     """
     return text(sql)
 

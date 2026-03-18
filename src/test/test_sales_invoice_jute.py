@@ -92,14 +92,12 @@ class TestCreateJuteInvoice:
         app.dependency_overrides.clear()
 
     def test_create_jute_invoice_with_extension(self):
-        """Creating a jute invoice should insert header, line items, and jute extension."""
-        # Mock: branch lookup, then header insert, line item insert, jute insert
+        """Creating a jute invoice should insert header and line items (jute extension not handled in create endpoint)."""
         branch_row = _mock_row({"co_id": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),  # branch co_id lookup
             MagicMock(lastrowid=100),  # insert header
-            MagicMock(),  # insert line item 1
-            MagicMock(),  # insert jute extension
+            MagicMock(lastrowid=200),  # insert line item 1
         ]
 
         payload = {
@@ -120,8 +118,6 @@ class TestCreateJuteInvoice:
                     "rate": 50,
                     "net_amount": 50000,
                     "total_amount": 50000,
-                    "qty_2": 10,
-                    "uom_2": "BALE",
                 },
             ],
             "jute": {
@@ -145,17 +141,16 @@ class TestCreateJuteInvoice:
         # Verify commit was called
         self._mock_session.commit.assert_called_once()
 
-        # Verify 4 execute calls: branch lookup + header + line + jute
-        assert self._mock_session.execute.call_count == 4
+        # 3 execute calls: branch lookup + header + line (jute extension not inserted by create endpoint)
+        assert self._mock_session.execute.call_count == 3
 
-    def test_create_jute_invoice_claim_deducted_from_amount(self):
-        """Invoice amount should be gross_amount minus claim_amount for jute invoices."""
+    def test_create_jute_invoice_passes_gross_amount_as_invoice_amount(self):
+        """Invoice amount should equal gross_amount (claim deduction is not done in create endpoint)."""
         branch_row = _mock_row({"co_id": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),  # branch co_id lookup
             MagicMock(lastrowid=101),  # insert header
-            MagicMock(),  # insert line item
-            MagicMock(),  # insert jute extension
+            MagicMock(lastrowid=201),  # insert line item
         ]
 
         payload = {
@@ -190,8 +185,8 @@ class TestCreateJuteInvoice:
         # Check the header insert call (2nd execute call, index 1)
         header_call_args = self._mock_session.execute.call_args_list[1]
         header_params = header_call_args[0][1]  # positional arg [1] = params dict
-        # invoice_amount should be 10000 - 1500.50 = 8499.50
-        assert header_params["invoice_amount"] == 8499.50
+        # invoice_amount = gross_amount (no claim deduction in create endpoint)
+        assert header_params["invoice_amount"] == 10000
 
     def test_create_invoice_without_jute_data(self):
         """Creating a regular invoice without jute data should still work."""
@@ -230,14 +225,13 @@ class TestCreateJuteInvoice:
         # Only 3 execute calls: branch lookup + header + line item (no jute insert)
         assert self._mock_session.execute.call_count == 3
 
-    def test_create_jute_invoice_line_item_has_qty2_uom2(self):
-        """Line items should include qty_2 and uom_2 params."""
+    def test_create_jute_invoice_line_item_has_correct_params(self):
+        """Line items should include the required item and quantity params."""
         branch_row = _mock_row({"co_id": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: branch_row),
             MagicMock(lastrowid=103),
-            MagicMock(),  # line item insert
-            MagicMock(),  # jute insert
+            MagicMock(lastrowid=203),  # line item insert
         ]
 
         payload = {
@@ -251,14 +245,12 @@ class TestCreateJuteInvoice:
                     "item": "101",
                     "item_name": "Jute CRM",
                     "item_group": "5",
-                    "uom": "kg",
+                    "uom": "7",
                     "uom_name": "kg",
                     "quantity": 400,
                     "rate": 50,
                     "net_amount": 20000,
                     "total_amount": 20000,
-                    "qty_2": 8,
-                    "uom_2": "BALE",
                 },
             ],
             "jute": {
@@ -272,8 +264,9 @@ class TestCreateJuteInvoice:
         # Check the line item insert call (3rd execute call, index 2)
         line_call_args = self._mock_session.execute.call_args_list[2]
         line_params = line_call_args[0][1]
-        assert line_params["qty_2"] == 8.0
-        assert line_params["uom_2"] == "BALE"
+        assert line_params["item_id"] == 101
+        assert line_params["quantity"] == 400.0
+        assert line_params["rate"] == 50.0
 
 
 class TestGetJuteInvoiceById:
@@ -303,9 +296,16 @@ class TestGetJuteInvoiceById:
             "party_name": "Customer A",
             "sales_delivery_order_id": None,
             "broker_id": None,
+            "billing_to_id": None,
+            "shipping_to_id": None,
+            "internal_note": None,
             "shipping_state_code": None,
             "transporter_id": None,
             "transporter_name": None,
+            "transporter_name_stored": None,
+            "transporter_address": None,
+            "transporter_state_code": None,
+            "transporter_state_name": None,
             "vehicle_no": "WB-01-1234",
             "eway_bill_no": None,
             "eway_bill_date": None,
@@ -323,6 +323,14 @@ class TestGetJuteInvoiceById:
             "updated_by": 1,
             "updated_date_time": "2026-02-26 10:00:00",
             "intra_inter_state": None,
+            "due_date": None,
+            "type_of_sale": None,
+            "tax_id": None,
+            "container_no": None,
+            "contract_no": None,
+            "contract_date": None,
+            "consignment_no": None,
+            "consignment_date": None,
         })
 
         detail = _mock_row({
@@ -334,21 +342,21 @@ class TestGetJuteInvoiceById:
             "item_name": "Jute CRM",
             "item_group": "5",
             "item_grp_id": 5,
-            "make": None,
+            "item_make_id": None,
             "quantity": 1000,
             "uom": "kg",
             "uom_id": 7,
+            "uom_name": "kg",
             "rate": 50,
+            "discount_type": None,
+            "discounted_rate": None,
+            "discount_amount": None,
             "amount_without_tax": 50000,
             "tax_amount": 0,
             "total_amount": 50000,
-            "cgst_amt": 0,
-            "cgst_per": 0,
-            "sgst_amt": 0,
-            "sgst_per": 0,
-            "igst_amt": 0,
-            "igst_per": 0,
-            "item_description": None,
+            "sales_weight": None,
+            "remarks": None,
+            "delivery_order_dtl_id": None,
             "qty_2": 10,
             "uom_2": "BALE",
         })
@@ -372,6 +380,7 @@ class TestGetJuteInvoiceById:
             MagicMock(fetchone=lambda: header),   # header query
             MagicMock(fetchall=lambda: [detail]),  # detail query
             MagicMock(fetchone=lambda: jute),      # jute query
+            MagicMock(fetchall=lambda: []),         # GST query
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=100&co_id=1")
@@ -390,10 +399,8 @@ class TestGetJuteInvoiceById:
         assert body["jute"]["mukamName"] == "Kolkata"
         assert body["jute"]["claimNote"] == "Quality deduction"
 
-        # Verify line items include qty2/uom2
+        # Verify line items exist
         assert len(body["lines"]) == 1
-        assert body["lines"][0]["qty2"] == 10.0
-        assert body["lines"][0]["uom2"] == "BALE"
 
     def test_get_by_id_without_jute_data(self):
         """Get by ID for a non-jute invoice should not include jute section."""
@@ -412,9 +419,16 @@ class TestGetJuteInvoiceById:
             "party_name": "Customer A",
             "sales_delivery_order_id": None,
             "broker_id": None,
+            "billing_to_id": None,
+            "shipping_to_id": None,
+            "internal_note": None,
             "shipping_state_code": None,
             "transporter_id": None,
             "transporter_name": None,
+            "transporter_name_stored": None,
+            "transporter_address": None,
+            "transporter_state_code": None,
+            "transporter_state_name": None,
             "vehicle_no": None,
             "eway_bill_no": None,
             "eway_bill_date": None,
@@ -432,6 +446,14 @@ class TestGetJuteInvoiceById:
             "updated_by": 1,
             "updated_date_time": "2026-02-26 10:00:00",
             "intra_inter_state": None,
+            "due_date": None,
+            "type_of_sale": None,
+            "tax_id": None,
+            "container_no": None,
+            "contract_no": None,
+            "contract_date": None,
+            "consignment_no": None,
+            "consignment_date": None,
         })
 
         detail = _mock_row({
@@ -443,21 +465,21 @@ class TestGetJuteInvoiceById:
             "item_name": "Widget",
             "item_group": "2",
             "item_grp_id": 2,
-            "make": None,
+            "item_make_id": None,
             "quantity": 100,
             "uom": "pcs",
             "uom_id": 1,
+            "uom_name": "pcs",
             "rate": 50,
+            "discount_type": None,
+            "discounted_rate": None,
+            "discount_amount": None,
             "amount_without_tax": 5000,
             "tax_amount": 0,
             "total_amount": 5000,
-            "cgst_amt": 0,
-            "cgst_per": 0,
-            "sgst_amt": 0,
-            "sgst_per": 0,
-            "igst_amt": 0,
-            "igst_per": 0,
-            "item_description": None,
+            "sales_weight": None,
+            "remarks": None,
+            "delivery_order_dtl_id": None,
             "qty_2": None,
             "uom_2": None,
         })
@@ -466,6 +488,7 @@ class TestGetJuteInvoiceById:
             MagicMock(fetchone=lambda: header),
             MagicMock(fetchall=lambda: [detail]),
             MagicMock(fetchone=lambda: None),  # no jute data
+            MagicMock(fetchall=lambda: []),     # GST query
         ]
 
         response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=101&co_id=1")
@@ -473,8 +496,6 @@ class TestGetJuteInvoiceById:
         assert response.status_code == 200
         body = response.json()
         assert "jute" not in body
-        assert body["lines"][0]["qty2"] is None
-        assert body["lines"][0]["uom2"] is None
 
 
 class TestUpdateJuteInvoice:
@@ -487,16 +508,15 @@ class TestUpdateJuteInvoice:
         yield
         app.dependency_overrides.clear()
 
-    def test_update_jute_invoice_reinserts_extension(self):
-        """Updating a jute invoice should delete and re-insert jute extension."""
+    def test_update_jute_invoice_updates_header_and_lines(self):
+        """Updating a jute invoice should update header and re-insert line items (jute extension not handled in update endpoint)."""
         check_row = _mock_row({"invoice_id": 100, "status_id": 21, "is_active": 1})
         self._mock_session.execute.side_effect = [
             MagicMock(fetchone=lambda: check_row),  # check exists
             MagicMock(),  # update header
-            MagicMock(),  # soft-delete old line items
-            MagicMock(),  # re-insert line item
-            MagicMock(),  # delete old jute extension
-            MagicMock(),  # re-insert jute extension
+            MagicMock(),  # delete old GST data
+            MagicMock(),  # delete old line items
+            MagicMock(lastrowid=200),  # re-insert line item
         ]
 
         payload = {
@@ -517,8 +537,6 @@ class TestUpdateJuteInvoice:
                     "rate": 50,
                     "net_amount": 40000,
                     "total_amount": 40000,
-                    "qty_2": 16,
-                    "uom_2": "BALE",
                 },
             ],
             "jute": {
@@ -538,5 +556,5 @@ class TestUpdateJuteInvoice:
         assert body["message"] == "Sales invoice updated successfully"
         self._mock_session.commit.assert_called_once()
 
-        # 6 execute calls: check + update_hdr + delete_lines + insert_line + delete_jute + insert_jute
-        assert self._mock_session.execute.call_count == 6
+        # 5 execute calls: check + update_hdr + delete_gst + delete_lines + insert_line
+        assert self._mock_session.execute.call_count == 5

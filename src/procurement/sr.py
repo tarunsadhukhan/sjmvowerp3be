@@ -4,6 +4,7 @@ Handles accountant review of inspected goods, adds rates/taxes, creates official
 """
 import logging
 from datetime import datetime, date
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -24,10 +25,10 @@ from src.procurement.query import (
     get_additional_charges_mst_list,
     get_inward_additional_charges_query,
     insert_inward_additional,
-    update_inward_additional,
-    delete_inward_additional,
+    delete_inward_additional_by_inward,
     insert_proc_gst,
     delete_proc_gst_by_inward,
+    delete_proc_gst_for_sr_additional_charges,
 )
 from src.procurement.po import calculate_gst_amounts, extract_formatted_po_no
 from src.common.companyAdmin.query import get_co_config_by_id_query
@@ -63,6 +64,7 @@ class SRLineItemUpdate(BaseModel):
     discount_value: Optional[float] = None
     discount_amount: Optional[float] = None
     warehouse_id: Optional[int] = None
+    hsn_code: Optional[str] = None
     # GST fields
     tax_percentage: Optional[float] = None
     igst_amount: Optional[float] = None
@@ -102,8 +104,9 @@ class SRSaveRequest(BaseModel):
 
 
 class SRApproveRequest(BaseModel):
-    """Request body for approving SR."""
+    """Request body for approving/rejecting SR."""
     inward_id: int
+    reason: Optional[str] = None
 
 
 # =============================================================================
@@ -134,7 +137,7 @@ def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
         return f"SR-{year}-{next_no:05d}"
     except Exception:
         # Fallback to timestamp-based number
-        return f"SR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        return f"SR-{now_ist().strftime('%Y%m%d%H%M%S')}"
 
 
 # =============================================================================
@@ -360,6 +363,7 @@ async def get_sr_by_inward_id(
                 "invoice_date": format_date(header.get("invoice_date")),
                 "invoice_amount": header.get("invoice_amount"),
                 "invoice_recvd_date": format_date(header.get("invoice_recvd_date")),
+                "invoice_no": header.get("invoice_no") or "",
                 "challan_no": header.get("challan_no") or "",
                 "challan_date": format_date(header.get("challan_date")),
                 "vehicle_number": header.get("vehicle_number") or "",
@@ -401,7 +405,7 @@ async def save_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         sr_date = datetime.strptime(request_body.sr_date, '%Y-%m-%d').date()
         
         # Calculate totals
@@ -433,55 +437,46 @@ async def save_sr(
                 "discount_mode": line.discount_mode,
                 "discount_value": line.discount_value,
                 "discount_amount": line.discount_amount,
+                "hsn_code": line.hsn_code,
                 "warehouse_id": line.warehouse_id,
                 "updated_by": user_id,
                 "updated_date_time": now,
             })
         
-        # Handle additional charges
+        # Handle additional charges (delete-all + re-insert pattern, same as PO update)
         additional_charges_total = 0.0
+        # Normalize charges for GST processing later
+        normalized_additional = []
+
+        # Delete existing GST records for additional charges first
+        delete_addl_gst_query = delete_proc_gst_for_sr_additional_charges()
+        db.execute(delete_addl_gst_query, {"inward_id": request_body.inward_id})
+
+        # Delete all existing additional charges for this inward
+        delete_all_addl_query = delete_inward_additional_by_inward()
+        db.execute(delete_all_addl_query, {"inward_id": request_body.inward_id})
+
         if request_body.additional_charges:
-            # Get existing additional charge IDs to track which to keep
-            existing_query = text("""
-                SELECT proc_inward_additional_id FROM proc_inward_additional 
-                WHERE inward_id = :inward_id
-            """)
-            existing_result = db.execute(existing_query, {"inward_id": request_body.inward_id}).fetchall()
-            existing_ids = {row.proc_inward_additional_id for row in existing_result}
-            updated_ids = set()
-            
+            insert_addl_query = insert_inward_additional()
             for charge in request_body.additional_charges:
                 charge_net_amount = charge.net_amount or (charge.qty * charge.rate)
                 additional_charges_total += charge_net_amount
-                
-                if charge.inward_additional_id and charge.inward_additional_id in existing_ids:
-                    # Update existing charge
-                    update_addl_query = update_inward_additional()
-                    db.execute(update_addl_query, {
-                        "proc_inward_additional_id": charge.inward_additional_id,
-                        "qty": charge.qty,
-                        "rate": charge.rate,
-                        "net_amount": charge_net_amount,
-                    })
-                    updated_ids.add(charge.inward_additional_id)
-                else:
-                    # Insert new charge
-                    insert_addl_query = insert_inward_additional()
-                    db.execute(insert_addl_query, {
-                        "inward_id": request_body.inward_id,
-                        "additional_charges_id": charge.additional_charges_id,
-                        "qty": charge.qty,
-                        "rate": charge.rate,
-                        "net_amount": charge_net_amount,
-                    })
-                    # Note: GST for additional charges not supported in current schema
-            
-            # Delete charges that were removed
-            ids_to_delete = existing_ids - updated_ids
-            for del_id in ids_to_delete:
-                delete_addl_query = delete_inward_additional()
-                db.execute(delete_addl_query, {
-                    "proc_inward_additional_id": del_id,
+                remarks_raw = (charge.remarks or "").strip() or None
+
+                result = db.execute(insert_addl_query, {
+                    "inward_id": request_body.inward_id,
+                    "additional_charges_id": charge.additional_charges_id,
+                    "qty": charge.qty,
+                    "rate": charge.rate,
+                    "net_amount": charge_net_amount,
+                    "remarks": remarks_raw,
+                })
+
+                normalized_additional.append({
+                    "proc_inward_additional_id": result.lastrowid,
+                    "apply_tax": charge.apply_tax,
+                    "tax_pct": charge.tax_pct or 0,
+                    "net_amount": charge_net_amount,
                 })
         
         # Update totals to include additional charges
@@ -591,12 +586,13 @@ async def save_sr(
                     shipping_state_id = ship_result[0] if ship_result else None
 
                 if supplier_state_id and shipping_state_id:
-                    # Delete existing GST records for this inward
+                    # Delete existing GST records for line items
                     delete_gst_query = delete_proc_gst_by_inward()
                     db.execute(delete_gst_query, {"inward_id": request_body.inward_id})
 
-                    # Insert new GST records for each line item
                     gst_insert_query = insert_proc_gst()
+
+                    # Insert GST records for each line item
                     for line in request_body.line_items:
                         # Get tax_percentage from item_mst via inward_dtl
                         tax_query = text("""
@@ -618,6 +614,7 @@ async def save_sr(
 
                             db.execute(gst_insert_query, {
                                 "proc_inward_dtl": line.inward_dtl_id,
+                                "proc_inward_additional_id": None,
                                 "tax_pct": gst["tax_pct"],
                                 "stax_percentage": gst["stax_percentage"],
                                 "s_tax_amount": gst["s_tax_amount"],
@@ -628,6 +625,28 @@ async def save_sr(
                                 "tax_amount": gst["tax_amount"],
                                 "updated_by": user_id,
                             })
+
+                    # Insert GST records for additional charges (same as PO pattern)
+                    for addl in normalized_additional:
+                        addl_tax_pct = float(addl["tax_pct"] or 0)
+                        if addl_tax_pct <= 0 or not addl.get("apply_tax", True):
+                            continue
+                        addl_gst = calculate_gst_amounts(
+                            addl["net_amount"], addl_tax_pct, supplier_state_id, shipping_state_id
+                        )
+                        db.execute(gst_insert_query, {
+                            "proc_inward_dtl": None,
+                            "proc_inward_additional_id": addl["proc_inward_additional_id"],
+                            "tax_pct": addl_gst["tax_pct"],
+                            "stax_percentage": addl_gst["stax_percentage"],
+                            "s_tax_amount": addl_gst["s_tax_amount"],
+                            "i_tax_amount": addl_gst["i_tax_amount"],
+                            "i_tax_percentage": addl_gst["i_tax_percentage"],
+                            "c_tax_amount": addl_gst["c_tax_amount"],
+                            "c_tax_percentage": addl_gst["c_tax_percentage"],
+                            "tax_amount": addl_gst["tax_amount"],
+                            "updated_by": user_id,
+                        })
 
         db.commit()
 
@@ -655,7 +674,7 @@ async def open_sr(
     """Open SR for approval."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         # Update status to Open
         query = text("""
@@ -695,7 +714,7 @@ async def approve_sr(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         today = date.today()
         
         # Get line items to check for rate differences and rejections
@@ -871,16 +890,18 @@ async def reject_sr(
     """Reject SR."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         query = text("""
             UPDATE proc_inward
-            SET sr_status = :status_id, updated_by = :updated_by, updated_date_time = :updated_date_time
+            SET sr_status = :status_id, sr_remarks = :reason,
+                updated_by = :updated_by, updated_date_time = :updated_date_time
             WHERE inward_id = :inward_id
         """)
         db.execute(query, {
             "inward_id": request_body.inward_id,
             "status_id": STATUS_REJECTED,
+            "reason": request_body.reason or "No reason provided",
             "updated_by": user_id,
             "updated_date_time": now,
         })

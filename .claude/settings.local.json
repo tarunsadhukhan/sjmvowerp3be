@@ -48,7 +48,32 @@
       "Bash(PYTHONPATH=. pytest src/test/ -v --tb=short -k \"procurement_sr or procurement_indent or procurement_po or jute_mr_bp\")",
       "Bash(PYTHONPATH=. pytest src/test/ -k \"sr\" -v --tb=short)",
       "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/drcrNote/view/page.tsx\")",
-      "Bash(pytest src/test/ -v --timeout=60)"
+      "Bash(pytest src/test/ -v --timeout=60)",
+      "Bash(npx next lint)",
+      "Bash(npx next lint --dir src)",
+      "Bash(python -m pytest src/test/test_approval_utils.py -v --tb=short)",
+      "Bash(python -m pytest src/test/test_approval_utils.py -v --tb=long)",
+      "Bash(pytest src/test/test_procurement_indent_validation.py src/test/test_procurement_po_validation.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_procurement_indent_validation.py src/test/test_procurement_po_validation.py -v)",
+      "Bash(python -m pytest src/test/test_procurement_po_setup.py -v)",
+      "Bash(python -m pytest src/test/test_procurement_po_validation.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_procurement_indent_validation.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_procurement_po_validation.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_procurement_indent_validation.py src/test/test_procurement_po_validation.py src/test/test_approval_utils.py -v)",
+      "Bash(pytest src/test/ -k \"test_po\" -v)",
+      "Bash(PYTHONPATH=. pytest src/test/ -k \"test_po\" -v)",
+      "Read(//c/Users/silve/.dbclient/storage/1764904564439@@3.7.255.145@3306@dev3/**)",
+      "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/inward/createInward/hooks/useInwardLineItems.ts\")",
+      "Bash(xxd \"c:/code/vowerp3ui/src/app/dashboardportal/procurement/sr/createSR/components/SRLineItemsTable.tsx\")",
+      "Bash(xxd)",
+      "Read(//c/Program Files/**)",
+      "Bash(python -m pytest src/test/test_procurement_sr_approve.py src/test/test_procurement_sr_warehouse.py -v)",
+      "Bash(.venv/Scripts/python -m pytest src/test/test_procurement_reports.py -v)",
+      "Bash(PYTHONPATH=. pytest src/test/test_sales_order_hessian.py -v --tb=long)",
+      "Bash(PYTHONPATH=. pytest src/test/test_sales_order_hessian.py::TestCreateSalesOrderHessian::test_create_with_hessian_calls_hessian_insert -v --tb=long)",
+      "Bash(PYTHONPATH=. pytest src/test/test_main.py src/test/test_portal_admin_user.py -v --tb=line)",
+      "Read(//c/code//**)",
+      "Bash(python -m pytest src/test/test_masters_item_bom.py -v)"
     ]
   }
 }

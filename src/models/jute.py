@@ -556,6 +556,9 @@ class JutePoLi(Base):
     crop_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     allowable_moisture: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # UOM (LOOSE/BALE) — per line item
+    jute_uom: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
     # Status
     active: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=1)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

@@ -72,10 +72,10 @@ class conRoleMaster(Base):
 
     con_role_id = Column(Integer, primary_key=True, autoincrement=True)
     con_role_name = Column(String(50), nullable=False)
-    con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=False)
+    con_org_id = Column(Integer, ForeignKey('con_org_master.con_org_id'), nullable=True)
     status = Column(Integer, nullable=False)
-    updated_by = Column(Integer, nullable=True)
-    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+    created_by = Column(Integer, nullable=True)
+    created_date_time = Column(DateTime, nullable=True, server_default=func.current_timestamp())
     con_company_id = Column(Integer, nullable=True)
     is_enable = Column(Integer, nullable=False, default=1)
 
@@ -85,8 +85,8 @@ class ConUserRoleMapping(Base):
     con_user_role_mapping_id = Column(Integer, primary_key=True, autoincrement=True)
     con_role_id = Column(Integer, ForeignKey('con_role_master.con_role_id'), nullable=False, index=True)
     con_user_id = Column(Integer, ForeignKey('con_user_master.con_user_id'), nullable=False, index=True)
-    updated_by = Column(Integer, nullable=False, index=True)
-    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+    created_by = Column(Integer, nullable=False, index=True)
+    created_date_time = Column(DateTime, nullable=True, server_default=func.now())
 
 
 class CoMst(Base):
@@ -100,6 +100,7 @@ class CoMst(Base):
     co_zipcode = Column(Integer)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"))
     state_id = Column(Integer, ForeignKey("state_mst.state_id"))
+    city_id = Column(Integer, nullable=True)
     co_logo = Column(String(255))
     auto_datetime_insert = Column(DateTime, server_default=func.current_timestamp())
     co_cin_no = Column(String(25))

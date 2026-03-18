@@ -8,6 +8,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import date, datetime
+from src.common.utils import now_ist
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -504,7 +505,7 @@ async def create_issue(
             "issue_value": issue_value,
             "status_id": 21,  # Draft
             "updated_by": username,
-            "update_date_time": datetime.now(),
+            "update_date_time": now_ist(),
         })
         db.commit()
 
@@ -599,7 +600,7 @@ async def update_issue(
         update_fields.append("updated_by = :updated_by")
         update_fields.append("update_date_time = :update_date_time")
         update_params["updated_by"] = username
-        update_params["update_date_time"] = datetime.now()
+        update_params["update_date_time"] = now_ist()
 
         sql = text(f"""
             UPDATE jute_issue SET {", ".join(update_fields)}
@@ -685,7 +686,7 @@ async def open_issues(
         update_params = {
             "co_id": int(q_co_id),
             "updated_by": username,
-            "update_date_time": datetime.now(),
+            "update_date_time": now_ist(),
         }
 
         # Mode 1: Specific issue IDs
@@ -753,7 +754,7 @@ async def approve_issues(
         update_params = {
             "co_id": int(q_co_id),
             "updated_by": username,
-            "update_date_time": datetime.now(),
+            "update_date_time": now_ist(),
         }
 
         # Mode 1: Specific issue IDs
@@ -821,7 +822,7 @@ async def reject_issues(
         update_params = {
             "co_id": int(q_co_id),
             "updated_by": username,
-            "update_date_time": datetime.now(),
+            "update_date_time": now_ist(),
         }
 
         # Mode 1: Specific issue IDs

@@ -21,6 +21,7 @@ from src.procurement.query import (
 	get_indent_by_id_query,
 	get_indent_detail_by_id_query,
 	update_proc_indent,
+	update_proc_indent_detail,
 	delete_proc_indent_detail,
 	get_approval_flow_by_menu_branch,
 	update_indent_status,
@@ -28,6 +29,7 @@ from src.procurement.query import (
 	get_max_indent_no_for_branch_fy,
 	get_all_approved_indents_query,
 	get_item_validation_data_v2,
+	get_indent_item_outstanding,
 	get_item_fy_indent_check_v2,
 	get_expense_type_name_by_id,
 	get_distinct_indent_titles,
@@ -44,8 +46,10 @@ from src.common.approval_utils import (
 	process_rejection,
 	calculate_approval_permissions,
 )
+from src.common.approval_query import get_max_approval_level
 from datetime import datetime, date
 from typing import Optional
+from src.common.utils import now_ist
 import math
 
 logger = logging.getLogger(__name__)
@@ -59,25 +63,25 @@ router = APIRouter()
 
 # Mapping: (indent_type, expense_type_name) -> validation logic
 # Logic 1: Max/Min Quantity Validation with Stock Check
-# Logic 2: Open Entry Validation with Financial Year Check
-# Logic 3: No Validation (Capital/Overhaul)
+# Logic 2: FY Check + max qty as forced value (requires min/max)
+# Logic 3: No Validation / Free Entry
 VALIDATION_LOGIC_MAP = {
     # Regular indent
     ("Regular", "General"): 1,
     ("Regular", "Maintenance"): 1,
     ("Regular", "Production"): 1,
     ("Regular", "Overhaul"): 1,
-    ("Regular", "Capital"): 3,
-    # Open indent
-    ("Open", "General"): 2,
-    ("Open", "Maintenance"): 2,
-    ("Open", "Production"): 2,
+    ("Regular", "Capital"): 2,
+    # Open indent — free entry, no validation
+    ("Open", "General"): 3,
+    ("Open", "Maintenance"): 3,
+    ("Open", "Production"): 3,
     # BOM indent
     ("BOM", "General"): 1,
     ("BOM", "Maintenance"): 1,
     ("BOM", "Production"): 1,
-    ("BOM", "Capital"): 3,
-    ("BOM", "Overhaul"): 3,
+    ("BOM", "Capital"): 2,
+    ("BOM", "Overhaul"): 2,
 }
 
 
@@ -154,6 +158,7 @@ async def validate_item_for_indent(
         indent_type = request.query_params.get("indent_type")
         expense_type_id = request.query_params.get("expense_type_id")
         indent_date_str = request.query_params.get("indent_date")
+        indent_id = request.query_params.get("indent_id")  # optional: exclude self when editing
 
         if not branch_id:
             raise HTTPException(status_code=400, detail="branch_id is required")
@@ -252,6 +257,24 @@ async def validate_item_for_indent(
         # Pre-computed validation limits from the view (sentinel: -2=open outstanding, -1=no minmax, >=0=limit)
         view_max_indent = float(vdata.get("max_indent_qty", -1))
         view_min_indent = float(vdata.get("min_indent_qty", -1))
+
+        # When editing an existing indent, the view's max_indent_qty already
+        # includes this indent's own outstanding in the deduction. We need to
+        # add it back so the user can keep/adjust their current qty.
+        self_outstanding = 0.0
+        if indent_id:
+            self_row = db.execute(
+                get_indent_item_outstanding(),
+                {"branch_id": branch_id, "item_id": item_id, "indent_id": int(indent_id)},
+            ).fetchone()
+            if self_row:
+                self_outstanding = float(dict(self_row._mapping).get("indent_outstanding") or 0)
+            outstanding -= self_outstanding
+            regular_bom_outstanding_val -= self_outstanding
+            # Add self-outstanding back to the view's pre-computed max
+            if view_max_indent >= 0 and self_outstanding > 0:
+                view_max_indent += self_outstanding
+
         result["branch_stock"] = branch_stock
         result["outstanding_indent_qty"] = outstanding
         result["minqty"] = float(minqty) if minqty is not None else None
@@ -348,7 +371,7 @@ async def validate_item_for_indent(
             if maxqty is None and minqty is None:
                 result["has_minmax"] = False
                 result["errors"].append(
-                    "No max/min quantity defined for this item. Cannot create open indent."
+                    "No max/min quantity defined for this item. Cannot create indent with forced quantity."
                 )
             else:
                 result["has_minmax"] = True
@@ -588,8 +611,9 @@ async def get_indent_table(
 	limit: int = 10,
 	search: str | None = None,
 	co_id: int | None = None,
+	branch_id: int | None = None,
 ):
-	"""Return paginated procurement indent list."""
+	"""Return paginated procurement indent list filtered by branch_id if provided."""
 
 	try:
 		page = max(page, 1)
@@ -601,6 +625,7 @@ async def get_indent_table(
 
 		params = {
 			"co_id": co_id,
+			"branch_id": branch_id,
 			"search_like": search_like,
 			"limit": limit,
 			"offset": offset,
@@ -647,7 +672,7 @@ async def get_indent_table(
 			)
 
 		count_query = get_indent_table_count_query()
-		count_params = {"co_id": co_id, "search_like": search_like}
+		count_params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}
 		count_result = db.execute(count_query, count_params).scalar()
 		total = int(count_result) if count_result is not None else 0
 
@@ -860,6 +885,22 @@ async def get_indent_by_id(
 				logger.exception("Error calculating permissions, continuing without them")
 				permissions = None
 		
+		# Get max approval level for this menu/branch
+		max_approval_level = None
+		if menu_id is not None and branch_id is not None:
+			try:
+				max_level_query = get_max_approval_level()
+				max_level_result = db.execute(
+					max_level_query,
+					{"menu_id": menu_id, "branch_id": branch_id}
+				).fetchone()
+				if max_level_result:
+					max_level_val = dict(max_level_result._mapping).get("max_level")
+					if max_level_val is not None:
+						max_approval_level = int(max_level_val)
+			except Exception:
+				logger.exception("Error fetching max approval level, continuing without it")
+
 		# Format indent_no if it exists
 		raw_indent_no = header.get("indent_no")
 		formatted_indent_no = ""
@@ -892,6 +933,7 @@ async def get_indent_by_id(
 			"status": header.get("status_name") if header.get("status_name") else None,
 			"statusId": header.get("status_id"),
 			"approvalLevel": approval_level,
+			"maxApprovalLevel": max_approval_level,
 			"updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
 			"updatedAt": updated_at_str,
 			"remarks": header.get("remarks") if header.get("remarks") else None,
@@ -976,7 +1018,7 @@ async def create_indent(
 			raise HTTPException(status_code=400, detail="At least one item row is required")
 
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		created_at = datetime.utcnow()
+		created_at = now_ist()
 		indent_title_raw = payload.get("name") or payload.get("requester")
 		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
 		header_remarks_raw = payload.get("remarks")
@@ -1196,7 +1238,7 @@ async def update_indent(
 			raise HTTPException(status_code=400, detail="At least one item row is required")
 
 		updated_by = to_int(token_data.get("user_id"), "updated_by")
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		indent_title_raw = payload.get("name")
 		indent_title = str(indent_title_raw).strip() if indent_title_raw else None
 		header_remarks_raw = payload.get("remarks")
@@ -1218,6 +1260,12 @@ async def update_indent(
 			uom_id = to_int(item.get("uom"), f"items[{idx}].uom", required=True)
 			item_make_id = to_int(item.get("item_make"), f"items[{idx}].item_make")
 			department_id = to_int(item.get("department"), f"items[{idx}].department")
+			# indent_dtl_id may be a client-generated UUID for new lines — treat as None
+			raw_dtl_id = item.get("indent_dtl_id")
+			try:
+				indent_dtl_id = int(raw_dtl_id) if raw_dtl_id else None
+			except (TypeError, ValueError):
+				indent_dtl_id = None
 
 			remarks_raw = item.get("remarks")
 			remarks = str(remarks_raw).strip() if remarks_raw else None
@@ -1226,6 +1274,7 @@ async def update_indent(
 
 			normalized_items.append(
 				{
+					"indent_dtl_id": indent_dtl_id,
 					"item_id": item_id,
 					"qty": qty,
 					"uom_id": uom_id,
@@ -1261,9 +1310,20 @@ async def update_indent(
 					).fetchone()
 					if vdata:
 						vd = dict(vdata._mapping)
-						# Use pre-computed max_indent_qty from view
-						# Sentinel: -2=open outstanding (skip), -1=no minmax (skip), >=0=enforce
 						max_allowed = float(vd.get("max_indent_qty", -1))
+						outstanding_qty = float(vd.get("outstanding_indent_qty") or 0)
+
+						# Add back the current indent's own outstanding so editing
+						# doesn't fail against its own previously-saved quantity.
+						self_row = db.execute(
+							get_indent_item_outstanding(),
+							{"branch_id": int(branch_id), "item_id": int(item_id), "indent_id": int(indent_id)},
+						).fetchone()
+						self_out = float(dict(self_row._mapping).get("indent_outstanding") or 0) if self_row else 0.0
+						if self_out > 0 and max_allowed >= 0:
+							max_allowed += self_out
+							outstanding_qty -= self_out
+
 						if max_allowed >= 0 and ni["qty"] > max_allowed:
 							raise HTTPException(
 								status_code=400,
@@ -1272,7 +1332,7 @@ async def update_indent(
 									f"maximum allowed indent quantity of {max_allowed:.2f} "
 									f"for this item (maxQty={vd.get('maxqty')}, "
 									f"stock={vd.get('branch_stock', 0)}, "
-									f"outstanding={vd.get('outstanding_indent_qty', 0)})."
+									f"outstanding={outstanding_qty})."
 								),
 							)
 
@@ -1337,36 +1397,68 @@ async def update_indent(
 
 		db.execute(update_header_query, header_params)
 
-		# Soft delete existing detail rows
-		delete_detail_query = delete_proc_indent_detail()
-		db.execute(
-			delete_detail_query,
-			{
-				"indent_id": indent_id,
-				"updated_by": updated_by,
-				"updated_date_time": updated_at,
-			},
-		)
+		# ── Update detail rows in place ──────────────────────────────────
+		# Existing rows are updated (preserving indent_dtl_id for PO traceability
+		# and view consistency). New rows are inserted. Removed rows are soft-deleted.
 
-		# Insert new detail rows
-		detail_query = insert_proc_indent_detail()
+		# Get current active detail IDs for this indent
+		existing_dtl_rows = db.execute(
+			text("SELECT indent_dtl_id FROM proc_indent_dtl WHERE indent_id = :indent_id AND active = 1"),
+			{"indent_id": indent_id},
+		).fetchall()
+		existing_dtl_ids = {row[0] for row in existing_dtl_rows}
+
+		incoming_dtl_ids = set()
 		for detail in normalized_items:
-			db.execute(
-				detail_query,
-				{
-					"indent_id": indent_id,
-					"required_by_days": None,
-					"active": 1,
-					"item_id": detail["item_id"],
-					"qty": detail["qty"],
-					"uom_id": detail["uom_id"],
-					"remarks": detail["remarks"],
-					"updated_by": updated_by,
-					"updated_date_time": updated_at,
-					"item_make_id": detail["item_make_id"],
-					"dept_id": detail["dept_id"],
-				},
-			)
+			dtl_id = detail.get("indent_dtl_id")
+			if dtl_id and dtl_id in existing_dtl_ids:
+				# Update existing row in place
+				incoming_dtl_ids.add(dtl_id)
+				db.execute(
+					update_proc_indent_detail(),
+					{
+						"indent_dtl_id": dtl_id,
+						"indent_id": indent_id,
+						"item_id": detail["item_id"],
+						"qty": detail["qty"],
+						"uom_id": detail["uom_id"],
+						"item_make_id": detail["item_make_id"],
+						"dept_id": detail["dept_id"],
+						"remarks": detail["remarks"],
+						"updated_by": updated_by,
+						"updated_date_time": updated_at,
+					},
+				)
+			else:
+				# New row — insert
+				db.execute(
+					insert_proc_indent_detail(),
+					{
+						"indent_id": indent_id,
+						"required_by_days": None,
+						"active": 1,
+						"item_id": detail["item_id"],
+						"qty": detail["qty"],
+						"uom_id": detail["uom_id"],
+						"remarks": detail["remarks"],
+						"updated_by": updated_by,
+						"updated_date_time": updated_at,
+						"item_make_id": detail["item_make_id"],
+						"dept_id": detail["dept_id"],
+					},
+				)
+
+		# Soft-delete rows that were removed by the user
+		removed_dtl_ids = existing_dtl_ids - incoming_dtl_ids
+		if removed_dtl_ids:
+			for dtl_id in removed_dtl_ids:
+				db.execute(
+					text(
+						"UPDATE proc_indent_dtl SET active = 0, updated_by = :updated_by, "
+						"updated_date_time = :updated_date_time WHERE indent_dtl_id = :dtl_id"
+					),
+					{"dtl_id": dtl_id, "updated_by": updated_by, "updated_date_time": updated_at},
+				)
 
 		db.commit()
 		return {
@@ -1438,7 +1530,7 @@ def calculate_financial_year(indent_date) -> str:
 	except Exception as e:
 		logger.exception(f"Error calculating financial year from {indent_date}")
 		# Fallback to current year if date parsing fails
-		now = datetime.now()
+		now = now_ist()
 		current_year = now.year
 		current_month = now.month
 		if current_month >= 4:
@@ -1774,7 +1866,7 @@ async def open_indent(
 				new_indent_no = 1
 		
 		# Update status to Open (1) and set indent_no if generated
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		update_params = {
 			"indent_id": indent_id,
@@ -1856,7 +1948,7 @@ async def cancel_draft_indent(
 			)
 		
 		# Update status to Cancelled (6)
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,
@@ -1934,7 +2026,7 @@ async def reopen_indent(
 			)
 		
 		# Update status
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,
@@ -2008,7 +2100,7 @@ async def send_indent_for_approval(
 			)
 		
 		# Update status to Pending Approval (20) with level 1
-		updated_at = datetime.utcnow()
+		updated_at = now_ist()
 		update_query = update_indent_status()
 		db.execute(
 			update_query,

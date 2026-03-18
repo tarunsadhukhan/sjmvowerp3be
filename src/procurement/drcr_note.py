@@ -4,6 +4,7 @@ Handles manual and auto-generated debit/credit notes for rate differences and re
 """
 import logging
 from datetime import datetime, date
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -90,7 +91,7 @@ def format_drcr_note_no(note_id, adjustment_type, note_date) -> str:
     if note_id is None:
         return ""
     prefix = "DN" if adjustment_type == DRCR_TYPE_DEBIT else "CN"
-    year = note_date.year if hasattr(note_date, 'year') else datetime.now().year
+    year = note_date.year if hasattr(note_date, 'year') else now_ist().year
     return f"{prefix}-{year}-{int(note_id):05d}"
 
 
@@ -296,7 +297,7 @@ async def create_drcr_note(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
         
-        now = datetime.now()
+        now = now_ist()
         note_date = datetime.strptime(request_body.note_date, '%Y-%m-%d').date()
         
         # Calculate totals
@@ -374,7 +375,7 @@ async def open_drcr_note(
     """Open DRCR Note for approval."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         update_query = update_drcr_note_status()
         db.execute(update_query, {
@@ -403,7 +404,7 @@ async def approve_drcr_note(
     """Approve DRCR Note."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         # Update status to approved
         query = text("""
@@ -438,7 +439,7 @@ async def reject_drcr_note(
     """Reject DRCR Note."""
     try:
         user_id = token_data.get("user_id")
-        now = datetime.now()
+        now = now_ist()
         
         update_query = update_drcr_note_status()
         db.execute(update_query, {

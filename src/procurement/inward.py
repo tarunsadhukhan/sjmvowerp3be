@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from src.common.utils import now_ist
 from fastapi import Depends, Request, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -506,7 +507,7 @@ async def get_inward_by_id(
             "supplierId": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
             "challanNo": header.get("challan_no") if header.get("challan_no") else None,
             "challanDate": challan_date_str,
-            "invoiceNo": None,  # No invoice_no column in current schema
+            "invoiceNo": header.get("invoice_no") if header.get("invoice_no") else None,
             "invoiceDate": invoice_date_str,
             "invoiceRecvdDate": format_date_field(header.get("invoice_recvd_date")),
             "vehicleNo": header.get("vehicle_number") if header.get("vehicle_number") else None,
@@ -539,18 +540,20 @@ async def get_inward_by_id(
                     po_no_formatted = str(raw_po_no) if raw_po_no else ""
 
             line = {
+                "inward_dtl_id": str(detail.get("inward_dtl_id", "")) if detail.get("inward_dtl_id") else "",
                 "id": str(detail.get("inward_dtl_id", "")) if detail.get("inward_dtl_id") else "",
-                "poDtlId": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else None,
-                "poNo": po_no_formatted,
-                "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
-                "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
-                "itemCode": detail.get("item_code") if detail.get("item_code") else None,
-                "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
+                "po_dtl_id": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else None,
+                "po_no": po_no_formatted,
+                "item_grp_id": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
+                "item_id": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+                "item_code": detail.get("item_code") if detail.get("item_code") else None,
+                "item_make_id": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
                 "rate": float(detail.get("rate", 0)) if detail.get("rate") is not None else 0,
-                "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
+                "uom_id": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
                 "amount": float(detail.get("amount", 0)) if detail.get("amount") is not None else 0,
                 "remarks": detail.get("remarks") if detail.get("remarks") else None,
+                "hsn_code": detail.get("hsn_code") if detail.get("hsn_code") else None,
             }
             response["lines"].append(line)
 
@@ -694,7 +697,7 @@ async def create_inward(
             raise HTTPException(status_code=400, detail="At least one item row is required")
 
         updated_by = to_int(token_data.get("user_id"), "updated_by")
-        created_at = datetime.utcnow()
+        created_at = now_ist()
 
         # Normalize line items
         normalized_items = []
@@ -712,6 +715,10 @@ async def create_inward(
             if item_remarks:
                 item_remarks = str(item_remarks).strip()[:255]
 
+            hsn_code = item.get("hsn_code")
+            if hsn_code:
+                hsn_code = str(hsn_code).strip()[:50]
+
             amount = qty * rate
             total_amount += amount
 
@@ -723,6 +730,7 @@ async def create_inward(
                 "uom_id": uom_id,
                 "item_make_id": item_make_id,
                 "warehouse_id": warehouse_id,
+                "hsn_code": hsn_code,
                 "remarks": item_remarks,
                 "amount": amount,
             })
@@ -771,6 +779,7 @@ async def create_inward(
             "updated_by": updated_by,
             "challan_no": challan_no,
             "challan_date": challan_date,
+            "invoice_no": invoice_no,
             "invoice_amount": None,
             "invoice_date": invoice_date,
             "invoice_recvd_date": invoice_recvd_date,
@@ -816,6 +825,7 @@ async def create_inward(
                     "po_dtl_id": detail["po_dtl_id"],
                     "item_id": detail["item_id"],
                     "item_make_id": detail["item_make_id"],
+                    "hsn_code": detail.get("hsn_code"),
                     "description": None,
                     "remarks": detail["remarks"],
                     "challan_qty": detail["qty"],
@@ -868,8 +878,19 @@ async def update_inward(
         if not inward_id:
             raise HTTPException(status_code=400, detail="Inward ID is required")
 
+        # Guard: prevent updates after material inspection is completed
+        inspection_row = db.execute(
+            text("SELECT inspection_check FROM proc_inward WHERE inward_id = :inward_id"),
+            {"inward_id": int(inward_id)},
+        ).fetchone()
+        if inspection_row and inspection_row[0]:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot modify inward after material inspection is completed",
+            )
+
         updated_by = token_data.get("user_id") if token_data else None
-        updated_at = datetime.now()
+        updated_at = now_ist()
 
         # Parse header fields
         branch_id = body.get("branch")
@@ -880,6 +901,7 @@ async def update_inward(
         driver_contact_no = body.get("driver_contact_no")
         challan_no = body.get("challan_no")
         challan_date = body.get("challan_date")
+        invoice_no = body.get("invoice_no")
         invoice_date = body.get("invoice_date")
         invoice_recvd_date = body.get("invoice_recvd_date")
         consignment_no = body.get("consignment_no")
@@ -944,6 +966,7 @@ async def update_inward(
             "receipts_remarks": receipts_remarks,
             "challan_no": challan_no,
             "challan_date": challan_date_obj,
+            "invoice_no": invoice_no,
             "invoice_date": invoice_date_obj,
             "invoice_recvd_date": invoice_recvd_date_obj,
             "consignment_no": consignment_no,
@@ -965,6 +988,9 @@ async def update_inward(
             inward_qty = item.get("quantity")
             uom_id = item.get("uom")
             remarks = item.get("remarks")
+            hsn_code = item.get("hsn_code")
+            if hsn_code:
+                hsn_code = str(hsn_code).strip()[:50]
             po_dtl_id = item.get("po_dtl_id")
 
             # Get existing inward_dtl_id from po_dtl_id
@@ -982,6 +1008,7 @@ async def update_inward(
                     {
                         "inward_dtl_id": inward_dtl_id,
                         "item_id": int(item_id) if item_id else None,
+                        "hsn_code": hsn_code,
                         "remarks": remarks,
                         "inward_qty": float(inward_qty) if inward_qty else 0,
                         "uom_id": int(uom_id) if uom_id else None,

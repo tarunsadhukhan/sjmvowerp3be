@@ -15,6 +15,7 @@ from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
 from src.models.jute import JuteQualityMst
 from datetime import datetime
+from src.common.utils import now_ist
 
 router = APIRouter()
 
@@ -311,7 +312,7 @@ async def jute_quality_create(
             item_id=item_id,
             jute_quality=jute_quality,
             updated_by=updated_by,
-            updated_date_time=datetime.now(),
+            updated_date_time=now_ist(),
         )
 
         db.add(jq)
@@ -382,7 +383,7 @@ async def jute_quality_edit(
             jq.jute_quality = jute_quality
 
         jq.updated_by = updated_by
-        jq.updated_date_time = datetime.now()
+        jq.updated_date_time = now_ist()
 
         db.commit()
 
