@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    TIMESTAMP,
     func,
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
@@ -78,7 +79,7 @@ class IssueLi(Base):
     machine_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     inward_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    updated_date_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
