@@ -188,7 +188,7 @@ async def get_sales_order_setup_1(
         invoice_types = [dict(r._mapping) for r in invoice_types_result]
 
         # Mukam list (for jute invoice types)
-        mukam_query = text("SELECT mukam_id, mukam_name FROM jute_mukam_mst WHERE active = 1 ORDER BY mukam_name")
+        mukam_query = text("SELECT mukam_id, mukam_name FROM jute_mukam_mst ORDER BY mukam_name")
         mukam_result = db.execute(mukam_query).fetchall()
         mukam_list = [dict(r._mapping) for r in mukam_result]
 

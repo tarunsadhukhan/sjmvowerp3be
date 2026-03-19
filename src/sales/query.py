@@ -2251,7 +2251,7 @@ def get_sales_order_govtskg_dtl_by_order_id():
 
 def get_additional_charges_dropdown():
     sql = """SELECT additional_charges_id, additional_charges_name, default_value
-    FROM additional_charges_mst WHERE active = 1
+    FROM additional_charges_mst
     ORDER BY additional_charges_name;"""
     return text(sql)
 
