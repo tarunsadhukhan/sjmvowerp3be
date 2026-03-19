@@ -66,7 +66,6 @@ class MRUpdateRequest(BaseModel):
     mr_weight: Optional[float] = None
     party_branch_id: Optional[int] = None
     remarks: Optional[str] = None
-    src_com_id: Optional[int] = None
     line_items: List[MRLineItemUpdate] = []
 
 
@@ -457,7 +456,6 @@ async def update_jute_mr(
             SET mr_weight = :mr_weight,
                 party_branch_id = :party_branch_id,
                 remarks = :remarks,
-                src_com_id = :src_com_id,
                 updated_by = :updated_by,
                 updated_date_time = :updated_date_time
             WHERE jute_mr_id = :mr_id
@@ -468,7 +466,6 @@ async def update_jute_mr(
             "mr_weight": mr_weight,
             "party_branch_id": body.party_branch_id,
             "remarks": body.remarks,
-            "src_com_id": body.src_com_id,
             "updated_by": user_id,
             "updated_date_time": now,
         })

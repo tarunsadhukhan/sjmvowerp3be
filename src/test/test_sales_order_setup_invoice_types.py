@@ -55,6 +55,8 @@ class TestSalesOrderSetupInvoiceTypes:
             MagicMock(fetchone=lambda: co_config),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: []),  # mukam_list
+            MagicMock(fetchall=lambda: []),  # additional_charges_master
         ]
 
         response = client.get("/api/salesOrder/get_sales_order_setup_1?co_id=1&branch_id=1")
@@ -88,6 +90,8 @@ class TestSalesOrderSetupInvoiceTypes:
             MagicMock(fetchone=lambda: co_config),
             MagicMock(fetchall=lambda: item_groups),
             MagicMock(fetchall=lambda: invoice_types),
+            MagicMock(fetchall=lambda: []),  # mukam_list
+            MagicMock(fetchall=lambda: []),  # additional_charges_master
         ]
 
         response = client.get("/api/salesOrder/get_sales_order_setup_1?co_id=1&branch_id=1")
