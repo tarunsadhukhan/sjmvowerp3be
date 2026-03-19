@@ -436,7 +436,7 @@ class JutePOLineItemCreate(BaseModel):
     quantity: float
     rate: float
     allowable_moisture: Optional[float] = None
-    jute_unit: str = "LOOSE"  # "LOOSE" or "BALE", per line item
+    jute_unit: str = "BALE"  # "LOOSE" or "BALE"
 
 
 class JutePOCreate(BaseModel):
