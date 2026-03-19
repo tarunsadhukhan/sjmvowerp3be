@@ -46,6 +46,7 @@ def get_customer_branches_bulk(co_id: int = None):
         COALESCE(pbm.zip_code, '') AS zip_code,
         pbm.state_id,
         sm.state AS state_name,
+        sm.state_code,
         pbm.gst_no
     FROM party_branch_mst pbm
     LEFT JOIN party_mst pm ON pm.party_id = pbm.party_id
@@ -93,7 +94,8 @@ def get_item_by_group_id_saleable(item_group_id: int):
     """Get saleable items for a given item group, including tax_percentage and hsn_code."""
     sql = """SELECT im.item_id, im.item_code, im.item_name,
         im.uom_id, um.uom_name,
-        im.tax_percentage, im.hsn_code
+        im.tax_percentage, im.hsn_code,
+        im.uom_rounding, im.rate_rounding
     FROM item_mst im
     LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
     WHERE im.item_grp_id = :item_group_id
@@ -864,7 +866,8 @@ def get_approved_sales_orders_query():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
-        so.net_amount
+        so.net_amount,
+        so.invoice_type
     FROM sales_order AS so
     LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -917,7 +920,7 @@ def insert_sales_delivery_order():
     sql = """INSERT INTO sales_delivery_order (
         updated_by, updated_date_time,
         delivery_order_date, delivery_order_no,
-        branch_id, sales_order_id, party_id,
+        branch_id, invoice_type, sales_order_id, party_id,
         billing_to_id, shipping_to_id, transporter_id,
         vehicle_no, driver_name, driver_contact,
         expected_delivery_date,
@@ -927,7 +930,7 @@ def insert_sales_delivery_order():
     ) VALUES (
         :updated_by, :updated_date_time,
         :delivery_order_date, :delivery_order_no,
-        :branch_id, :sales_order_id, :party_id,
+        :branch_id, :invoice_type, :sales_order_id, :party_id,
         :billing_to_id, :shipping_to_id, :transporter_id,
         :vehicle_no, :driver_name, :driver_contact,
         :expected_delivery_date,
@@ -980,6 +983,7 @@ def update_sales_delivery_order():
         updated_date_time = :updated_date_time,
         delivery_order_date = :delivery_order_date,
         branch_id = :branch_id,
+        invoice_type = :invoice_type,
         sales_order_id = :sales_order_id,
         party_id = :party_id,
         billing_to_id = :billing_to_id,
@@ -1088,6 +1092,7 @@ def get_delivery_order_by_id_query():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
+        sdo.invoice_type,
         sdo.sales_order_id,
         so.sales_no,
         sdo.party_id,
@@ -1235,11 +1240,15 @@ def get_approved_delivery_orders_query():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
-        sdo.net_amount
+        sdo.net_amount,
+        sdo.sales_order_id,
+        so.sales_order_date,
+        so.sales_no AS sales_order_no
     FROM sales_delivery_order AS sdo
     LEFT JOIN branch_mst AS bm ON bm.branch_id = sdo.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = sdo.party_id
+    LEFT JOIN sales_order AS so ON so.sales_order_id = sdo.sales_order_id
     WHERE sdo.status_id = 3
         AND sdo.active = 1
         AND (:branch_id IS NULL OR sdo.branch_id = :branch_id)
@@ -1280,6 +1289,32 @@ def get_delivery_order_lines_for_invoice():
     WHERE sdod.sales_delivery_order_id = :sales_delivery_order_id
         AND sdod.active = 1
     ORDER BY sdod.sales_delivery_order_dtl_id;"""
+    return text(sql)
+
+
+def get_approved_sales_orders_for_invoice():
+    """Get approved sales orders (status_id=3) for dropdown when creating invoice."""
+    sql = """SELECT
+        so.sales_order_id,
+        so.sales_no,
+        so.sales_order_date,
+        so.party_id,
+        pm.supp_name AS party_name,
+        so.branch_id,
+        bm.branch_name,
+        bm.branch_prefix,
+        bm.co_id,
+        cm.co_prefix,
+        so.payment_terms
+    FROM sales_order AS so
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN party_mst AS pm ON pm.party_id = so.party_id
+    WHERE so.status_id = 3
+        AND so.active = 1
+        AND (:branch_id IS NULL OR so.branch_id = :branch_id)
+        AND (:co_id IS NULL OR bm.co_id = :co_id)
+    ORDER BY so.sales_order_date DESC, so.sales_order_id DESC;"""
     return text(sql)
 
 
@@ -1348,7 +1383,19 @@ def get_invoice_by_id_query():
         si.sales_delivery_order_id,
         si.broker_id,
         si.billing_to_id,
+        pbill.address AS billing_address,
+        pbill.gst_no AS billing_gst_no,
+        pbill.state_id AS billing_state_id,
+        sbill.state AS billing_state_name,
+        pbill.contact_person AS billing_contact_person,
+        pbill.contact_no AS billing_contact_no,
         si.shipping_to_id,
+        pship.address AS shipping_address,
+        pship.gst_no AS shipping_gst_no,
+        pship.state_id AS shipping_state_id,
+        sship.state AS shipping_state_name,
+        pship.contact_person AS shipping_contact_person,
+        pship.contact_no AS shipping_contact_no,
         si.internal_note,
         si.shipping_state_code,
         si.transporter_id,
@@ -1381,13 +1428,23 @@ def get_invoice_by_id_query():
         sm.status_name,
         si.updated_by,
         si.updated_date_time,
-        si.intra_inter_state
+        si.intra_inter_state,
+        si.payment_terms,
+        si.sales_order_id,
+        si.billing_state_code,
+        so.sales_order_date,
+        so.sales_no AS sales_order_no
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN party_mst AS trns ON trns.party_id = si.transporter_id
     LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
+    LEFT JOIN party_branch_mst AS pbill ON pbill.party_mst_branch_id = si.billing_to_id
+    LEFT JOIN state_mst AS sbill ON sbill.state_id = pbill.state_id
+    LEFT JOIN party_branch_mst AS pship ON pship.party_mst_branch_id = si.shipping_to_id
+    LEFT JOIN state_mst AS sship ON sship.state_id = pship.state_id
+    LEFT JOIN sales_order AS so ON so.sales_order_id = si.sales_order_id
     WHERE si.invoice_id = :invoice_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)
@@ -1438,10 +1495,11 @@ def insert_sales_invoice():
         freight_charges, round_off,
         shipping_state_code,
         intra_inter_state,
+        status_id, active,
         due_date, type_of_sale, tax_id,
         container_no, contract_no, contract_date,
         consignment_no, consignment_date,
-        status_id,
+        payment_terms, sales_order_id, billing_state_code,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
@@ -1458,10 +1516,11 @@ def insert_sales_invoice():
         :freight_charges, :round_off,
         :shipping_state_code,
         :intra_inter_state,
+        :status_id, :active,
         :due_date, :type_of_sale, :tax_id,
         :container_no, :contract_no, :contract_date,
         :consignment_no, :consignment_date,
-        :status_id,
+        :payment_terms, :sales_order_id, :billing_state_code,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1525,6 +1584,9 @@ def update_sales_invoice():
         contract_date = :contract_date,
         consignment_no = :consignment_no,
         consignment_date = :consignment_date,
+        payment_terms = :payment_terms,
+        sales_order_id = :sales_order_id,
+        billing_state_code = :billing_state_code,
         updated_by = :updated_by,
         updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
@@ -1634,7 +1696,7 @@ def get_mukam_list():
 
 
 def insert_sale_invoice_jute():
-    """Insert jute-specific data for a sales invoice."""
+    """Insert jute-specific data for a sales invoice (DEPRECATED — use insert_sales_invoice_jute)."""
     sql = """INSERT INTO sale_invoice_jute (
         invoice_id, mr_no, mr_id,
         claim_amount, other_reference, unit_conversion,
@@ -1648,14 +1710,14 @@ def insert_sale_invoice_jute():
 
 
 def delete_sale_invoice_jute():
-    """Delete jute-specific data for a sales invoice (used in delete-reinsert on update)."""
+    """Delete jute-specific data for a sales invoice (DEPRECATED — use delete_sales_invoice_jute)."""
     sql = """DELETE FROM sale_invoice_jute
     WHERE invoice_id = :invoice_id;"""
     return text(sql)
 
 
 def get_sale_invoice_jute_by_id():
-    """Get jute-specific data for a sales invoice, including mukam name."""
+    """Get jute-specific data for a sales invoice (DEPRECATED — use get_sales_invoice_jute_by_id)."""
     sql = """SELECT
         sij.sale_invoice_jute_id,
         sij.invoice_id,
@@ -1672,4 +1734,623 @@ def get_sale_invoice_jute_by_id():
     FROM sale_invoice_jute AS sij
     LEFT JOIN jute_mukam_mst AS jm ON jm.mukam_id = sij.mukam_id
     WHERE sij.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE — GST (separate table)
+# =============================================================================
+
+def insert_sales_invoice_dtl_gst():
+    """Insert GST breakdown for a sales invoice line item."""
+    sql = """INSERT INTO sales_invoice_dtl_gst (
+        invoice_line_item_id,
+        tax_percentage,
+        cgst_amount, cgst_percentage,
+        sgst_amount, sgst_percentage,
+        igst_amount, igst_percentage,
+        tax_amount
+    ) VALUES (
+        :invoice_line_item_id,
+        :tax_percentage,
+        :cgst_amount, :cgst_percentage,
+        :sgst_amount, :sgst_percentage,
+        :igst_amount, :igst_percentage,
+        :tax_amount
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_dtl_gst():
+    """Hard delete GST rows for all line items of an invoice (re-inserted on update)."""
+    sql = """DELETE FROM sales_invoice_dtl_gst
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_dtl_gst_by_invoice_id():
+    """Get all GST rows for an invoice's line items."""
+    sql = """SELECT
+        g.sales_invoice_dtl_gst_id,
+        g.invoice_line_item_id,
+        g.tax_percentage,
+        g.cgst_amount, g.cgst_percentage,
+        g.sgst_amount, g.sgst_percentage,
+        g.igst_amount, g.igst_percentage,
+        g.tax_amount
+    FROM sales_invoice_dtl_gst AS g
+    WHERE g.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE — JUTE (new tables: sales_invoice_jute + sales_invoice_jute_dtl)
+# =============================================================================
+
+def insert_sales_invoice_jute():
+    """Insert header-level jute data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_jute (
+        invoice_id, mr_no, mr_id,
+        claim_amount, other_reference, unit_conversion,
+        claim_description, mukam_id
+    ) VALUES (
+        :invoice_id, :mr_no, :mr_id,
+        :claim_amount, :other_reference, :unit_conversion,
+        :claim_description, :mukam_id
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_jute():
+    """Delete header-level jute data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_jute
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_jute_by_id():
+    """Get header-level jute data for a sales invoice."""
+    sql = """SELECT
+        sij.sales_invoice_jute_id,
+        sij.invoice_id,
+        sij.mr_no,
+        sij.mr_id,
+        sij.claim_amount,
+        sij.other_reference,
+        sij.unit_conversion,
+        sij.claim_description,
+        sij.mukam_id,
+        jm.mukam_name
+    FROM sales_invoice_jute AS sij
+    LEFT JOIN jute_mukam_mst AS jm ON jm.mukam_id = sij.mukam_id
+    WHERE sij.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_jute_dtl():
+    """Insert per-line-item jute detail data."""
+    sql = """INSERT INTO sales_invoice_jute_dtl (
+        invoice_line_item_id,
+        claim_amount_dtl, claim_desc, claim_rate,
+        unit_conversion, qty_untit_conversion
+    ) VALUES (
+        :invoice_line_item_id,
+        :claim_amount_dtl, :claim_desc, :claim_rate,
+        :unit_conversion, :qty_untit_conversion
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_jute_dtl():
+    """Delete per-line-item jute detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_jute_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_jute_dtl_by_invoice_id():
+    """Get all per-line-item jute detail rows for an invoice."""
+    sql = """SELECT
+        jd.sales_invoice_jute_dtl_id,
+        jd.invoice_line_item_id,
+        jd.claim_amount_dtl,
+        jd.claim_desc,
+        jd.claim_rate,
+        jd.unit_conversion,
+        jd.qty_untit_conversion
+    FROM sales_invoice_jute_dtl AS jd
+    WHERE jd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# HESSIAN INVOICE EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_hessian():
+    """Insert header-level hessian data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_hessian (
+        invoice_id, qty_bales, rate_per_bale,
+        billing_rate_mt, billing_rate_bale,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_id, :qty_bales, :rate_per_bale,
+        :billing_rate_mt, :billing_rate_bale,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_hessian():
+    """Delete header-level hessian data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_hessian
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_hessian_by_id():
+    """Get header-level hessian data for a sales invoice."""
+    sql = """SELECT
+        sih.sales_invoice_hessian_id,
+        sih.invoice_id,
+        sih.qty_bales,
+        sih.rate_per_bale,
+        sih.billing_rate_mt,
+        sih.billing_rate_bale
+    FROM sales_invoice_hessian AS sih
+    WHERE sih.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_hessian_dtl():
+    """Insert per-line-item hessian detail data."""
+    sql = """INSERT INTO sales_invoice_hessian_dtl (
+        invoice_line_item_id,
+        qty_bales, rate_per_bale,
+        billing_rate_mt, billing_rate_bale,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :qty_bales, :rate_per_bale,
+        :billing_rate_mt, :billing_rate_bale,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_hessian_dtl():
+    """Delete per-line-item hessian detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_hessian_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_hessian_dtl_by_invoice_id():
+    """Get all per-line-item hessian detail rows for an invoice."""
+    sql = """SELECT
+        hd.sales_invoice_hessian_dtl_id,
+        hd.invoice_line_item_id,
+        hd.qty_bales,
+        hd.rate_per_bale,
+        hd.billing_rate_mt,
+        hd.billing_rate_bale
+    FROM sales_invoice_hessian_dtl AS hd
+    WHERE hd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# JUTE YARN INVOICE EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_juteyarn():
+    """Insert header-level jute yarn data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_juteyarn (
+        invoice_id, pcso_no, container_no, customer_ref_no,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_id, :pcso_no, :container_no, :customer_ref_no,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_juteyarn():
+    """Delete header-level jute yarn data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_juteyarn
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_juteyarn_by_id():
+    """Get header-level jute yarn data for a sales invoice."""
+    sql = """SELECT
+        sijy.sales_invoice_juteyarn_id,
+        sijy.invoice_id,
+        sijy.pcso_no,
+        sijy.container_no,
+        sijy.customer_ref_no
+    FROM sales_invoice_juteyarn AS sijy
+    WHERE sijy.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def insert_sales_invoice_juteyarn_dtl():
+    """Insert per-line-item jute yarn detail data."""
+    sql = """INSERT INTO sales_invoice_juteyarn_dtl (
+        invoice_line_item_id,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_juteyarn_dtl():
+    """Delete per-line-item jute yarn detail rows for an invoice."""
+    sql = """DELETE FROM sales_invoice_juteyarn_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sales_invoice_juteyarn_dtl_by_invoice_id():
+    """Get all per-line-item jute yarn detail rows for an invoice."""
+    sql = """SELECT
+        jyd.sales_invoice_juteyarn_dtl_id,
+        jyd.invoice_line_item_id
+    FROM sales_invoice_juteyarn_dtl AS jyd
+    WHERE jyd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# GOVT SKG INVOICE HEADER EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_invoice_govtskg():
+    """Insert header-level govt SKG data for a sales invoice."""
+    sql = """INSERT INTO sales_invoice_govtskg (
+        invoice_id, pcso_no, pcso_date,
+        administrative_office_address, destination_rail_head,
+        loading_point, pack_sheet, net_weight, total_weight
+    ) VALUES (
+        :invoice_id, :pcso_no, :pcso_date,
+        :administrative_office_address, :destination_rail_head,
+        :loading_point, :pack_sheet, :net_weight, :total_weight
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_govtskg():
+    """Delete header-level govt SKG data for a sales invoice."""
+    sql = """DELETE FROM sales_invoice_govtskg
+    WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_govtskg_by_id():
+    """Get header-level govt SKG data for a sales invoice."""
+    sql = """SELECT
+        sg.sale_invoice_govtskg_id,
+        sg.invoice_id,
+        sg.pcso_no,
+        sg.pcso_date,
+        sg.administrative_office_address,
+        sg.destination_rail_head,
+        sg.loading_point,
+        sg.pack_sheet,
+        sg.net_weight,
+        sg.total_weight
+    FROM sales_invoice_govtskg AS sg
+    WHERE sg.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# GOVT SKG INVOICE DETAIL EXTENSION QUERIES
+# =============================================================================
+
+def insert_sale_invoice_govtskg_dtl():
+    """Insert per-line-item govt SKG detail data."""
+    sql = """INSERT INTO sale_invoice_govtskg_dtl (
+        invoice_line_item_id,
+        pack_sheet, net_weight, total_weight,
+        updated_by, updated_date_time
+    ) VALUES (
+        :invoice_line_item_id,
+        :pack_sheet, :net_weight, :total_weight,
+        :updated_by, NOW()
+    );"""
+    return text(sql)
+
+
+def delete_sale_invoice_govtskg_dtl():
+    """Delete per-line-item govt SKG detail rows for an invoice."""
+    sql = """DELETE FROM sale_invoice_govtskg_dtl
+    WHERE invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+def get_sale_invoice_govtskg_dtl_by_invoice_id():
+    """Get all per-line-item govt SKG detail rows for an invoice."""
+    sql = """SELECT
+        gd.sale_invoice_govtskg_dtl_id,
+        gd.invoice_line_item_id,
+        gd.pack_sheet,
+        gd.net_weight,
+        gd.total_weight
+    FROM sale_invoice_govtskg_dtl AS gd
+    WHERE gd.invoice_line_item_id IN (
+        SELECT invoice_line_item_id FROM sales_invoice_dtl
+        WHERE invoice_id = :invoice_id
+    );"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES ORDER JUTE EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_order_jute():
+    sql = """INSERT INTO sales_order_jute (
+        sales_order_id, mr_no, mr_id, claim_amount, other_reference,
+        unit_conversion, claim_description, mukam_id, updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_id, :mr_no, :mr_id, :claim_amount, :other_reference,
+        :unit_conversion, :claim_description, :mukam_id, :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_jute():
+    sql = """DELETE FROM sales_order_jute WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_jute_by_id():
+    sql = """SELECT soj.*, jm.mukam_name
+    FROM sales_order_jute soj
+    LEFT JOIN jute_mukam_mst jm ON jm.mukam_id = soj.mukam_id
+    WHERE soj.sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def insert_sales_order_jute_dtl():
+    sql = """INSERT INTO sales_order_jute_dtl (
+        sales_order_dtl_id, claim_amount_dtl, claim_desc, claim_rate,
+        unit_conversion, qty_untit_conversion, updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_dtl_id, :claim_amount_dtl, :claim_desc, :claim_rate,
+        :unit_conversion, :qty_untit_conversion, :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_jute_dtl():
+    sql = """DELETE sojd FROM sales_order_jute_dtl sojd
+    INNER JOIN sales_order_dtl sod ON sod.sales_order_dtl_id = sojd.sales_order_dtl_id
+    WHERE sod.sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_jute_dtl_by_order_id():
+    sql = """SELECT sojd.*
+    FROM sales_order_jute_dtl sojd
+    INNER JOIN sales_order_dtl sod ON sod.sales_order_dtl_id = sojd.sales_order_dtl_id
+    WHERE sod.sales_order_id = :sales_order_id AND sod.active = 1;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES ORDER JUTE YARN EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_order_juteyarn():
+    sql = """INSERT INTO sales_order_juteyarn (
+        sales_order_id, pcso_no, container_no, customer_ref_no,
+        updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_id, :pcso_no, :container_no, :customer_ref_no,
+        :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_juteyarn():
+    sql = """DELETE FROM sales_order_juteyarn WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_juteyarn_by_id():
+    sql = """SELECT * FROM sales_order_juteyarn WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES ORDER GOVT SKG EXTENSION QUERIES
+# =============================================================================
+
+def insert_sales_order_govtskg():
+    sql = """INSERT INTO sales_order_govtskg (
+        sales_order_id, pcso_no, pcso_date, administrative_office_address,
+        destination_rail_head, loading_point, updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_id, :pcso_no, :pcso_date, :administrative_office_address,
+        :destination_rail_head, :loading_point, :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_govtskg():
+    sql = """DELETE FROM sales_order_govtskg WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_govtskg_by_id():
+    sql = """SELECT * FROM sales_order_govtskg WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def insert_sales_order_govtskg_dtl():
+    sql = """INSERT INTO sales_order_govtskg_dtl (
+        sales_order_dtl_id, pack_sheet, net_weight, total_weight,
+        updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_dtl_id, :pack_sheet, :net_weight, :total_weight,
+        :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_govtskg_dtl():
+    sql = """DELETE sogd FROM sales_order_govtskg_dtl sogd
+    INNER JOIN sales_order_dtl sod ON sod.sales_order_dtl_id = sogd.sales_order_dtl_id
+    WHERE sod.sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_govtskg_dtl_by_order_id():
+    sql = """SELECT sogd.*
+    FROM sales_order_govtskg_dtl sogd
+    INNER JOIN sales_order_dtl sod ON sod.sales_order_dtl_id = sogd.sales_order_dtl_id
+    WHERE sod.sales_order_id = :sales_order_id AND sod.active = 1;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES ORDER ADDITIONAL CHARGES QUERIES
+# =============================================================================
+
+def get_additional_charges_dropdown():
+    sql = """SELECT additional_charges_id, additional_charges_name, default_value
+    FROM additional_charges_mst
+    ORDER BY additional_charges_name;"""
+    return text(sql)
+
+
+def insert_sales_order_additional():
+    sql = """INSERT INTO sales_order_additional (
+        sales_order_id, additional_charges_id, qty, rate, net_amount,
+        remarks, updated_by, updated_date_time
+    ) VALUES (
+        :sales_order_id, :additional_charges_id, :qty, :rate, :net_amount,
+        :remarks, :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def insert_sales_order_additional_gst():
+    sql = """INSERT INTO sales_order_additional_gst (
+        sales_order_additional_id,
+        igst_amount, igst_percent, cgst_amount, cgst_percent,
+        sgst_amount, sgst_percent, gst_total
+    ) VALUES (
+        :sales_order_additional_id,
+        :igst_amount, :igst_percent, :cgst_amount, :cgst_percent,
+        :sgst_amount, :sgst_percent, :gst_total
+    );"""
+    return text(sql)
+
+
+def delete_sales_order_additional_gst():
+    sql = """DELETE soag FROM sales_order_additional_gst soag
+    INNER JOIN sales_order_additional soa ON soa.sales_order_additional_id = soag.sales_order_additional_id
+    WHERE soa.sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def delete_sales_order_additional():
+    sql = """DELETE FROM sales_order_additional WHERE sales_order_id = :sales_order_id;"""
+    return text(sql)
+
+
+def get_sales_order_additional_by_id():
+    sql = """SELECT soa.*, acm.additional_charges_name,
+        soag.igst_amount, soag.igst_percent, soag.cgst_amount, soag.cgst_percent,
+        soag.sgst_amount, soag.sgst_percent, soag.gst_total
+    FROM sales_order_additional soa
+    LEFT JOIN additional_charges_mst acm ON acm.additional_charges_id = soa.additional_charges_id
+    LEFT JOIN sales_order_additional_gst soag ON soag.sales_order_additional_id = soa.sales_order_additional_id
+    WHERE soa.sales_order_id = :sales_order_id
+    ORDER BY soa.sales_order_additional_id;"""
+    return text(sql)
+
+
+# =============================================================================
+# SALES INVOICE ADDITIONAL CHARGES QUERIES
+# =============================================================================
+
+def insert_sales_invoice_additional():
+    sql = """INSERT INTO sales_invoice_additional (
+        invoice_id, additional_charges_id, qty, rate, net_amount,
+        remarks, updated_by, updated_date_time
+    ) VALUES (
+        :invoice_id, :additional_charges_id, :qty, :rate, :net_amount,
+        :remarks, :updated_by, :updated_date_time
+    );"""
+    return text(sql)
+
+
+def insert_sales_invoice_additional_gst():
+    sql = """INSERT INTO sales_invoice_additional_gst (
+        sales_invoice_additional_id,
+        igst_amount, igst_percent, cgst_amount, cgst_percent,
+        sgst_amount, sgst_percent, gst_total
+    ) VALUES (
+        :sales_invoice_additional_id,
+        :igst_amount, :igst_percent, :cgst_amount, :cgst_percent,
+        :sgst_amount, :sgst_percent, :gst_total
+    );"""
+    return text(sql)
+
+
+def delete_sales_invoice_additional_gst():
+    sql = """DELETE siag FROM sales_invoice_additional_gst siag
+    INNER JOIN sales_invoice_additional sia ON sia.sales_invoice_additional_id = siag.sales_invoice_additional_id
+    WHERE sia.invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def delete_sales_invoice_additional():
+    sql = """DELETE FROM sales_invoice_additional WHERE invoice_id = :invoice_id;"""
+    return text(sql)
+
+
+def get_sales_invoice_additional_by_id():
+    sql = """SELECT sia.*, acm.additional_charges_name,
+        siag.igst_amount, siag.igst_percent, siag.cgst_amount, siag.cgst_percent,
+        siag.sgst_amount, siag.sgst_percent, siag.gst_total
+    FROM sales_invoice_additional sia
+    LEFT JOIN additional_charges_mst acm ON acm.additional_charges_id = sia.additional_charges_id
+    LEFT JOIN sales_invoice_additional_gst siag ON siag.sales_invoice_additional_id = sia.sales_invoice_additional_id
+    WHERE sia.invoice_id = :invoice_id
+    ORDER BY sia.sales_invoice_additional_id;"""
     return text(sql)

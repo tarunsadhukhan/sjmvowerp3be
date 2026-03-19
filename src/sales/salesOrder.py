@@ -187,6 +187,16 @@ async def get_sales_order_setup_1(
         ).fetchall()
         invoice_types = [dict(r._mapping) for r in invoice_types_result]
 
+        # Mukam list (for jute invoice types)
+        mukam_query = text("SELECT mukam_id, mukam_name FROM jute_mukam_mst ORDER BY mukam_name")
+        mukam_result = db.execute(mukam_query).fetchall()
+        mukam_list = [dict(r._mapping) for r in mukam_result]
+
+        # Additional charges master
+        from src.sales.query import get_additional_charges_dropdown
+        charges_result = db.execute(get_additional_charges_dropdown()).fetchall()
+        additional_charges_master = [dict(r._mapping) for r in charges_result]
+
         return {
             "branches": branches,
             "customers": customers,
@@ -196,6 +206,8 @@ async def get_sales_order_setup_1(
             "approved_quotations": approved_quotations,
             "item_groups": item_groups,
             "invoice_types": invoice_types,
+            "mukam_list": mukam_list,
+            "additional_charges_master": additional_charges_master,
         }
     except HTTPException:
         raise
@@ -309,6 +321,7 @@ async def get_sales_order_table(
                 "sales_order_id": mapped.get("sales_order_id"),
                 "sales_no": formatted_no,
                 "sales_order_date": format_date(mapped.get("sales_order_date")),
+                "branch_id": mapped.get("branch_id"),
                 "branch_name": mapped.get("branch_name"),
                 "party_name": mapped.get("party_name"),
                 "quotation_no": mapped.get("quotation_no"),
@@ -377,6 +390,45 @@ async def get_sales_order_by_id(
             for h in hessian_results:
                 hd = dict(h._mapping)
                 hessian_map[hd.get("sales_order_dtl_id")] = hd
+
+        # Jute extension (invoice_type=4)
+        jute_hdr = None
+        jute_dtl_map: dict[int, dict] = {}
+        if header.get("invoice_type") == 4:
+            from src.sales.query import get_sales_order_jute_by_id, get_sales_order_jute_dtl_by_order_id
+            jute_result = db.execute(get_sales_order_jute_by_id(), {"sales_order_id": sales_order_id}).fetchone()
+            if jute_result:
+                jute_hdr = dict(jute_result._mapping)
+            jute_dtl_results = db.execute(get_sales_order_jute_dtl_by_order_id(), {"sales_order_id": sales_order_id}).fetchall()
+            for jd in jute_dtl_results:
+                jdd = dict(jd._mapping)
+                jute_dtl_map[jdd.get("sales_order_dtl_id")] = jdd
+
+        # Jute Yarn extension (invoice_type=3)
+        juteyarn_hdr = None
+        if header.get("invoice_type") == 3:
+            from src.sales.query import get_sales_order_juteyarn_by_id
+            juteyarn_result = db.execute(get_sales_order_juteyarn_by_id(), {"sales_order_id": sales_order_id}).fetchone()
+            if juteyarn_result:
+                juteyarn_hdr = dict(juteyarn_result._mapping)
+
+        # Govt SKG extension (invoice_type=5)
+        govtskg_hdr = None
+        govtskg_dtl_map: dict[int, dict] = {}
+        if header.get("invoice_type") == 5:
+            from src.sales.query import get_sales_order_govtskg_by_id, get_sales_order_govtskg_dtl_by_order_id
+            govtskg_result = db.execute(get_sales_order_govtskg_by_id(), {"sales_order_id": sales_order_id}).fetchone()
+            if govtskg_result:
+                govtskg_hdr = dict(govtskg_result._mapping)
+            govtskg_dtl_results = db.execute(get_sales_order_govtskg_dtl_by_order_id(), {"sales_order_id": sales_order_id}).fetchall()
+            for gd in govtskg_dtl_results:
+                gdd = dict(gd._mapping)
+                govtskg_dtl_map[gdd.get("sales_order_dtl_id")] = gdd
+
+        # Additional charges
+        from src.sales.query import get_sales_order_additional_by_id
+        additional_results = db.execute(get_sales_order_additional_by_id(), {"sales_order_id": sales_order_id}).fetchall()
+        additional_charges = [dict(r._mapping) for r in additional_results]
 
         # Format sales_no
         raw_no = header.get("sales_no")
@@ -451,6 +503,10 @@ async def get_sales_order_by_id(
             "approvalLevel": approval_level,
             "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
             "updatedAt": format_date(header.get("updated_date_time")),
+            "jute": jute_hdr,
+            "juteyarn": juteyarn_hdr,
+            "govtskg": govtskg_hdr,
+            "additionalCharges": additional_charges,
             "lines": [],
         }
 
@@ -495,6 +551,24 @@ async def get_sales_order_by_id(
                     "billingRateBale": hessian.get("billing_rate_bale"),
                 } if hessian else None,
             }
+            # Jute detail
+            jute_d = jute_dtl_map.get(dtl_id, {})
+            if jute_d:
+                line["juteDtl"] = {
+                    "claimAmountDtl": jute_d.get("claim_amount_dtl"),
+                    "claimDesc": jute_d.get("claim_desc"),
+                    "claimRate": jute_d.get("claim_rate"),
+                    "unitConversion": jute_d.get("unit_conversion"),
+                    "qtyUnitConversion": jute_d.get("qty_untit_conversion"),
+                }
+            # Govt SKG detail
+            govtskg_d = govtskg_dtl_map.get(dtl_id, {})
+            if govtskg_d:
+                line["govtskgDtl"] = {
+                    "packSheet": govtskg_d.get("pack_sheet"),
+                    "netWeight": govtskg_d.get("net_weight"),
+                    "totalWeight": govtskg_d.get("total_weight"),
+                }
             response["lines"].append(line)
 
         return response
@@ -574,6 +648,10 @@ async def create_sales_order(
                 "gst": item.get("gst"),
                 # Hessian-specific fields (invoice_type=2)
                 "hessian": item.get("hessian"),
+                # Jute-specific fields (invoice_type=4)
+                "jute_dtl": item.get("jute_dtl"),
+                # Govt SKG-specific fields (invoice_type=5)
+                "govtskg_dtl": item.get("govtskg_dtl"),
             })
 
         # Insert header
@@ -616,6 +694,24 @@ async def create_sales_order(
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
         hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
+
+        # Jute (invoice_type=4)
+        jute_hdr_data = payload.get("jute") or {}
+        jute_dtl_query = None
+        if invoice_type == 4:
+            from src.sales.query import insert_sales_order_jute_dtl
+            jute_dtl_query = insert_sales_order_jute_dtl()
+
+        # Govt SKG (invoice_type=5)
+        govtskg_hdr_data = payload.get("govtskg") or {}
+        govtskg_dtl_query = None
+        if invoice_type == 5:
+            from src.sales.query import insert_sales_order_govtskg_dtl
+            govtskg_dtl_query = insert_sales_order_govtskg_dtl()
+
+        # Jute Yarn (invoice_type=3) — header only, no detail extension
+        juteyarn_hdr_data = payload.get("juteyarn") or {}
+
         for item in normalized_items:
             dtl_result = db.execute(dtl_query, {
                 "updated_by": updated_by,
@@ -663,6 +759,103 @@ async def create_sales_order(
                     "updated_by": updated_by,
                     "updated_date_time": created_at,
                 })
+
+            # Jute detail
+            jute_dtl_data = item.get("jute_dtl")
+            if jute_dtl_query is not None and jute_dtl_data and isinstance(jute_dtl_data, dict) and dtl_id:
+                db.execute(jute_dtl_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "claim_amount_dtl": to_float(jute_dtl_data.get("claim_amount_dtl"), "claim_amount_dtl"),
+                    "claim_desc": jute_dtl_data.get("claim_desc"),
+                    "claim_rate": to_float(jute_dtl_data.get("claim_rate"), "claim_rate"),
+                    "unit_conversion": jute_dtl_data.get("unit_conversion"),
+                    "qty_untit_conversion": to_int(jute_dtl_data.get("qty_untit_conversion"), "qty_untit_conversion"),
+                    "updated_by": updated_by,
+                    "updated_date_time": created_at,
+                })
+
+            # Govt SKG detail
+            govtskg_dtl_data = item.get("govtskg_dtl")
+            if govtskg_dtl_query is not None and govtskg_dtl_data and isinstance(govtskg_dtl_data, dict) and dtl_id:
+                db.execute(govtskg_dtl_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "pack_sheet": to_float(govtskg_dtl_data.get("pack_sheet"), "pack_sheet"),
+                    "net_weight": to_float(govtskg_dtl_data.get("net_weight"), "net_weight"),
+                    "total_weight": to_float(govtskg_dtl_data.get("total_weight"), "total_weight"),
+                    "updated_by": updated_by,
+                    "updated_date_time": created_at,
+                })
+
+        # Insert header-level type extensions
+        if jute_hdr_data and invoice_type == 4:
+            from src.sales.query import insert_sales_order_jute
+            db.execute(insert_sales_order_jute(), {
+                "sales_order_id": sales_order_id,
+                "mr_no": jute_hdr_data.get("mr_no"),
+                "mr_id": to_int(jute_hdr_data.get("mr_id"), "mr_id"),
+                "claim_amount": to_float(jute_hdr_data.get("claim_amount"), "claim_amount"),
+                "other_reference": jute_hdr_data.get("other_reference"),
+                "unit_conversion": jute_hdr_data.get("unit_conversion"),
+                "claim_description": jute_hdr_data.get("claim_description"),
+                "mukam_id": to_int(jute_hdr_data.get("mukam_id"), "mukam_id"),
+                "updated_by": updated_by,
+                "updated_date_time": created_at,
+            })
+
+        if juteyarn_hdr_data and invoice_type == 3:
+            from src.sales.query import insert_sales_order_juteyarn
+            db.execute(insert_sales_order_juteyarn(), {
+                "sales_order_id": sales_order_id,
+                "pcso_no": juteyarn_hdr_data.get("pcso_no"),
+                "container_no": juteyarn_hdr_data.get("container_no"),
+                "customer_ref_no": juteyarn_hdr_data.get("customer_ref_no"),
+                "updated_by": updated_by,
+                "updated_date_time": created_at,
+            })
+
+        if govtskg_hdr_data and invoice_type == 5:
+            from src.sales.query import insert_sales_order_govtskg
+            db.execute(insert_sales_order_govtskg(), {
+                "sales_order_id": sales_order_id,
+                "pcso_no": govtskg_hdr_data.get("pcso_no"),
+                "pcso_date": govtskg_hdr_data.get("pcso_date"),
+                "administrative_office_address": govtskg_hdr_data.get("administrative_office_address"),
+                "destination_rail_head": govtskg_hdr_data.get("destination_rail_head"),
+                "loading_point": govtskg_hdr_data.get("loading_point"),
+                "updated_by": updated_by,
+                "updated_date_time": created_at,
+            })
+
+        # Insert additional charges
+        additional_charges_list = payload.get("additional_charges") or []
+        if additional_charges_list:
+            from src.sales.query import insert_sales_order_additional, insert_sales_order_additional_gst
+            add_query = insert_sales_order_additional()
+            add_gst_query = insert_sales_order_additional_gst()
+            for charge in additional_charges_list:
+                charge_result = db.execute(add_query, {
+                    "sales_order_id": sales_order_id,
+                    "additional_charges_id": to_int(charge.get("additional_charges_id"), "additional_charges_id"),
+                    "qty": to_float(charge.get("qty"), "qty"),
+                    "rate": to_float(charge.get("rate"), "rate"),
+                    "net_amount": to_float(charge.get("net_amount"), "net_amount"),
+                    "remarks": charge.get("remarks"),
+                    "updated_by": updated_by,
+                    "updated_date_time": created_at,
+                })
+                charge_id = charge_result.lastrowid
+                gst_data = charge.get("gst")
+                if gst_data and isinstance(gst_data, dict) and charge_id:
+                    db.execute(add_gst_query, {
+                        "sales_order_additional_id": charge_id,
+                        "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                        "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                        "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                        "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                        "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                        "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                        "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                    })
 
         db.commit()
         return {"message": "Sales order created successfully", "sales_order_id": sales_order_id}
@@ -752,6 +945,10 @@ async def update_sales_order_endpoint(
                 "gst": item.get("gst"),
                 # Hessian-specific fields (invoice_type=2)
                 "hessian": item.get("hessian"),
+                # Jute-specific fields (invoice_type=4)
+                "jute_dtl": item.get("jute_dtl"),
+                # Govt SKG-specific fields (invoice_type=5)
+                "govtskg_dtl": item.get("govtskg_dtl"),
             })
 
         # Update header
@@ -789,6 +986,24 @@ async def update_sales_order_endpoint(
         delete_hessian_q = delete_sales_order_dtl_hessian()
         db.execute(delete_hessian_q, {"sales_order_id": sales_order_id})
 
+        # Delete old type-specific extension data
+        if invoice_type == 4:
+            from src.sales.query import delete_sales_order_jute, delete_sales_order_jute_dtl
+            db.execute(delete_sales_order_jute_dtl(), {"sales_order_id": sales_order_id})
+            db.execute(delete_sales_order_jute(), {"sales_order_id": sales_order_id})
+        elif invoice_type == 3:
+            from src.sales.query import delete_sales_order_juteyarn
+            db.execute(delete_sales_order_juteyarn(), {"sales_order_id": sales_order_id})
+        elif invoice_type == 5:
+            from src.sales.query import delete_sales_order_govtskg, delete_sales_order_govtskg_dtl
+            db.execute(delete_sales_order_govtskg_dtl(), {"sales_order_id": sales_order_id})
+            db.execute(delete_sales_order_govtskg(), {"sales_order_id": sales_order_id})
+
+        # Delete old additional charges
+        from src.sales.query import delete_sales_order_additional_gst, delete_sales_order_additional
+        db.execute(delete_sales_order_additional_gst(), {"sales_order_id": sales_order_id})
+        db.execute(delete_sales_order_additional(), {"sales_order_id": sales_order_id})
+
         delete_gst_q = delete_sales_order_dtl_gst()
         db.execute(delete_gst_q, {"sales_order_id": sales_order_id})
 
@@ -799,10 +1014,28 @@ async def update_sales_order_endpoint(
             "updated_date_time": updated_at,
         })
 
-        # Re-insert details, GST, and hessian
+        # Re-insert details, GST, and type extensions
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
         hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
+
+        # Jute (invoice_type=4)
+        jute_hdr_data = payload.get("jute") or {}
+        jute_dtl_query = None
+        if invoice_type == 4:
+            from src.sales.query import insert_sales_order_jute_dtl
+            jute_dtl_query = insert_sales_order_jute_dtl()
+
+        # Govt SKG (invoice_type=5)
+        govtskg_hdr_data = payload.get("govtskg") or {}
+        govtskg_dtl_query = None
+        if invoice_type == 5:
+            from src.sales.query import insert_sales_order_govtskg_dtl
+            govtskg_dtl_query = insert_sales_order_govtskg_dtl()
+
+        # Jute Yarn (invoice_type=3) — header only, no detail extension
+        juteyarn_hdr_data = payload.get("juteyarn") or {}
+
         for item in normalized_items:
             dtl_result = db.execute(dtl_query, {
                 "updated_by": updated_by,
@@ -850,6 +1083,103 @@ async def update_sales_order_endpoint(
                     "updated_by": updated_by,
                     "updated_date_time": updated_at,
                 })
+
+            # Jute detail
+            jute_dtl_data = item.get("jute_dtl")
+            if jute_dtl_query is not None and jute_dtl_data and isinstance(jute_dtl_data, dict) and dtl_id:
+                db.execute(jute_dtl_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "claim_amount_dtl": to_float(jute_dtl_data.get("claim_amount_dtl"), "claim_amount_dtl"),
+                    "claim_desc": jute_dtl_data.get("claim_desc"),
+                    "claim_rate": to_float(jute_dtl_data.get("claim_rate"), "claim_rate"),
+                    "unit_conversion": jute_dtl_data.get("unit_conversion"),
+                    "qty_untit_conversion": to_int(jute_dtl_data.get("qty_untit_conversion"), "qty_untit_conversion"),
+                    "updated_by": updated_by,
+                    "updated_date_time": updated_at,
+                })
+
+            # Govt SKG detail
+            govtskg_dtl_data = item.get("govtskg_dtl")
+            if govtskg_dtl_query is not None and govtskg_dtl_data and isinstance(govtskg_dtl_data, dict) and dtl_id:
+                db.execute(govtskg_dtl_query, {
+                    "sales_order_dtl_id": dtl_id,
+                    "pack_sheet": to_float(govtskg_dtl_data.get("pack_sheet"), "pack_sheet"),
+                    "net_weight": to_float(govtskg_dtl_data.get("net_weight"), "net_weight"),
+                    "total_weight": to_float(govtskg_dtl_data.get("total_weight"), "total_weight"),
+                    "updated_by": updated_by,
+                    "updated_date_time": updated_at,
+                })
+
+        # Insert header-level type extensions
+        if jute_hdr_data and invoice_type == 4:
+            from src.sales.query import insert_sales_order_jute
+            db.execute(insert_sales_order_jute(), {
+                "sales_order_id": sales_order_id,
+                "mr_no": jute_hdr_data.get("mr_no"),
+                "mr_id": to_int(jute_hdr_data.get("mr_id"), "mr_id"),
+                "claim_amount": to_float(jute_hdr_data.get("claim_amount"), "claim_amount"),
+                "other_reference": jute_hdr_data.get("other_reference"),
+                "unit_conversion": jute_hdr_data.get("unit_conversion"),
+                "claim_description": jute_hdr_data.get("claim_description"),
+                "mukam_id": to_int(jute_hdr_data.get("mukam_id"), "mukam_id"),
+                "updated_by": updated_by,
+                "updated_date_time": updated_at,
+            })
+
+        if juteyarn_hdr_data and invoice_type == 3:
+            from src.sales.query import insert_sales_order_juteyarn
+            db.execute(insert_sales_order_juteyarn(), {
+                "sales_order_id": sales_order_id,
+                "pcso_no": juteyarn_hdr_data.get("pcso_no"),
+                "container_no": juteyarn_hdr_data.get("container_no"),
+                "customer_ref_no": juteyarn_hdr_data.get("customer_ref_no"),
+                "updated_by": updated_by,
+                "updated_date_time": updated_at,
+            })
+
+        if govtskg_hdr_data and invoice_type == 5:
+            from src.sales.query import insert_sales_order_govtskg
+            db.execute(insert_sales_order_govtskg(), {
+                "sales_order_id": sales_order_id,
+                "pcso_no": govtskg_hdr_data.get("pcso_no"),
+                "pcso_date": govtskg_hdr_data.get("pcso_date"),
+                "administrative_office_address": govtskg_hdr_data.get("administrative_office_address"),
+                "destination_rail_head": govtskg_hdr_data.get("destination_rail_head"),
+                "loading_point": govtskg_hdr_data.get("loading_point"),
+                "updated_by": updated_by,
+                "updated_date_time": updated_at,
+            })
+
+        # Insert additional charges
+        additional_charges_list = payload.get("additional_charges") or []
+        if additional_charges_list:
+            from src.sales.query import insert_sales_order_additional, insert_sales_order_additional_gst
+            add_query = insert_sales_order_additional()
+            add_gst_query = insert_sales_order_additional_gst()
+            for charge in additional_charges_list:
+                charge_result = db.execute(add_query, {
+                    "sales_order_id": sales_order_id,
+                    "additional_charges_id": to_int(charge.get("additional_charges_id"), "additional_charges_id"),
+                    "qty": to_float(charge.get("qty"), "qty"),
+                    "rate": to_float(charge.get("rate"), "rate"),
+                    "net_amount": to_float(charge.get("net_amount"), "net_amount"),
+                    "remarks": charge.get("remarks"),
+                    "updated_by": updated_by,
+                    "updated_date_time": updated_at,
+                })
+                charge_id = charge_result.lastrowid
+                gst_data = charge.get("gst")
+                if gst_data and isinstance(gst_data, dict) and charge_id:
+                    db.execute(add_gst_query, {
+                        "sales_order_additional_id": charge_id,
+                        "igst_amount": to_float(gst_data.get("igst_amount"), "igst_amount"),
+                        "igst_percent": to_float(gst_data.get("igst_percent"), "igst_percent"),
+                        "cgst_amount": to_float(gst_data.get("cgst_amount"), "cgst_amount"),
+                        "cgst_percent": to_float(gst_data.get("cgst_percent"), "cgst_percent"),
+                        "sgst_amount": to_float(gst_data.get("sgst_amount"), "sgst_amount"),
+                        "sgst_percent": to_float(gst_data.get("sgst_percent"), "sgst_percent"),
+                        "gst_total": to_float(gst_data.get("gst_total"), "gst_total"),
+                    })
 
         db.commit()
         return {"message": "Sales order updated successfully", "sales_order_id": sales_order_id}

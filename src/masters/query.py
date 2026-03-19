@@ -496,8 +496,9 @@ def get_subdept_master(co_id: int = None, branch_ids: list = None):
 
 def get_branch_list(co_id: int = None, branch_ids: list = None):
     sql = """
-    SELECT bm.branch_id, bm.branch_name
+    SELECT bm.branch_id, bm.branch_name, bm.state_id, sm.state_code
     FROM branch_mst bm
+    LEFT JOIN state_mst sm ON sm.state_id = bm.state_id
     WHERE 1=1
     """
     filters = []

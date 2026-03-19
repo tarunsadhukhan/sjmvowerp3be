@@ -491,6 +491,7 @@ class StateMst(Base):
 
     state_id = Column(Integer, primary_key=True, autoincrement=True)
     state = Column(String(255), nullable=False, unique=True)
+    state_code = Column(String(3), nullable=True)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False, index=True)
 
 

@@ -551,7 +551,6 @@ async def jute_gate_entry_create(
             # Supplier/Party
             jute_supplier_id=payload.jute_supplier_id,
             party_id=str(payload.party_id) if payload.party_id else None,
-            src_com_id=payload.co_id,
             # Challan details
             challan_no=payload.challan_no,
             challan_date=payload.challan_date,
