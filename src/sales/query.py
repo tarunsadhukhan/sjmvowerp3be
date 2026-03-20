@@ -867,7 +867,11 @@ def get_approved_sales_orders_query():
         bm.co_id,
         cm.co_prefix,
         so.net_amount,
-        so.invoice_type
+        so.invoice_type,
+        so.broker_id,
+        so.billing_to_id,
+        so.shipping_to_id,
+        so.transporter_id
     FROM sales_order AS so
     LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
