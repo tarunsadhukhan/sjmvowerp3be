@@ -35,6 +35,7 @@ from src.sales.query import (
     get_transporters_for_sales,
     get_approved_delivery_orders_query,
     get_delivery_order_lines_for_invoice,
+    get_sales_order_lines_for_invoice,
     get_invoice_table_query,
     get_invoice_table_count_query,
     get_invoice_by_id_query,
@@ -63,6 +64,14 @@ from src.sales.query import (
     insert_sales_invoice_govtskg,
     delete_sales_invoice_govtskg,
     get_sales_invoice_govtskg_by_id,
+    # Govt SKG detail
+    insert_sale_invoice_govtskg_dtl,
+    delete_sale_invoice_govtskg_dtl,
+    get_sale_invoice_govtskg_dtl_by_invoice_id,
+    # Hessian detail
+    insert_sales_invoice_hessian_dtl,
+    delete_sales_invoice_hessian_dtl,
+    get_sales_invoice_hessian_dtl_by_invoice_id,
     # Sales orders for invoice
     get_approved_sales_orders_for_invoice,
 )
@@ -163,11 +172,16 @@ async def get_sales_invoice_setup_1(
                 "sales_delivery_order_id": mapped.get("sales_delivery_order_id"),
                 "delivery_order_no": formatted_no,
                 "delivery_order_date": format_date(mapped.get("delivery_order_date")),
+                "party_id": mapped.get("party_id"),
                 "party_name": mapped.get("party_name"),
                 "net_amount": mapped.get("net_amount"),
                 "sales_order_id": mapped.get("sales_order_id"),
                 "sales_order_date": format_date(mapped.get("sales_order_date")),
                 "sales_order_no": mapped.get("sales_order_no"),
+                "invoice_type": mapped.get("invoice_type"),
+                "billing_to_id": mapped.get("billing_to_id"),
+                "shipping_to_id": mapped.get("shipping_to_id"),
+                "transporter_id": mapped.get("transporter_id"),
             })
 
         # Item groups (for manual entry without delivery order)
@@ -219,6 +233,11 @@ async def get_sales_invoice_setup_1(
                 "party_id": mapped.get("party_id"),
                 "party_name": mapped.get("party_name"),
                 "payment_terms": mapped.get("payment_terms"),
+                "invoice_type": mapped.get("invoice_type"),
+                "broker_id": mapped.get("broker_id"),
+                "billing_to_id": mapped.get("billing_to_id"),
+                "shipping_to_id": mapped.get("shipping_to_id"),
+                "transporter_id": mapped.get("transporter_id"),
             })
 
         # Additional charges master
@@ -296,6 +315,29 @@ async def get_delivery_order_lines(
         sales_delivery_order_id = int(q_id)
         query = get_delivery_order_lines_for_invoice()
         result = db.execute(query, {"sales_delivery_order_id": sales_delivery_order_id}).fetchall()
+        data = [dict(r._mapping) for r in result]
+        return {"data": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_sales_order_lines")
+async def get_sales_order_lines(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Get sales order line items to pre-fill a new invoice."""
+    try:
+        q_id = request.query_params.get("sales_order_id")
+        if q_id is None:
+            raise HTTPException(status_code=400, detail="sales_order_id is required")
+
+        sales_order_id = int(q_id)
+        query = get_sales_order_lines_for_invoice()
+        result = db.execute(query, {"sales_order_id": sales_order_id}).fetchall()
         data = [dict(r._mapping) for r in result]
         return {"data": data}
     except HTTPException:
@@ -568,6 +610,30 @@ async def get_sales_invoice_by_id(
         except Exception:
             pass
 
+        # Fetch hessian detail data and build lookup map
+        hessian_dtl_map = {}
+        try:
+            hessian_dtl_results = db.execute(
+                get_sales_invoice_hessian_dtl_by_invoice_id(), {"invoice_id": invoice_id}
+            ).fetchall()
+            for hd in hessian_dtl_results:
+                hdd = dict(hd._mapping)
+                hessian_dtl_map[hdd["invoice_line_item_id"]] = hdd
+        except Exception:
+            pass
+
+        # Fetch govt sacking detail data and build lookup map
+        govtskg_dtl_map = {}
+        try:
+            govtskg_dtl_results = db.execute(
+                get_sale_invoice_govtskg_dtl_by_invoice_id(), {"invoice_id": invoice_id}
+            ).fetchall()
+            for gd in govtskg_dtl_results:
+                gdd = dict(gd._mapping)
+                govtskg_dtl_map[gdd["invoice_line_item_id"]] = gdd
+        except Exception:
+            pass
+
         # Load additional charges
         try:
             from src.sales.query import get_sales_invoice_additional_by_id
@@ -580,6 +646,8 @@ async def get_sales_invoice_by_id(
             lineitem_id = detail.get("invoice_line_item_id")
             gst_data = gst_map.get(lineitem_id)
             jute_dtl_data = jute_dtl_map.get(lineitem_id)
+            hessian_dtl_data = hessian_dtl_map.get(lineitem_id)
+            govtskg_dtl_data = govtskg_dtl_map.get(lineitem_id)
 
             line = {
                 "id": str(lineitem_id) if lineitem_id else "",
@@ -600,6 +668,7 @@ async def get_sales_invoice_by_id(
                 "salesWeight": detail.get("sales_weight"),
                 "remarks": detail.get("remarks"),
                 "deliveryOrderDtlId": detail.get("delivery_order_dtl_id"),
+                "salesOrderDtlId": detail.get("sales_order_dtl_id"),
             }
 
             # GST from separate table
@@ -628,6 +697,27 @@ async def get_sales_invoice_by_id(
                 }
             else:
                 line["juteDtl"] = None
+
+            # Hessian detail from separate table
+            if hessian_dtl_data:
+                line["hessianDtl"] = {
+                    "qtyBales": hessian_dtl_data.get("qty_bales"),
+                    "ratePerBale": hessian_dtl_data.get("rate_per_bale"),
+                    "billingRateMt": hessian_dtl_data.get("billing_rate_mt"),
+                    "billingRateBale": hessian_dtl_data.get("billing_rate_bale"),
+                }
+            else:
+                line["hessianDtl"] = None
+
+            # Govt sacking detail from separate table
+            if govtskg_dtl_data:
+                line["govtskgDtl"] = {
+                    "packSheet": govtskg_dtl_data.get("pack_sheet"),
+                    "netWeight": govtskg_dtl_data.get("net_weight"),
+                    "totalWeight": govtskg_dtl_data.get("total_weight"),
+                }
+            else:
+                line["govtskgDtl"] = None
 
             response["lines"].append(line)
 
@@ -764,6 +854,7 @@ async def create_sales_invoice(
                 "jute_dtl": item.get("jute_dtl") or None,
                 "remarks": item.get("remarks"),
                 "delivery_order_dtl_id": to_int(item.get("delivery_order_dtl_id"), f"items[{idx}].delivery_order_dtl_id"),
+                "sales_order_dtl_id": to_int(item.get("sales_order_dtl_id"), f"items[{idx}].sales_order_dtl_id"),
             })
 
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
@@ -840,10 +931,12 @@ async def create_sales_invoice(
         if not invoice_id:
             raise HTTPException(status_code=500, detail="Failed to create sales invoice header")
 
-        # Insert line items + GST + jute detail
+        # Insert line items + GST + type-specific detail
         line_query = insert_invoice_line_item()
         gst_query = insert_sales_invoice_dtl_gst()
         jute_dtl_query = insert_sales_invoice_jute_dtl()
+        hessian_dtl_query = insert_sales_invoice_hessian_dtl()
+        govtskg_dtl_query = insert_sale_invoice_govtskg_dtl()
         for item in normalized_items:
             dtl_result = db.execute(line_query, {
                 "invoice_id": invoice_id,
@@ -861,6 +954,7 @@ async def create_sales_invoice(
                 "sales_weight": item["sales_weight"],
                 "remarks": item["remarks"],
                 "delivery_order_dtl_id": item["delivery_order_dtl_id"],
+                "sales_order_dtl_id": item["sales_order_dtl_id"],
             })
             lineitem_id = dtl_result.lastrowid
 
@@ -889,6 +983,29 @@ async def create_sales_invoice(
                     "claim_rate": to_float(jute_dtl_data.get("claim_rate"), "claim_rate"),
                     "unit_conversion": jute_dtl_data.get("unit_conversion"),
                     "qty_untit_conversion": to_int(jute_dtl_data.get("qty_untit_conversion"), "qty_untit_conversion"),
+                })
+
+            # Insert hessian detail into separate table
+            hessian_dtl_data = item.get("hessian_dtl")
+            if hessian_dtl_data and isinstance(hessian_dtl_data, dict) and lineitem_id:
+                db.execute(hessian_dtl_query, {
+                    "invoice_line_item_id": lineitem_id,
+                    "qty_bales": to_float(hessian_dtl_data.get("qty_bales"), "qty_bales"),
+                    "rate_per_bale": to_float(hessian_dtl_data.get("rate_per_bale"), "rate_per_bale"),
+                    "billing_rate_mt": to_float(hessian_dtl_data.get("billing_rate_mt"), "billing_rate_mt"),
+                    "billing_rate_bale": to_float(hessian_dtl_data.get("billing_rate_bale"), "billing_rate_bale"),
+                    "updated_by": user_id,
+                })
+
+            # Insert govt sacking detail into separate table
+            govtskg_dtl_data = item.get("govtskg_dtl")
+            if govtskg_dtl_data and isinstance(govtskg_dtl_data, dict) and lineitem_id:
+                db.execute(govtskg_dtl_query, {
+                    "invoice_line_item_id": lineitem_id,
+                    "pack_sheet": to_float(govtskg_dtl_data.get("pack_sheet"), "pack_sheet"),
+                    "net_weight": to_float(govtskg_dtl_data.get("net_weight"), "net_weight"),
+                    "total_weight": to_float(govtskg_dtl_data.get("total_weight"), "total_weight"),
+                    "updated_by": user_id,
                 })
 
         # Insert jute header data if provided
@@ -1091,11 +1208,13 @@ async def update_sales_invoice_endpoint(
             "updated_by": user_id,
         })
 
-        # Delete old GST, jute detail, jute header, and govtskg header before re-inserting
+        # Delete old GST, jute detail, jute header, govtskg, and hessian detail before re-inserting
         db.execute(delete_sales_invoice_dtl_gst(), {"invoice_id": invoice_id})
         db.execute(delete_sales_invoice_jute_dtl(), {"invoice_id": invoice_id})
         db.execute(delete_sales_invoice_jute(), {"invoice_id": invoice_id})
         db.execute(delete_sales_invoice_govtskg(), {"invoice_id": invoice_id})
+        db.execute(delete_sale_invoice_govtskg_dtl(), {"invoice_id": invoice_id})
+        db.execute(delete_sales_invoice_hessian_dtl(), {"invoice_id": invoice_id})
 
         # Delete old additional charges
         from src.sales.query import delete_sales_invoice_additional_gst, delete_sales_invoice_additional
@@ -1106,10 +1225,12 @@ async def update_sales_invoice_endpoint(
         delete_q = delete_invoice_line_items()
         db.execute(delete_q, {"invoice_id": invoice_id})
 
-        # Re-insert line items + GST + jute detail
+        # Re-insert line items + GST + type-specific detail
         line_query = insert_invoice_line_item()
         gst_query = insert_sales_invoice_dtl_gst()
         jute_dtl_query = insert_sales_invoice_jute_dtl()
+        hessian_dtl_query = insert_sales_invoice_hessian_dtl()
+        govtskg_dtl_query = insert_sale_invoice_govtskg_dtl()
         normalized_items = []
         for idx, item in enumerate(raw_items, start=1):
             item_val = item.get("item")
@@ -1152,6 +1273,7 @@ async def update_sales_invoice_endpoint(
                 "sales_weight": to_float(item.get("sales_weight"), f"items[{idx}].sales_weight"),
                 "remarks": item.get("remarks"),
                 "delivery_order_dtl_id": to_int(item.get("delivery_order_dtl_id"), f"items[{idx}].delivery_order_dtl_id"),
+                "sales_order_dtl_id": to_int(item.get("sales_order_dtl_id"), f"items[{idx}].sales_order_dtl_id"),
             })
             lineitem_id = dtl_result.lastrowid
 
@@ -1180,6 +1302,29 @@ async def update_sales_invoice_endpoint(
                     "claim_rate": to_float(jute_dtl_data.get("claim_rate"), "claim_rate"),
                     "unit_conversion": jute_dtl_data.get("unit_conversion"),
                     "qty_untit_conversion": to_int(jute_dtl_data.get("qty_untit_conversion"), "qty_untit_conversion"),
+                })
+
+            # Insert hessian detail into separate table
+            hessian_dtl_data = item.get("hessian_dtl") or None
+            if hessian_dtl_data and isinstance(hessian_dtl_data, dict) and lineitem_id:
+                db.execute(hessian_dtl_query, {
+                    "invoice_line_item_id": lineitem_id,
+                    "qty_bales": to_float(hessian_dtl_data.get("qty_bales"), "qty_bales"),
+                    "rate_per_bale": to_float(hessian_dtl_data.get("rate_per_bale"), "rate_per_bale"),
+                    "billing_rate_mt": to_float(hessian_dtl_data.get("billing_rate_mt"), "billing_rate_mt"),
+                    "billing_rate_bale": to_float(hessian_dtl_data.get("billing_rate_bale"), "billing_rate_bale"),
+                    "updated_by": user_id,
+                })
+
+            # Insert govt sacking detail into separate table
+            govtskg_dtl_data = item.get("govtskg_dtl") or None
+            if govtskg_dtl_data and isinstance(govtskg_dtl_data, dict) and lineitem_id:
+                db.execute(govtskg_dtl_query, {
+                    "invoice_line_item_id": lineitem_id,
+                    "pack_sheet": to_float(govtskg_dtl_data.get("pack_sheet"), "pack_sheet"),
+                    "net_weight": to_float(govtskg_dtl_data.get("net_weight"), "net_weight"),
+                    "total_weight": to_float(govtskg_dtl_data.get("total_weight"), "total_weight"),
+                    "updated_by": user_id,
                 })
 
             normalized_items.append(item)
