@@ -145,9 +145,14 @@ async def get_delivery_order_setup_1(
                 "sales_order_id": mapped.get("sales_order_id"),
                 "sales_no": formatted_no,
                 "sales_order_date": format_date(mapped.get("sales_order_date")),
+                "party_id": mapped.get("party_id"),
                 "party_name": mapped.get("party_name"),
                 "net_amount": mapped.get("net_amount"),
                 "invoice_type": mapped.get("invoice_type"),
+                "broker_id": mapped.get("broker_id"),
+                "billing_to_id": mapped.get("billing_to_id"),
+                "shipping_to_id": mapped.get("shipping_to_id"),
+                "transporter_id": mapped.get("transporter_id"),
             })
 
         # Item groups (for manual entry without sales order)

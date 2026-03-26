@@ -153,6 +153,7 @@ class InvoiceLineItem(Base):
     sales_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0)
     remarks: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     delivery_order_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sales_order_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     invoice: Mapped[Optional["InvoiceHdr"]] = relationship(

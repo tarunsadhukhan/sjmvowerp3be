@@ -22,7 +22,7 @@ def optional_auth(request: Request, response: Response, access_token: str = Cook
     BYPASS = os.getenv("BYPASS_AUTH", "0")
     ENV = os.getenv("ENV", "development")
     if BYPASS == "1" or ENV == "development":
-        return {"user_id": None}
+        return {"user_id": 1}
     # Delegate to the real auth function which will raise HTTPException if token invalid
     return get_current_user_with_refresh(request, response, access_token)
 
