@@ -568,7 +568,7 @@ async def jute_po_create(
             po_no=next_po_no,
             po_date=payload.po_date,
             jute_mukam_id=payload.mukam_id,
-            jute_uom=None,  # Deprecated: unit now stored per line item
+            jute_uom=header_jute_unit,
             supplier_id=payload.supplier_id,
             party_id=payload.party_id,
             vehicle_type_id=payload.vehicle_type_id,
@@ -687,6 +687,8 @@ async def jute_po_update(
             jute_po.po_date = payload.po_date
         if payload.mukam_id is not None:
             jute_po.jute_mukam_id = payload.mukam_id
+        if payload.jute_unit is not None:
+            jute_po.jute_uom = payload.jute_unit
         if payload.supplier_id is not None:
             jute_po.supplier_id = payload.supplier_id
         if payload.party_id is not None:
@@ -719,8 +721,8 @@ async def jute_po_update(
             vehicle_capacity_qtl = vehicle_result.weight if vehicle_result else 0
             
             # Use header-level jute_unit for all line items
-            # Prefer payload value, fall back to existing PO value
-            header_jute_unit = payload.jute_unit or "BALE"
+            # Prefer payload value, fall back to existing PO value, then default
+            header_jute_unit = payload.jute_unit or jute_po.jute_uom or "BALE"
 
             # Calculate total weight and value FIRST for validation
             total_weight_kg = 0.0
