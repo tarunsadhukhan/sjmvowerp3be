@@ -445,7 +445,7 @@ class JutePOCreate(BaseModel):
     branch_id: int
     po_date: date
     mukam_id: int
-    jute_unit: Optional[str] = None  # DEPRECATED: use per-line-item jute_unit
+    jute_unit: str = "BALE"  # Header-level unit used for all line item weight calculations
     supplier_id: int
     party_id: Optional[int] = None
     vehicle_type_id: int
@@ -505,9 +505,12 @@ async def jute_po_create(
         total_value = 0.0
         line_items_data = []
         
+        # Use header-level jute_unit for all line items
+        header_jute_unit = payload.jute_unit or "BALE"
+
         for li in payload.line_items:
-            # Calculate weight based on line item's unit type (fixed weights)
-            weight_kg = calculate_line_item_weight(li.quantity, li.jute_unit)
+            # Calculate weight based on header's unit type (fixed weights)
+            weight_kg = calculate_line_item_weight(li.quantity, header_jute_unit)
 
             # Rate is per quintal (100 kg), so convert weight to quintals
             weight_in_quintals = weight_kg / 100
@@ -595,7 +598,7 @@ async def jute_po_create(
                 quantity=li.quantity,
                 rate=li.rate,
                 allowable_moisture=li.allowable_moisture,
-                jute_uom=li.jute_unit,
+                jute_uom=header_jute_unit,
                 value=item_data["amount"],
                 status_id=21,  # Draft status (same as header)
             )
@@ -715,37 +718,41 @@ async def jute_po_update(
             ).fetchone()
             vehicle_capacity_qtl = vehicle_result.weight if vehicle_result else 0
             
+            # Use header-level jute_unit for all line items
+            # Prefer payload value, fall back to existing PO value
+            header_jute_unit = payload.jute_unit or "BALE"
+
             # Calculate total weight and value FIRST for validation
             total_weight_kg = 0.0
             total_value = 0.0
             line_items_data = []
 
             for li in payload.line_items:
-                # Calculate weight based on line item's unit type (fixed weights)
-                weight_kg = calculate_line_item_weight(li.quantity, li.jute_unit)
-                
+                # Calculate weight based on header's unit type (fixed weights)
+                weight_kg = calculate_line_item_weight(li.quantity, header_jute_unit)
+
                 # Rate is per quintal (100 kg), so convert weight to quintals
                 weight_in_quintals = weight_kg / 100
                 amount = weight_in_quintals * li.rate
                 total_weight_kg += weight_kg
                 total_value += amount
-                
+
                 line_items_data.append({
                     "li": li,
                     "weight_kg": weight_kg,
                     "amount": amount,
                 })
-            
+
             # Validate vehicle weight tolerance (±5%)
             is_valid, error_message = validate_vehicle_weight(
                 total_weight_kg, vehicle_capacity_qtl, jute_po.vehicle_quantity or 0
             )
             if not is_valid:
                 raise HTTPException(status_code=400, detail=error_message)
-            
+
             # Delete existing line items (triggers will log the deletions)
             db.query(JutePoLi).filter(JutePoLi.jute_po_id == jute_po_id).delete()
-            
+
             # Create new line items
             for item_data in line_items_data:
                 li = item_data["li"]
@@ -757,7 +764,7 @@ async def jute_po_update(
                     quantity=li.quantity,
                     rate=li.rate,
                     allowable_moisture=li.allowable_moisture,
-                    jute_uom=li.jute_unit,
+                    jute_uom=header_jute_unit,
                     value=item_data["amount"],
                     status_id=jute_po.status_id,  # Same status as header
                 )
