@@ -588,7 +588,11 @@ async def create_sales_order(
     """Create a sales order with detail rows and GST."""
     try:
         branch_id = to_int(payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party"), "party", required=True)
+        party_id = to_int(payload.get("party"), "party")
+        broker_id = to_int(payload.get("broker"), "broker")
+
+        if not party_id and not broker_id:
+            raise HTTPException(status_code=400, detail="Either party (customer) or broker is required")
 
         date_str = payload.get("date")
         if not date_str:
@@ -606,7 +610,6 @@ async def create_sales_order(
         created_at = now_ist()
 
         quotation_id = to_int(payload.get("quotation"), "quotation")
-        broker_id = to_int(payload.get("broker"), "broker")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
@@ -878,7 +881,11 @@ async def update_sales_order_endpoint(
     try:
         sales_order_id = to_int(payload.get("id"), "id", required=True)
         branch_id = to_int(payload.get("branch"), "branch", required=True)
-        party_id = to_int(payload.get("party"), "party", required=True)
+        party_id = to_int(payload.get("party"), "party")
+        broker_id = to_int(payload.get("broker"), "broker")
+
+        if not party_id and not broker_id:
+            raise HTTPException(status_code=400, detail="Either party (customer) or broker is required")
 
         date_str = payload.get("date")
         if not date_str:
@@ -903,7 +910,6 @@ async def update_sales_order_endpoint(
         updated_at = now_ist()
 
         quotation_id = to_int(payload.get("quotation"), "quotation")
-        broker_id = to_int(payload.get("broker"), "broker")
         billing_to_id = to_int(payload.get("billing_to"), "billing_to")
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")

@@ -867,7 +867,11 @@ def get_approved_sales_orders_query():
         bm.co_id,
         cm.co_prefix,
         so.net_amount,
-        so.invoice_type
+        so.invoice_type,
+        so.broker_id,
+        so.billing_to_id,
+        so.shipping_to_id,
+        so.transporter_id
     FROM sales_order AS so
     LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -1243,7 +1247,12 @@ def get_approved_delivery_orders_query():
         sdo.net_amount,
         sdo.sales_order_id,
         so.sales_order_date,
-        so.sales_no AS sales_order_no
+        so.sales_no AS sales_order_no,
+        sdo.party_id,
+        sdo.invoice_type,
+        sdo.billing_to_id,
+        sdo.shipping_to_id,
+        sdo.transporter_id
     FROM sales_delivery_order AS sdo
     LEFT JOIN branch_mst AS bm ON bm.branch_id = sdo.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -1292,6 +1301,41 @@ def get_delivery_order_lines_for_invoice():
     return text(sql)
 
 
+def get_sales_order_lines_for_invoice():
+    """Get sales order line items to pre-fill invoice lines."""
+    sql = """SELECT
+        sod.sales_order_dtl_id,
+        sod.hsn_code,
+        sod.item_id,
+        im.item_code,
+        im.item_name,
+        im.item_grp_id,
+        igm.item_grp_code AS item_grp_code,
+        igm.item_grp_name AS item_grp_name,
+        sod.item_make_id,
+        imk.item_make_name,
+        sod.quantity,
+        sod.uom_id,
+        um.uom_name,
+        sod.rate,
+        sod.discount_type,
+        sod.discounted_rate,
+        sod.discount_amount,
+        sod.net_amount,
+        sod.total_amount,
+        sod.remarks,
+        COALESCE(im.tax_percentage, 0) AS tax_percentage
+    FROM sales_order_dtl AS sod
+    LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = sod.uom_id
+    WHERE sod.sales_order_id = :sales_order_id
+        AND sod.active = 1
+    ORDER BY sod.sales_order_dtl_id;"""
+    return text(sql)
+
+
 def get_approved_sales_orders_for_invoice():
     """Get approved sales orders (status_id=3) for dropdown when creating invoice."""
     sql = """SELECT
@@ -1305,7 +1349,12 @@ def get_approved_sales_orders_for_invoice():
         bm.branch_prefix,
         bm.co_id,
         cm.co_prefix,
-        so.payment_terms
+        so.payment_terms,
+        so.invoice_type,
+        so.broker_id,
+        so.billing_to_id,
+        so.shipping_to_id,
+        so.transporter_id
     FROM sales_order AS so
     LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -1470,7 +1519,8 @@ def get_invoice_dtl_by_id_query():
         ili.total_amount,
         ili.sales_weight,
         ili.remarks,
-        ili.delivery_order_dtl_id
+        ili.delivery_order_dtl_id,
+        ili.sales_order_dtl_id
     FROM sales_invoice_dtl AS ili
     LEFT JOIN item_mst AS im ON im.item_id = ili.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = ili.uom_id
@@ -1533,14 +1583,14 @@ def insert_invoice_line_item():
         quantity, uom_id, rate,
         discount_type, discounted_rate, discount_amount,
         amount_without_tax, total_amount,
-        sales_weight, remarks, delivery_order_dtl_id
+        sales_weight, remarks, delivery_order_dtl_id, sales_order_dtl_id
     ) VALUES (
         :invoice_id,
         :hsn_code, :item_id, :item_make_id,
         :quantity, :uom_id, :rate,
         :discount_type, :discounted_rate, :discount_amount,
         :amount_without_tax, :total_amount,
-        :sales_weight, :remarks, :delivery_order_dtl_id
+        :sales_weight, :remarks, :delivery_order_dtl_id, :sales_order_dtl_id
     );"""
     return text(sql)
 
