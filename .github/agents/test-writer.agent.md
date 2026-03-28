@@ -272,3 +272,57 @@ Study these for patterns:
 | `test_portal_admin_user.py` | Portal user management |
 | `test_jute_mr_bp_formatters.py` | Utility/formatter functions |
 | `test_masters_category.py` | Simple master endpoints |
+
+---
+
+## 9. Self-Improvement Protocol
+
+After generating tests, run this reflection loop before reporting done:
+
+### 9.1 Validate Generated Tests
+
+- **Run `pytest src/test/{your_test_file}.py -v`** — do they pass? If not, diagnose and fix.
+- **Run `pytest src/test/{your_test_file}.py --co`** — do all tests collect without import errors?
+- **Check mock paths** — does `@patch("src.{module}.{feature}.get_tenant_db")` match the actual import in the source file? If the source uses `from src.config.db import get_tenant_db`, the patch target is `src.{module}.{feature}.get_tenant_db` (where it's looked up), NOT `src.config.db.get_tenant_db`.
+- **Verify endpoint paths** — does the URL in `client.get("/api/...")` match the actual prefix registered in `src/main.py`?
+
+### 9.2 Gap Analysis Checklist
+
+After generating tests, ask yourself:
+
+- [ ] Did I read the **actual endpoint code** to find all code paths, or did I only test the obvious ones?
+- [ ] Are there **conditional branches** in the endpoint I didn't cover? (e.g., `if search:`, `if branch_id:`, `if status_id == 20:`)
+- [ ] Does the endpoint do **multiple DB queries** (e.g., fetching master data + transaction data)? Did I mock all of them?
+- [ ] Does the endpoint use **`db.execute()` multiple times** with different queries? Did I set up sequential return values with `side_effect`?
+- [ ] Did I test **POST/PUT body validation** — not just query params? Pydantic models reject bad payloads with 422, not 400.
+- [ ] Are there **authorization checks beyond auth** — e.g., checking `user_role_map`, `co_id` membership, approval permissions?
+- [ ] Did I check if existing test files in `src/test/` already cover this endpoint or similar ones I could reuse patterns from?
+- [ ] Did I test the **actual response shape** (field names, nesting) — not just that `"data"` key exists?
+
+### 9.3 Detect Stale Patterns
+
+If you notice any of these, **flag them in your output**:
+
+- Existing tests in `src/test/` that use patterns different from what's documented here (e.g., different mock setup, fixture usage, async tests)
+- Test files that import from paths that have been reorganized
+- New testing utilities or conftest.py fixtures that could simplify the tests
+- Endpoints that use dependency injection patterns not covered by the mocking templates above (e.g., `Depends(get_db)` returning a dict instead of a session)
+
+### 9.4 Output Improvement Suggestions
+
+End every task with a `### Improvements Noticed` section that lists:
+
+1. **Untested code paths** — branches in the source code that would need additional tests beyond what was requested
+2. **Mock pattern gaps** — mocking scenarios encountered that aren't covered in these instructions (e.g., file upload mocking, background task mocking)
+3. **Test infrastructure** — missing conftest.py, shared fixtures, or test utilities that would reduce duplication
+4. **Stale references** — test files or patterns referenced here that no longer exist or have changed
+
+Example:
+```
+### Improvements Noticed
+- The endpoint uses `request.state.user` set by middleware — not covered by the mock patterns here
+- Found a conftest.py in src/test/ with shared mock_db fixture — should be documented
+- 3 untested paths: admin override branch, pagination logic, and the bulk-delete code path
+```
+
+If nothing is found, output: `### Improvements Noticed: None — instructions match codebase.`

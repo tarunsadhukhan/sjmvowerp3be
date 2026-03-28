@@ -214,3 +214,56 @@ Study these before generating code for their modules:
 | Jute Procurement | `mr.py`, `jutePO.py`, `issue.py`, `billPass.py`, etc. | `query.py`, `reportQueries.py` |
 
 Always read the existing files in a module before adding to it.
+
+---
+
+## 6. Self-Improvement Protocol
+
+After completing any task, run this reflection loop before reporting done:
+
+### 6.1 Validate Against Actual Codebase
+
+- **Read the real files you just modified** — do they compile? Do imports resolve?
+- **Check `src/main.py`** — is the router actually registered? Is the prefix consistent with the persona?
+- **Grep for similar endpoints** — did you duplicate functionality that already exists?
+- **Run `pytest src/test/ -v --co`** — do the generated tests actually collect?
+
+### 6.2 Gap Analysis Checklist
+
+After generating code, ask yourself:
+
+- [ ] Did I check whether the query.py function I need **already exists** in the module's query file?
+- [ ] Did I verify the **table and column names** against `src/models/` (not just the instructions)?
+- [ ] Are there **edge cases** the user didn't mention but the existing codebase handles? (e.g., pagination, soft-delete filtering, branch_id scoping, multi-company access)
+- [ ] Did I check if this module uses `get_db` (multi-DB dict) instead of `get_tenant_db` (single session)? Some modules (jute, inventory reports) need multiple DB connections.
+- [ ] Did I look at how **similar endpoints in the same module** handle optional parameters, sorting, and search — and match that pattern?
+- [ ] Are there **approval workflow endpoints** (open/cancel/send-for-approval/approve/reject/reopen) that should accompany this feature but weren't requested?
+- [ ] Did I check whether the response shape matches what the **frontend expects**? (Look for any API contracts in `contracts/` or existing similar endpoints)
+
+### 6.3 Detect Stale Instructions
+
+If you notice any of these, **flag them in your output**:
+
+- A pattern in these instructions that doesn't match the actual codebase (e.g., import paths changed, new dependencies added, different auth patterns used in recent code)
+- New modules or files in `src/` that aren't listed in the reference table above
+- Endpoints in the codebase using patterns not covered here (e.g., WebSocket, background tasks, file uploads)
+- Changes to `src/config/db.py` that add new DB access functions not documented here
+
+### 6.4 Output Improvement Suggestions
+
+End every task with a `### Improvements Noticed` section (even if empty) that lists:
+
+1. **Instruction gaps** — things these agent instructions should cover but don't
+2. **New patterns** — patterns found in the codebase that differ from what's documented
+3. **Missed edge cases** — scenarios discovered during generation that should be standard
+4. **Stale references** — files, imports, or conventions referenced here that no longer exist
+
+Example:
+```
+### Improvements Noticed
+- The procurement module now uses a `ProcurementService` class in `service.py` — not documented in agent instructions
+- `get_tenant_db` now accepts an optional `db_name` override parameter
+- The `src/models/hrms.py` file exists but isn't listed in the reference table
+```
+
+If nothing is found, output: `### Improvements Noticed: None — instructions match codebase.`

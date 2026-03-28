@@ -237,3 +237,62 @@ CREATE TABLE {module}_{entity}_dtl (
 - **No audit columns** — `created_by`, `created_date` etc. are handled by DB triggers, don't add them unless explicitly asked
 - **Index foreign keys** — add `INDEX` on FK columns for query performance
 - **Test with the dbmanager agent** — after generating, the dbmanager agent can execute and verify
+
+---
+
+## 9. Self-Improvement Protocol
+
+After generating any migration, run this reflection loop before reporting done:
+
+### 9.1 Validate Your Own Output
+
+- **Compare migration DDL against ORM model** — every column in the SQL must have a corresponding `mapped_column` and vice versa. Check types, nullability, defaults, and FKs match exactly.
+- **Check for missing indexes** — did you add `INDEX` on every FK column and every column used in `WHERE` clauses by existing queries?
+- **Verify rollback SQL works** — mentally execute the rollback: would it cleanly reverse the change? Watch for `DROP COLUMN` on columns that other tables reference via FK.
+- **Check naming against actual tables** — run a grep for the table name in `src/models/` and `src/` to confirm it doesn't already exist or conflict.
+- **Verify the target database** — is this a `vowconsole3` change or a tenant DB change? Did you specify correctly in the migration header?
+
+### 9.2 Gap Analysis Checklist
+
+After generating the migration and model, ask yourself:
+
+- [ ] Did I check if the **table or column already exists** in the ORM models? (Avoid duplicate definitions)
+- [ ] If adding a new table, does it need a **corresponding `_dtl` table** for line items?
+- [ ] If adding a transactional table, does it need **`status_id DEFAULT 21`** for draft workflow?
+- [ ] Does the new table need a **`_dtl_cancel` table** for line-level cancellation tracking?
+- [ ] Does it need a **parallel GST table** (`{entity}_gst`) for tax breakup?
+- [ ] If adding FK references, do the **referenced tables actually exist** in the target database?
+- [ ] Did I check if existing **views** (`vw_*`) need to be updated to include the new columns/tables?
+- [ ] Are there **existing queries in `query.py` files** that need to be updated to include the new columns?
+- [ ] If this is a tenant table, did I include `co_id` with a **foreign key to `company_mst`**?
+- [ ] Did I check for **data type consistency** — is the same concept (e.g., `qty`) using `DOUBLE` everywhere, not `DECIMAL` in some places?
+
+### 9.3 Detect Schema Drift
+
+Look for these signs that the documented schema doesn't match reality:
+
+- ORM models with columns that don't appear in any migration file (added directly to DB)
+- `query.py` files referencing columns not present in the ORM model
+- Tables referenced in code that have no ORM model definition
+- Inconsistencies between `src/models/` and `dbqueries/` SQL files (the models are authoritative, but drift indicates undocumented changes)
+- New data types or patterns in recent models that differ from the conventions listed here
+
+### 9.4 Output Improvement Suggestions
+
+End every task with a `### Migration Improvements` section that lists:
+
+1. **Schema inconsistencies found** — ORM vs actual usage discrepancies discovered during the task
+2. **Missing companion artifacts** — views, indexes, triggers, or related tables that should exist but don't
+3. **Convention violations in existing code** — existing tables that don't follow the naming/type conventions (don't fix them, just document for awareness)
+4. **Instruction gaps** — migration patterns encountered that aren't covered in these instructions (e.g., partitioned tables, virtual columns, fulltext indexes)
+
+Example:
+```
+### Migration Improvements
+- src/models/procurement.py has a `tax_type` column (String) but proc_po table uses INT in queries — type mismatch
+- The new jute_blend_mst table should probably have a companion jute_blend_dtl for blend compositions
+- Existing table `proc_inward` uses DECIMAL(10,2) for `freight_amount` — inconsistent with DOUBLE convention
+- No instructions for creating database views (vw_*) — needed for the stock summary feature
+```
+
+If nothing is found, output: `### Migration Improvements: None — schema is consistent.`

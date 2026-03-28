@@ -183,3 +183,59 @@ When asked to do a quick scan, check for these patterns:
 - **Reference the fix** — for each issue, briefly state what the correct pattern should be
 - **Ignore test files** — `src/test/` files are not production code
 - **Ignore known typos** — `mechine_spg_details`, `frieght_paid`, `brokrage_rate`, `fatory_address` are production table names, do not flag them
+
+---
+
+## 8. Self-Improvement Protocol
+
+After completing any audit, run this reflection loop before finalizing the report:
+
+### 8.1 Validate Your Own Findings
+
+- **Re-read each flagged issue** — is it a real violation or a false positive? Check the full function context, not just the line.
+- **Verify persona classification** — did you correctly identify which persona the route serves? Cross-check with `src/main.py` router registration, not just the file path.
+- **Check for decorator overrides** — some endpoints may override the default DB dependency via custom decorators or middleware. Don't flag these as violations without understanding why.
+- **Trace the full call chain** — if you flagged a query for missing `co_id`, check if the calling function adds it as a filter before passing to the query.
+
+### 8.2 Gap Analysis — What Did I Miss?
+
+After generating the report, ask yourself:
+
+- [ ] Did I audit **ALL router files**, or did I stop after finding issues in a few? List any files I skipped.
+- [ ] Did I check **middleware and dependencies** in `src/config/` that might enforce tenant isolation at a layer above the route handlers?
+- [ ] Did I check for **cross-database joins** — queries that join tables from different databases without proper scoping?
+- [ ] Did I look for **indirect DB access** — helper functions in `src/common/` that create their own sessions instead of using the passed-in `db`?
+- [ ] Did I check **background tasks or scheduled jobs** that might bypass request-scoped tenant resolution?
+- [ ] Are there **new persona types or route prefixes** that have been added to `main.py` since these instructions were written?
+- [ ] Did I check **file upload/download endpoints** — do they scope stored files by tenant/co_id?
+- [ ] Did I look for **caching** (in-memory dicts, Redis, etc.) that might serve data across tenants?
+
+### 8.3 Detect Evolving Threats
+
+Look for these emerging patterns that might indicate new categories of risk:
+
+- New modules in `src/` that haven't been audited before
+- Endpoints that accept `db_name` or `subdomain` as a parameter (tenant spoofing risk)
+- Uses of `request.headers` to derive database names outside of `extract_subdomain_from_request`
+- Raw `create_engine()` calls outside of `src/config/db.py`
+- Any route that serves data from multiple tenants in a single response (aggregation endpoints)
+
+### 8.4 Output Improvement Suggestions
+
+End every audit with a `### Audit Improvements` section that lists:
+
+1. **New violation categories** — types of multi-tenant issues found that aren't in the checklist above
+2. **False positive patterns** — things that look like violations but are actually safe (document why so future audits don't re-flag them)
+3. **Blind spots** — areas of the codebase that are hard to audit with the current approach
+4. **Instruction updates needed** — changes to the persona/DB mapping rules based on what you found in `main.py` and `db.py`
+
+Example:
+```
+### Audit Improvements
+- New category needed: "Shared cache without tenant key" — found in-memory dict in permission_cache.py scoped by user_id but not by tenant
+- False positive: companyAdmin routes using Session(default_engine) for con_org_master lookups is correct (vowconsole3 data)
+- Blind spot: src/common/approval_utils.py creates ad-hoc sessions — needs special audit rules
+- main.py now has /api/hrms prefix routes — not listed in the persona mapping table
+```
+
+If nothing is found, output: `### Audit Improvements: None — checklist is comprehensive for current codebase.`

@@ -198,3 +198,59 @@ except Exception as e:
 - **Acknowledge good code** — mention things done correctly in the "Looks Good" section
 - **Consider backwards compatibility** — flag if a change could break existing API consumers
 - **Review tests too** — test code should follow mock patterns, not connect to real DBs
+
+---
+
+## 6. Self-Improvement Protocol
+
+After completing any review, run this reflection loop before finalizing:
+
+### 6.1 Validate Your Own Review
+
+- **Re-read each finding** — is it actually wrong, or is it an acceptable variant of the pattern? Check the broader file context.
+- **Check for false positives** — did you flag a Control Desk route for missing `get_tenant_db` when it correctly uses `Session(default_engine)`? Did you flag a raw list return that's inside a helper function (not an endpoint)?
+- **Verify line numbers** — if you cited specific lines, re-read those lines to confirm the issue is there.
+- **Check both sides** — if you flagged a missing parameter validation, check whether a Pydantic schema already validates it on the request body.
+
+### 6.2 Gap Analysis — What Did I Miss?
+
+After generating the review, ask yourself:
+
+- [ ] Did I review **ALL changed files**, or just the main router? Check query.py, models, schemas, tests, and main.py changes too.
+- [ ] Did I check for **breaking API changes** — renamed endpoints, changed response shapes, removed fields that the frontend might depend on?
+- [ ] Did I look for **performance issues** — N+1 queries, missing pagination on list endpoints, unbounded `fetchall()` without `LIMIT`?
+- [ ] Did I check if **new dependencies were added** to imports that might not exist (typos in import paths, missing `__init__.py`)?
+- [ ] Did I verify that **test mocks match the actual implementation** — e.g., if the endpoint now does two DB queries but the test only mocks one?
+- [ ] Did I check for **dead code** — functions, imports, or variables added but never used?
+- [ ] Did I look for **concurrency issues** — shared mutable state, missing transaction commits/rollbacks?
+- [ ] Did I check if the **approval workflow status transitions** are correct if status_id is being modified?
+
+### 6.3 Evolving Standards Detection
+
+Watch for these signs that the codebase conventions are evolving:
+
+- New patterns appearing in recent commits that differ from the documented standards
+- Multiple recent files using a new library or utility not mentioned in the review checklist
+- Changes to `src/config/db.py` or `src/authorization/utils.py` that alter how dependencies work
+- New Pydantic v2 patterns replacing older Pydantic v1 syntax
+- Introduction of async database sessions or other async patterns
+
+### 6.4 Output Improvement Suggestions
+
+End every review with a `### Review Process Improvements` section that lists:
+
+1. **New checklist items needed** — types of issues found that aren't on the current checklist
+2. **False positive patterns** — things that look wrong but are actually correct (document why to avoid re-flagging)
+3. **Missing context** — information that would have made the review faster or more accurate
+4. **Stale checklist items** — items on the checklist that no longer apply to the current codebase
+
+Example:
+```
+### Review Process Improvements
+- New checklist item needed: "Check that date fields use consistent format parsing" — found 3 endpoints parsing dates differently
+- False positive: Some Portal routes legitimately use Session(default_engine) for cross-tenant lookups (e.g., fetching portal_menu_mst from vowconsole3)
+- Missing context: Would help to know the frontend's expected response shape for this module
+- The ORM style check for legacy Column() may be stale — some utility models still use it and it's accepted
+```
+
+If nothing is found, output: `### Review Process Improvements: None — checklist is current.`
