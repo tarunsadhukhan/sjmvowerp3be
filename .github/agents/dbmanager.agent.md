@@ -931,3 +931,61 @@ When the user asks you to write a query:
 | `jute_issue` / `jute_issue_primary` | Jute issue to production |
 | `jute_batch_plan` / `jute_batch_plan_li` | Batch planning |
 | `vw_jute_stock_outstanding` | View: available MR stock |
+
+---
+
+## 20. Self-Improvement Protocol
+
+After completing any task, run this reflection loop before reporting done:
+
+### 20.1 Validate Your Own Work
+
+- **For DDL changes:** Re-read the generated SQL. Does every column type match the ORM model? Are FKs referencing tables that actually exist? Are indexes on all FK columns?
+- **For queries:** Execute a dry-run mentally — does the SQL parse? Are all `:param` names matched in the execution dict? Would `None` values cause unexpected results?
+- **For ORM models:** Does the `__tablename__` match the actual table name (including known typos)? Are all `Mapped` types correct? Is `server_default` set on `active` columns?
+- **Cross-check:** If you modified both DDL and ORM, compare them column-by-column for consistency.
+
+### 20.2 Gap Analysis Checklist
+
+After completing work, ask yourself:
+
+- [ ] Did I check whether the table/column I'm creating **already exists** in the ORM models or migration files?
+- [ ] If I created a new table, are there **existing queries** in `src/*/query.py` that should be updated to JOIN or reference it?
+- [ ] If I altered a table, are there **existing ORM models** that need the new column added?
+- [ ] Are there **views** (`vw_*`) that depend on the modified table and might need recreation?
+- [ ] Did I check for **database triggers** on the table I'm modifying (`SHOW TRIGGERS LIKE '{table}'`)?
+- [ ] If this is a tenant table, did I consider whether the change needs to be applied to **all tenant databases** (not just `dev3`)?
+- [ ] Did I check the **table inventory in Section 19** — does the new table need to be added there?
+- [ ] Are there **related tables** that typically come in sets (header + detail + cancel + GST) that I might have missed?
+
+### 20.3 Detect Schema Drift
+
+Look for these signs of drift between documentation, ORM models, and actual usage:
+
+- Columns referenced in `query.py` files that don't appear in the ORM model
+- ORM models with columns that don't appear in any query or migration
+- Tables listed in Section 19 that have no ORM model in `src/models/`
+- New tables discovered in code that aren't listed in Section 19
+- Data type inconsistencies (e.g., `DOUBLE` in DDL but `Integer` in ORM model for the same column)
+- FK references to tables that don't exist in the ORM models
+
+### 20.4 Output Improvement Suggestions
+
+End every task with a `### DB Improvements Noticed` section that lists:
+
+1. **Schema drift** — mismatches between ORM models, queries, and DDL that were discovered
+2. **Missing table inventory entries** — tables found in code but not listed in Section 19
+3. **Convention violations in existing schema** — existing tables that don't follow the naming/type conventions (don't fix, just document)
+4. **Instruction gaps** — database patterns or features encountered that aren't covered in these instructions (e.g., JSON columns, generated columns, partitioning)
+5. **Cross-database concerns** — cases where a change in one database (vowconsole3) might require a corresponding change in tenant databases or vice versa
+
+Example:
+```
+### DB Improvements Noticed
+- Schema drift: src/models/jute.py defines `jute_mr.gst_amount` as Double but query.py references `jute_mr.gst_total` — column name mismatch
+- Missing from inventory: `hrms_employee_mst`, `hrms_pay_scheme`, `hrms_pay_param` not in Section 19 table list
+- Convention violation: `sales_invoice.invoice_date` uses DATETIME instead of DATE — inconsistent with other date columns
+- Instruction gap: No guidance on handling JSON columns (found `co_config.settings` as JSON type in tenant DB)
+```
+
+If nothing is found, output: `### DB Improvements Noticed: None — schema is consistent.`
