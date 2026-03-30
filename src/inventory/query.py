@@ -97,15 +97,18 @@ def get_issue_by_id_query():
 
 
 def get_issue_details_query():
-    """Get issue line items by issue ID."""
+    """Get issue line items by issue ID.
+    Uses vw_item_with_group_path for hierarchical item group path display."""
     sql = """SELECT
         il.issue_li_id,
         il.issue_id,
         il.item_id,
-        im.item_name,
-        im.item_code,
-        igm.item_grp_id,
-        igm.item_grp_name,
+        vip.item_name,
+        vip.item_code,
+        vip.item_grp_id,
+        vip.item_group_name_display AS item_grp_name,
+        vip.item_group_code_display AS item_grp_code,
+        vip.full_item_code,
         il.uom_id,
         um.uom_name,
         il.req_quantity,
@@ -117,16 +120,17 @@ def get_issue_details_query():
         il.machine_id,
         mm.machine_name,
         il.inward_dtl_id,
-        il.remarks,pi.inward_sequence_no as sr_no,pid.accepted_rate as rate
+        il.remarks,
+        pi.inward_sequence_no AS sr_no,
+        pid.accepted_rate AS rate
     FROM issue_li AS il
-    LEFT JOIN item_mst AS im ON im.item_id = il.item_id
-    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = il.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = il.uom_id
     LEFT JOIN expense_type_mst AS etm ON etm.expense_type_id = il.expense_type_id
     LEFT JOIN cost_factor_mst AS cfm ON cfm.cost_factor_id = il.cost_factor_id
     LEFT JOIN machine_mst AS mm ON mm.machine_id = il.machine_id
-    left join proc_inward_dtl AS pid ON pid.inward_dtl_id = il.inward_dtl_id
-    left join proc_inward AS pi ON pi.inward_id = pid.inward_id
+    LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = il.inward_dtl_id
+    LEFT JOIN proc_inward AS pi ON pi.inward_id = pid.inward_id
     WHERE il.issue_id = :issue_id
     ORDER BY il.issue_li_id;"""
     return text(sql)
@@ -253,7 +257,8 @@ def get_available_inward_inventory_query():
     Returns items with available qty (approved_qty - already issued qty).
     Used for selecting SR line items when creating an issue.
     Uses the vw_approved_inward_qty view for approved inwards.
-    
+    Uses vw_item_with_group_path for hierarchical item group path display.
+
     The inward_no is formatted as co_prefix/branch_prefix/GRN/financial_year/sequence_no
     """
     sql = """SELECT
@@ -274,11 +279,12 @@ def get_available_inward_inventory_query():
         v.branch_id,
         bm.branch_name,
         v.item_id,
-        im.item_name,
-        im.item_code,
-        igm.item_grp_id,
-        igm.item_grp_name,
-        igm.item_grp_code,
+        vip.item_name,
+        vip.item_code,
+        vip.item_grp_id,
+        vip.item_group_name_display AS item_grp_name,
+        vip.item_group_code_display AS item_grp_code,
+        vip.full_item_code,
         pid.item_make_id,
         imk.item_make_name,
         v.uom_id,
@@ -294,15 +300,14 @@ def get_available_inward_inventory_query():
     INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
     LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
-    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
-    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = v.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = v.uom_id
     LEFT JOIN warehouse_mst AS wm ON wm.warehouse_id = pid.warehouse_id
     WHERE v.branch_id = :branch_id
         AND v.balance_qty > 0
         AND (:item_id IS NULL OR v.item_id = :item_id)
-        AND (:item_grp_id IS NULL OR im.item_grp_id = :item_grp_id)
+        AND (:item_grp_id IS NULL OR vip.item_grp_id = :item_grp_id)
     ORDER BY v.inward_date ASC, v.inward_dtl_id ASC;"""
     return text(sql)
 
@@ -310,7 +315,8 @@ def get_available_inward_inventory_query():
 def get_searchable_inventory_list_query():
     """
     Get paginated searchable inventory list from approved inwards.
-    Supports search by item group code/name, item code/name, and inward number.
+    Supports search by item group code/name, item code/name, full_item_code, and inward number.
+    Uses vw_item_with_group_path for hierarchical item group path display and search.
     Used for the inventory search table in create issue page.
     """
     sql = """SELECT
@@ -331,11 +337,12 @@ def get_searchable_inventory_list_query():
         v.branch_id,
         bm.branch_name,
         v.item_id,
-        im.item_name,
-        im.item_code,
-        igm.item_grp_id,
-        igm.item_grp_name,
-        igm.item_grp_code,
+        vip.item_name,
+        vip.item_code,
+        vip.item_grp_id,
+        vip.item_group_name_display AS item_grp_name,
+        vip.item_group_code_display AS item_grp_code,
+        vip.full_item_code,
         pid.item_make_id,
         imk.item_make_name,
         v.uom_id,
@@ -351,8 +358,7 @@ def get_searchable_inventory_list_query():
     INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
     LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
-    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
-    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = v.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = v.uom_id
     LEFT JOIN warehouse_mst AS wm ON wm.warehouse_id = pid.warehouse_id
@@ -360,10 +366,11 @@ def get_searchable_inventory_list_query():
         AND v.balance_qty > 0
         AND (
             :search_like IS NULL
-            OR im.item_code LIKE :search_like
-            OR im.item_name LIKE :search_like
-            OR igm.item_grp_code LIKE :search_like
-            OR igm.item_grp_name LIKE :search_like
+            OR vip.item_code LIKE :search_like
+            OR vip.item_name LIKE :search_like
+            OR vip.item_group_code_display LIKE :search_like
+            OR vip.item_group_name_display LIKE :search_like
+            OR vip.full_item_code LIKE :search_like
             OR pi.inward_sequence_no LIKE :search_like
             OR CONCAT_WS('/',
                 NULLIF(cm.co_prefix, ''),
@@ -384,6 +391,7 @@ def get_searchable_inventory_list_query():
 def get_searchable_inventory_count_query():
     """
     Get total count for searchable inventory list.
+    Uses vw_item_with_group_path for hierarchical search.
     """
     sql = """SELECT COUNT(1) AS total
     FROM vw_approved_inward_qty AS v
@@ -391,16 +399,16 @@ def get_searchable_inventory_count_query():
     INNER JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = v.inward_dtl_id
     LEFT JOIN branch_mst AS bm ON bm.branch_id = v.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
-    LEFT JOIN item_mst AS im ON im.item_id = v.item_id
-    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = v.item_id
     WHERE v.branch_id = :branch_id
         AND v.balance_qty > 0
         AND (
             :search_like IS NULL
-            OR im.item_code LIKE :search_like
-            OR im.item_name LIKE :search_like
-            OR igm.item_grp_code LIKE :search_like
-            OR igm.item_grp_name LIKE :search_like
+            OR vip.item_code LIKE :search_like
+            OR vip.item_name LIKE :search_like
+            OR vip.item_group_code_display LIKE :search_like
+            OR vip.item_group_name_display LIKE :search_like
+            OR vip.full_item_code LIKE :search_like
             OR pi.inward_sequence_no LIKE :search_like
             OR CONCAT_WS('/',
                 NULLIF(cm.co_prefix, ''),
