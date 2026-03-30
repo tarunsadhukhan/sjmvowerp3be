@@ -664,7 +664,25 @@ Each transaction type must implement these endpoints:
 1. Write DDL in `dbqueries/migrations/` with descriptive name
 2. Include rollback SQL as comment
 3. Update ORM model in `src/models/`
-4. Execute against target database
+4. Execute against target database using **pymysql** (see below)
+
+**Running migrations:** There is no `mysql` CLI on this machine. Always use pymysql via the project venv to execute migration scripts:
+```bash
+cd c:/code/vowerp3be && source .venv/Scripts/activate && python -c "
+import pymysql
+conn = pymysql.connect(host='<HOST>', port=3306, user='<USER>', password='<PASS>', database='<TARGET_DB>')
+cursor = conn.cursor()
+with open('dbqueries/migrations/<migration_file>.sql', 'r') as f:
+    for stmt in f.read().split(';'):
+        stmt = stmt.strip()
+        if stmt and not stmt.startswith('--'):
+            cursor.execute(stmt)
+conn.commit()
+conn.close()
+print('Migration applied successfully')
+"
+```
+Read credentials from `env/database.env`. Ask the user which tenant database to target.
 
 **Audit logging:** Handled via database triggers, NOT inline columns. Do not add `created_by`, `created_date` columns unless explicitly asked.
 

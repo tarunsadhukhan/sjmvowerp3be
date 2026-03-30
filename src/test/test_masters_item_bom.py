@@ -146,9 +146,10 @@ class TestItemBomEndpoints:
         assert body["data"][0]["parent_item_code"] == "ASM-010"
 
     def test_bom_add_component_success(self):
-        """Should add a new BOM component."""
-        # No existing row found
+        """Should add a new BOM component and ensure BOM header exists."""
+        # No existing BomHdr or ItemBom row found
         self._mock_session.query.return_value.filter.return_value.first.return_value = None
+        self._mock_session.query.return_value.filter_by.return_value.first.return_value = None
         # Circular ref check: no children for child item
         self._mock_session.execute.return_value.fetchall.return_value = []
 
@@ -162,7 +163,8 @@ class TestItemBomEndpoints:
 
         assert response.status_code == 201
         assert "bom_id" in response.json()
-        self._mock_session.add.assert_called_once()
+        # add called twice: once for BomHdr, once for ItemBom
+        assert self._mock_session.add.call_count == 2
         self._mock_session.commit.assert_called()
 
     def test_bom_add_component_self_reference(self):

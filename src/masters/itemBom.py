@@ -2,7 +2,7 @@ from fastapi import Depends, Request, HTTPException, APIRouter, Response
 from sqlalchemy.orm import Session
 from src.config.db import get_tenant_db
 from src.authorization.utils import get_current_user_with_refresh
-from src.masters.models import ItemBom
+from src.masters.models import ItemBom, BomHdr
 from src.masters.query import (
     get_bom_items_with_children,
     get_bom_children_query,
@@ -15,6 +15,33 @@ from src.common.utils import now_ist
 router = APIRouter()
 
 MAX_BOM_DEPTH = 15
+
+
+def ensure_bom_hdr_exists(db: Session, item_id: int, co_id: int, user_id: int) -> BomHdr:
+    """Ensure an item_bom_hdr_mst record exists for this item.
+    Creates version 1 with is_current=1 if none exists."""
+    existing = db.query(BomHdr).filter(
+        BomHdr.item_id == item_id,
+        BomHdr.co_id == co_id,
+        BomHdr.active == 1,
+    ).first()
+    if existing:
+        return existing
+
+    new_hdr = BomHdr(
+        item_id=item_id,
+        bom_version=1,
+        version_label=None,
+        status_id=21,
+        is_current=1,
+        co_id=co_id,
+        active=1,
+        updated_by=user_id,
+        updated_date_time=now_ist(),
+    )
+    db.add(new_hdr)
+    db.flush()
+    return new_hdr
 
 
 def has_circular_reference(db: Session, parent_id: int, child_id: int, co_id: int, visited: set = None) -> bool:
@@ -227,6 +254,10 @@ async def bom_add_component(
         # Circular reference check
         if has_circular_reference(db, parent_item_id, child_item_id, co_id):
             raise HTTPException(status_code=400, detail="Adding this component would create a circular reference")
+
+        # Ensure a BOM header record exists for this parent item
+        user_id = token_data.get("user_id", 0)
+        ensure_bom_hdr_exists(db, parent_item_id, co_id, int(user_id))
 
         # Check for existing row (including soft-deleted) and reactivate if found
         existing = db.query(ItemBom).filter(

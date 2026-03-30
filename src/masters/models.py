@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, ForeignKey, DateTime, func, Date
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, ForeignKey, DateTime, func, Date, JSON, Text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy import Float
@@ -321,4 +321,99 @@ class CostFactorMst(Base):
     updated_date_time = Column(DateTime, nullable=False, default=func.now())
     branch_id = Column(Integer, nullable=False)
     dept_id = Column(Integer, nullable=True)
+
+
+class BomHdr(Base):
+    __tablename__ = "item_bom_hdr_mst"
+
+    bom_hdr_id = Column(Integer, primary_key=True, autoincrement=True)
+    item_id = Column(Integer, ForeignKey("item_mst.item_id"), nullable=False)
+    bom_version = Column(Integer, nullable=False, default=1)
+    version_label = Column(String(50), nullable=True)
+    status_id = Column(Integer, nullable=False, default=21)
+    effective_from = Column(Date, nullable=True)
+    effective_to = Column(Date, nullable=True)
+    is_current = Column(Integer, nullable=False, default=0)
+    remarks = Column(Text, nullable=True)
+    co_id = Column(Integer, nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+
+
+class CostElementMst(Base):
+    __tablename__ = "cost_element_mst"
+
+    cost_element_id = Column(Integer, primary_key=True, autoincrement=True)
+    element_code = Column(String(30), nullable=False)
+    element_name = Column(String(100), nullable=False)
+    parent_element_id = Column(Integer, ForeignKey("cost_element_mst.cost_element_id"), nullable=True)
+    element_level = Column(Integer, nullable=False, default=0)
+    element_type = Column(String(30), nullable=False)
+    default_basis = Column(String(30), nullable=True)
+    is_leaf = Column(Integer, nullable=False, default=0)
+    sort_order = Column(Integer, nullable=False, default=0)
+    element_desc = Column(Text, nullable=True)
+    co_id = Column(Integer, nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+
+
+class BomCostEntry(Base):
+    __tablename__ = "bom_cost_entry"
+
+    bom_cost_entry_id = Column(Integer, primary_key=True, autoincrement=True)
+    bom_hdr_id = Column(Integer, ForeignKey("item_bom_hdr_mst.bom_hdr_id"), nullable=False)
+    cost_element_id = Column(Integer, ForeignKey("cost_element_mst.cost_element_id"), nullable=False)
+    amount = Column(Float, nullable=False, default=0)
+    source = Column(String(30), nullable=False, default='manual')
+    qty = Column(Float, nullable=True)
+    rate = Column(Float, nullable=True)
+    basis_override = Column(String(30), nullable=True)
+    effective_date = Column(Date, nullable=False)
+    entered_by = Column(Integer, nullable=True)
+    remarks = Column(Text, nullable=True)
+    co_id = Column(Integer, nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+
+
+class StdRateCard(Base):
+    __tablename__ = "std_rate_card"
+
+    std_rate_card_id = Column(Integer, primary_key=True, autoincrement=True)
+    rate_type = Column(String(30), nullable=False)
+    reference_id = Column(Integer, nullable=True)
+    reference_type = Column(String(30), nullable=True)
+    rate = Column(Float, nullable=False, default=0)
+    uom = Column(String(30), nullable=True)
+    valid_from = Column(Date, nullable=False)
+    valid_to = Column(Date, nullable=True)
+    co_id = Column(Integer, nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
+
+
+class BomCostSnapshot(Base):
+    __tablename__ = "bom_cost_snapshot"
+
+    bom_cost_snapshot_id = Column(Integer, primary_key=True, autoincrement=True)
+    bom_hdr_id = Column(Integer, ForeignKey("item_bom_hdr_mst.bom_hdr_id"), nullable=False)
+    material_cost = Column(Float, nullable=False, default=0)
+    conversion_cost = Column(Float, nullable=False, default=0)
+    overhead_cost = Column(Float, nullable=False, default=0)
+    total_cost = Column(Float, nullable=False, default=0)
+    cost_per_unit = Column(Float, nullable=False, default=0)
+    detail_snapshot = Column(JSON, nullable=True)
+    computed_at = Column(DateTime, nullable=False, default=func.now())
+    computed_by = Column(Integer, nullable=True)
+    is_current = Column(Integer, nullable=False, default=0)
+    status = Column(String(30), nullable=False, default='draft')
+    co_id = Column(Integer, nullable=False)
+    active = Column(Integer, nullable=False, default=1)
+    updated_by = Column(Integer, nullable=False)
+    updated_date_time = Column(DateTime, nullable=False, default=func.now())
 

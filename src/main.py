@@ -48,6 +48,9 @@ from src.masters.designation import router as designation_router
 from src.masters.category import router as category_router
 from src.masters.contractor import router as contractor_router
 from src.masters.itemBom import router as item_bom_router
+from src.bomcosting.costElement import router as cost_element_router
+from src.bomcosting.bomCosting import router as bom_costing_router
+from src.bomcosting.stdRateCard import router as std_rate_card_router
 from src.juteProcurement.jutePO import router as jute_po_router
 from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
@@ -129,6 +132,11 @@ app.include_router(designation_router, prefix="/api/designationMaster", tags=["m
 app.include_router(category_router, prefix="/api/categoryMaster", tags=["masters-category"])
 app.include_router(contractor_router, prefix="/api/contractorMaster", tags=["masters-contractor"])
 app.include_router(item_bom_router, prefix="/api/itemBomMaster", tags=["masters-item-bom"])
+
+# BOM Costing routers
+app.include_router(cost_element_router, prefix="/api/bomCostElement", tags=["bom-cost-element"])
+app.include_router(bom_costing_router, prefix="/api/bomCosting", tags=["bom-costing"])
+app.include_router(std_rate_card_router, prefix="/api/stdRateCard", tags=["std-rate-card"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
