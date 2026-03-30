@@ -1005,19 +1005,31 @@ def check_yarn_quality_code_exists(branch_id: int, quality_code: str, exclude_id
 # =============================================================================
 
 def get_bom_items_with_children(co_id: int = None):
-    """List all items that have at least one active BOM child (for index page)."""
+    """List all items that have at least one active BOM child (for index page).
+    Also includes latest BOM costing version info if available."""
     sql = """
     SELECT
       im.item_id,
       im.item_code,
       im.item_name,
       ig.item_grp_name AS item_group_name,
-      COUNT(ib.bom_id) AS component_count
+      COUNT(ib.bom_id) AS component_count,
+      bh.bom_hdr_id,
+      bh.bom_version,
+      bh.version_label,
+      sm.status_name AS costing_status,
+      COALESCE(snap.total_cost, 0) AS total_cost
     FROM item_mst im
     INNER JOIN item_bom ib ON ib.parent_item_id = im.item_id AND ib.co_id = :co_id AND ib.active = 1
     LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN item_bom_hdr_mst bh
+        ON bh.item_id = im.item_id AND bh.co_id = :co_id AND bh.active = 1 AND bh.is_current = 1
+    LEFT JOIN status_mst sm ON sm.status_id = bh.status_id
+    LEFT JOIN bom_cost_snapshot snap
+        ON snap.bom_hdr_id = bh.bom_hdr_id AND snap.co_id = :co_id AND snap.is_current = 1 AND snap.active = 1
     WHERE (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
-    GROUP BY im.item_id, im.item_code, im.item_name, ig.item_grp_name
+    GROUP BY im.item_id, im.item_code, im.item_name, ig.item_grp_name,
+             bh.bom_hdr_id, bh.bom_version, bh.version_label, sm.status_name, snap.total_cost
     ORDER BY im.item_code;
     """
     return text(sql)
