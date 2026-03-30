@@ -400,6 +400,7 @@ def get_inward_detail_by_id_query():
         im.item_grp_id,
         ig.item_grp_code,
         ig.item_grp_name,
+        vip.full_item_code,
         pid.item_make_id,
         imk.item_make_name,
         pid.hsn_code,
@@ -417,6 +418,7 @@ def get_inward_detail_by_id_query():
     LEFT JOIN proc_po AS pp ON pp.po_id = ppd.po_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pp.branch_id
@@ -705,6 +707,7 @@ def get_indent_line_items_for_po(indent_id: int):
         im.item_grp_id,
         igm.item_grp_code,
         igm.item_grp_name,
+        vip.full_item_code,
         pid.qty,
         COALESCE(oi.bal_ind_qty, 0) AS outstanding_qty,
         pid.uom_id,
@@ -720,6 +723,7 @@ def get_indent_line_items_for_po(indent_id: int):
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN dept_mst AS dm ON dm.dept_id = pid.dept_id
@@ -1105,6 +1109,7 @@ def get_po_dtl_by_id_query():
         im.item_grp_id,
         igm.item_grp_code,
         igm.item_grp_name,
+        vip.full_item_code,
         pod.hsn_code,
         pod.item_make_id,
         imk.item_make_name,
@@ -1124,6 +1129,7 @@ def get_po_dtl_by_id_query():
     FROM proc_po_dtl AS pod
     LEFT JOIN item_mst AS im ON im.item_id = pod.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pod.uom_id
     LEFT JOIN proc_indent_dtl AS pid ON pid.indent_dtl_id = pod.indent_dtl_id
@@ -1367,6 +1373,7 @@ def get_po_line_items_for_inward_query():
         im.item_grp_id AS item_grp_id,
         ig.item_grp_code,
         ig.item_grp_name,
+        vip.full_item_code,
         pod.item_make_id,
         imk.item_make_name,
         pod.qty AS ordered_qty,
@@ -1385,6 +1392,7 @@ def get_po_line_items_for_inward_query():
     INNER JOIN proc_po pp ON pp.po_id = pod.po_id
     INNER JOIN item_mst im ON im.item_id = pod.item_id
     LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_make imk ON imk.item_make_id = pod.item_make_id
     LEFT JOIN uom_mst um ON um.uom_id = pod.uom_id
     LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id
@@ -1894,6 +1902,7 @@ def get_inward_dtl_for_sr_query():
         im.item_grp_id,
         ig.item_grp_code,
         ig.item_grp_name,
+        vip.full_item_code,
         pid.item_make_id,
         imk.item_make_name,
         pid.accepted_item_make_id,
@@ -1922,6 +1931,7 @@ def get_inward_dtl_for_sr_query():
     LEFT JOIN co_mst AS cm_po ON cm_po.co_id = bm_po.co_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
@@ -2409,6 +2419,7 @@ def get_bill_pass_sr_lines_query():
         pid.hsn_code,
         im.item_name,
         im.item_code,
+        vip.full_item_code,
         igm.item_grp_name,
         pid.accepted_item_make_id,
         imk.item_make_name AS accepted_make_name,
@@ -2441,6 +2452,7 @@ def get_bill_pass_sr_lines_query():
     LEFT JOIN proc_gst pg ON pg.proc_inward_dtl = pid.inward_dtl_id AND pg.active = 1
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst igm ON igm.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_make imk ON imk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst um ON um.uom_id = pid.uom_id
     LEFT JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid.po_dtl_id
@@ -2500,6 +2512,7 @@ def get_bill_pass_drcr_note_lines_query():
         -- Get item details from inward_dtl
         im.item_name,
         im.item_code,
+        vip.full_item_code,
         ppd.po_id,
         pp.po_no,
         pp.po_date,
@@ -2508,6 +2521,7 @@ def get_bill_pass_drcr_note_lines_query():
     FROM drcr_note_dtl dnd
     LEFT JOIN proc_inward_dtl pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst im ON im.item_id = pid.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN proc_po_dtl ppd ON ppd.po_dtl_id = pid.po_dtl_id
     LEFT JOIN proc_po pp ON pp.po_id = ppd.po_id
     LEFT JOIN branch_mst bm ON bm.branch_id = pp.branch_id

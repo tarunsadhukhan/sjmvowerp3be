@@ -186,13 +186,14 @@ def get_item_table(co_id: int = None):
     ON child.parent_grp_id = parent.item_grp_id
    AND child.co_id = parent.co_id
 )
-SELECT  
-  im.item_id, 
+SELECT
+  im.item_id,
   im.item_grp_id,
   ih.item_group_display,
   ih.item_group_code_display,
-  im.item_code, 
-  im.item_name, 
+  im.item_code,
+  CONCAT(ih.item_group_code_display, '-', im.item_code) AS full_item_code,
+  im.item_name,
   im.active
 FROM item_mst im 
 INNER JOIN item_hierarchy ih 
@@ -201,6 +202,7 @@ INNER JOIN item_hierarchy ih
   ih.item_group_code_display LIKE :search OR
   ih.item_group_display LIKE :search
   OR im.item_code LIKE :search OR
+  CONCAT(ih.item_group_code_display, '-', im.item_code) LIKE :search OR
   im.item_name LIKE :search);
 """
     query = text(sql)
