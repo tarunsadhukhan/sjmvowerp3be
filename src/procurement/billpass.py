@@ -262,7 +262,7 @@ async def get_bill_pass_by_id(
                 "inward_dtl_id": line.get("inward_dtl_id"),
                 "item_id": line.get("item_id"),
                 "item_name": line.get("item_name") or "",
-                "item_code": line.get("item_code") or "",
+                "item_code": line.get("full_item_code") or line.get("item_code") or "",
                 "item_group_name": line.get("item_grp_name") or "",
                 "accepted_make_name": line.get("accepted_make_name") or "",
                 "uom_name": line.get("uom_name") or "",
@@ -326,7 +326,7 @@ async def get_bill_pass_by_id(
                 "discount_amount": safe_float(line.get("discount_amount")),
                 "line_amount": safe_float(line.get("line_amount")),
                 "item_name": line.get("item_name") or "",
-                "item_code": line.get("item_code") or "",
+                "item_code": line.get("full_item_code") or line.get("item_code") or "",
                 "po_no": extract_formatted_po_no(line) if line.get("po_no") else "",
             })
 

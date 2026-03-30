@@ -1399,7 +1399,7 @@ async def get_po_by_id(
 				"department": str(detail.get("dept_id", "")) if detail.get("dept_id") else None,
 				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
 				"item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
-				"itemCode": detail.get("item_code") if detail.get("item_code") else "",
+				"itemCode": detail.get("full_item_code") or detail.get("item_code") or "",
 				"hsnCode": detail.get("hsn_code") if detail.get("hsn_code") else "",
 				"itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
 				"quantity": float(detail.get("qty", 0)) if detail.get("qty") is not None else 0,
