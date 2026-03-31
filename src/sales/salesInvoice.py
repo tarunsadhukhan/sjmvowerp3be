@@ -245,6 +245,32 @@ async def get_sales_invoice_setup_1(
         charges_result = db.execute(get_additional_charges_dropdown()).fetchall()
         additional_charges_master = [dict(r._mapping) for r in charges_result]
 
+        # Company details for invoice header
+        co_result = db.execute(
+            text("""
+                SELECT cm.co_name, cm.co_address1, cm.co_address2, cm.co_zipcode,
+                       cm.co_cin_no, cm.co_email_id, cm.co_pan_no,
+                       cm.state_id, sm.state AS state_name, sm.state_code
+                FROM co_mst cm
+                LEFT JOIN state_mst sm ON sm.state_id = cm.state_id
+                WHERE cm.co_id = :co_id
+            """),
+            {"co_id": co_id},
+        ).fetchone()
+        company = dict(co_result._mapping) if co_result else {}
+
+        # Bank details for dropdown
+        bank_result = db.execute(
+            text("""
+                SELECT b.bank_detail_id, b.bank_name, b.bank_branch, b.acc_no, b.ifsc_code
+                FROM bank_details_mst b
+                WHERE b.co_id = :co_id AND b.active = 1
+                ORDER BY b.bank_name
+            """),
+            {"co_id": co_id},
+        ).fetchall()
+        bank_details = [dict(r._mapping) for r in bank_result]
+
         return {
             "branches": branches,
             "customers": customers,
@@ -256,6 +282,8 @@ async def get_sales_invoice_setup_1(
             "mukam_list": mukam_list,
             "approved_sales_orders": approved_sales_orders,
             "additional_charges_master": additional_charges_master,
+            "company": company,
+            "bank_details": bank_details,
         }
     except HTTPException:
         raise
@@ -539,6 +567,25 @@ async def get_sales_invoice_by_id(
             "salesOrderDate": format_date(header.get("sales_order_date")),
             "salesOrderNo": header.get("sales_order_no"),
             "billingStateCode": header.get("billing_state_code"),
+            "bankDetailId": header.get("bank_detail_id"),
+            "bankName": header.get("bank_name"),
+            "bankAccNo": header.get("bank_acc_no"),
+            "bankIfscCode": header.get("bank_ifsc_code"),
+            "bankBranchName": header.get("bank_branch_name"),
+            "companyName": header.get("co_name"),
+            "companyAddress1": header.get("co_address1"),
+            "companyAddress2": header.get("co_address2"),
+            "companyZipcode": header.get("co_zipcode"),
+            "companyCinNo": header.get("co_cin_no"),
+            "companyPanNo": header.get("co_pan_no"),
+            "companyStateName": header.get("co_state_name"),
+            "companyStateCode": header.get("co_state_code"),
+            "branchAddress1": header.get("branch_address1"),
+            "branchAddress2": header.get("branch_address2"),
+            "branchZipcode": header.get("branch_zipcode"),
+            "branchGstNo": header.get("branch_gst_no"),
+            "branchStateName": header.get("branch_state_name"),
+            "branchStateCode": header.get("branch_state_code"),
             "status": header.get("status_name"),
             "statusId": status_id,
             "updatedBy": str(header.get("updated_by", "")) if header.get("updated_by") else None,
@@ -921,6 +968,7 @@ async def create_sales_invoice(
             "payment_terms": to_int(payload.get("payment_terms"), "payment_terms"),
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
+            "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
             "status_id": 21,
             "active": 1,
             "updated_by": user_id,
@@ -1205,6 +1253,7 @@ async def update_sales_invoice_endpoint(
             "payment_terms": to_int(payload.get("payment_terms"), "payment_terms"),
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
+            "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
             "updated_by": user_id,
         })
 

@@ -1481,11 +1481,32 @@ def get_invoice_by_id_query():
         si.payment_terms,
         si.sales_order_id,
         si.billing_state_code,
+        si.bank_detail_id,
+        bdm.bank_name,
+        bdm.acc_no AS bank_acc_no,
+        bdm.ifsc_code AS bank_ifsc_code,
+        bdm.bank_branch AS bank_branch_name,
+        cm.co_name,
+        cm.co_address1,
+        cm.co_address2,
+        cm.co_zipcode,
+        cm.co_cin_no,
+        cm.co_pan_no,
+        scm.state AS co_state_name,
+        scm.state_code AS co_state_code,
+        bm.branch_address1,
+        bm.branch_address2,
+        bm.branch_zipcode,
+        bm.gst_no AS branch_gst_no,
+        sbm.state AS branch_state_name,
+        sbm.state_code AS branch_state_code,
         so.sales_order_date,
         so.sales_no AS sales_order_no
     FROM sales_invoice AS si
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
+    LEFT JOIN state_mst AS scm ON scm.state_id = cm.state_id
+    LEFT JOIN state_mst AS sbm ON sbm.state_id = bm.state_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN party_mst AS trns ON trns.party_id = si.transporter_id
     LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
@@ -1494,6 +1515,7 @@ def get_invoice_by_id_query():
     LEFT JOIN party_branch_mst AS pship ON pship.party_mst_branch_id = si.shipping_to_id
     LEFT JOIN state_mst AS sship ON sship.state_id = pship.state_id
     LEFT JOIN sales_order AS so ON so.sales_order_id = si.sales_order_id
+    LEFT JOIN bank_details_mst AS bdm ON bdm.bank_detail_id = si.bank_detail_id
     WHERE si.invoice_id = :invoice_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)
@@ -1550,6 +1572,7 @@ def insert_sales_invoice():
         container_no, contract_no, contract_date,
         consignment_no, consignment_date,
         payment_terms, sales_order_id, billing_state_code,
+        bank_detail_id,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
@@ -1571,6 +1594,7 @@ def insert_sales_invoice():
         :container_no, :contract_no, :contract_date,
         :consignment_no, :consignment_date,
         :payment_terms, :sales_order_id, :billing_state_code,
+        :bank_detail_id,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1637,6 +1661,7 @@ def update_sales_invoice():
         payment_terms = :payment_terms,
         sales_order_id = :sales_order_id,
         billing_state_code = :billing_state_code,
+        bank_detail_id = :bank_detail_id,
         updated_by = :updated_by,
         updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""

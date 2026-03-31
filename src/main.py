@@ -47,6 +47,7 @@ from src.masters.batchPlanMaster import router as batch_plan_master_router
 from src.masters.designation import router as designation_router
 from src.masters.category import router as category_router
 from src.masters.contractor import router as contractor_router
+from src.masters.bankDetails import router as bank_details_router
 from src.masters.itemBom import router as item_bom_router
 from src.bomcosting.costElement import router as cost_element_router
 from src.bomcosting.bomCosting import router as bom_costing_router
@@ -131,6 +132,7 @@ app.include_router(batch_plan_master_router, prefix="/api/batchPlanMaster", tags
 app.include_router(designation_router, prefix="/api/designationMaster", tags=["masters-designation"])
 app.include_router(category_router, prefix="/api/categoryMaster", tags=["masters-category"])
 app.include_router(contractor_router, prefix="/api/contractorMaster", tags=["masters-contractor"])
+app.include_router(bank_details_router, prefix="/api/bankDetailsMaster", tags=["masters-bank-details"])
 app.include_router(item_bom_router, prefix="/api/itemBomMaster", tags=["masters-item-bom"])
 
 # BOM Costing routers

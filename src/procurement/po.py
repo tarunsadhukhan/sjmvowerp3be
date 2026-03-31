@@ -1344,6 +1344,7 @@ async def get_po_by_id(
 			"poNo": formatted_po_no,
 			"poDate": po_date_str,
 			"branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+				"branchName": header.get("branch_name") or "",
 			"supplier": str(header.get("supplier_id", "")) if header.get("supplier_id") else "",
 			"supplierBranch": str(header.get("supplier_branch_id", "")) if header.get("supplier_branch_id") else "",
 			"supplierState": header.get("supplier_state_name") if header.get("supplier_state_name") else None,

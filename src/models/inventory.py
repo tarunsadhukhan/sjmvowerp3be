@@ -43,6 +43,7 @@ class IssueHdr(Base):
     approved_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     approved_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    approval_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
     issued_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     req_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

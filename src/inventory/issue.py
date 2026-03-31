@@ -28,6 +28,11 @@ from src.inventory.query import (
 )
 from datetime import datetime, date
 from src.common.utils import now_ist
+from src.common.approval_utils import (
+    process_approval,
+    process_rejection,
+    calculate_approval_permissions,
+)
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
@@ -93,6 +98,7 @@ class IssueUpdate(BaseModel):
 class IssueStatusUpdate(BaseModel):
     """Request body for updating issue status."""
     status_id: int
+    remarks: Optional[str] = None
 
 
 @router.get("/get_issue_table")
@@ -228,23 +234,81 @@ async def get_issue_by_id(
             raise HTTPException(status_code=404, detail="Issue not found")
 
         header = dict(header_row._mapping)
-        
+
         # Format dates
         if header.get("issue_date"):
             header["issue_date"] = str(header["issue_date"])
         if header.get("updated_date_time"):
             header["updated_date_time"] = str(header["updated_date_time"])
 
+        # Get approval_level
+        approval_level = header.get("approval_level")
+        if approval_level is not None:
+            try:
+                approval_level = int(approval_level)
+            except (TypeError, ValueError):
+                approval_level = None
+
+        # Get status_id and branch_id for permission calculation
+        status_id = header.get("status_id")
+        branch_id = header.get("branch_id")
+
+        # Parse menu_id from query params
+        menu_id = request.query_params.get("menu_id")
+        if menu_id:
+            try:
+                menu_id = int(menu_id)
+            except (TypeError, ValueError):
+                menu_id = None
+
+        # Calculate permissions if menu_id is provided
+        permissions = None
+        if menu_id is not None and branch_id is not None and status_id is not None:
+            try:
+                user_id = int(token_data.get("user_id"))
+                permissions = calculate_approval_permissions(
+                    user_id=user_id,
+                    menu_id=menu_id,
+                    branch_id=branch_id,
+                    status_id=status_id,
+                    current_approval_level=approval_level,
+                    db=db,
+                )
+            except Exception as e:
+                logger.exception("Error calculating permissions, continuing without them")
+                permissions = None
+
+        # Get max approval level for the menu/branch
+        max_approval_level = None
+        if menu_id is not None and branch_id is not None:
+            try:
+                from src.common.approval_query import get_max_approval_level
+                max_level_query = get_max_approval_level()
+                max_level_result = db.execute(
+                    max_level_query,
+                    {"menu_id": menu_id, "branch_id": branch_id}
+                ).fetchone()
+                if max_level_result:
+                    max_approval_level = dict(max_level_result._mapping).get("max_level")
+            except Exception:
+                logger.exception("Error fetching max approval level")
+
         # Get line items
         details_query = get_issue_details_query()
         detail_rows = db.execute(details_query, {"issue_id": issue_id}).fetchall()
-        
+
         lines = []
         for row in detail_rows:
             line = dict(row._mapping)
             lines.append(line)
 
         header["lines"] = lines
+        header["approval_level"] = approval_level
+        header["max_approval_level"] = max_approval_level
+
+        # Add permissions if calculated
+        if permissions is not None:
+            header["permissions"] = permissions
 
         return header
 
@@ -750,31 +814,92 @@ async def update_issue_status_endpoint(
 ):
     """
     Update the status of an issue (for approval workflow).
+
+    For approve (status_id=3) and reject (status_id=4), uses the generic
+    process_approval / process_rejection utilities which handle approval
+    levels, permission checks, and auto-transitions.
+
+    For other status changes (open, cancel, reopen), uses direct update.
     """
     try:
         user_id = token_data.get("user_id") or token_data.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
 
+        # Parse menu_id from query params (needed for approval permission checks)
+        menu_id = request.query_params.get("menu_id")
+        if menu_id:
+            try:
+                menu_id = int(menu_id)
+            except (TypeError, ValueError):
+                menu_id = None
+
         now = now_ist()
 
-        # Check if issue exists
+        # Route approve/reject through the generic approval utilities
+        if status_data.status_id == 3:  # Approve
+            if not menu_id:
+                raise HTTPException(status_code=400, detail="menu_id is required for approval")
+            result = process_approval(
+                doc_id=issue_id,
+                user_id=int(user_id),
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_issue_by_id_query,
+                update_status_fn=update_issue_status,
+                id_param_name="issue_id",
+                doc_name="Issue",
+                extra_update_params={
+                    "approved_by": int(user_id),
+                    "approved_date": now.date(),
+                },
+            )
+            return {
+                "success": True,
+                "issue_id": issue_id,
+                **result,
+            }
+
+        if status_data.status_id == 4:  # Reject
+            if not menu_id:
+                raise HTTPException(status_code=400, detail="menu_id is required for rejection")
+            result = process_rejection(
+                doc_id=issue_id,
+                user_id=int(user_id),
+                menu_id=menu_id,
+                db=db,
+                get_doc_fn=get_issue_by_id_query,
+                update_status_fn=update_issue_status,
+                id_param_name="issue_id",
+                doc_name="Issue",
+                reason=status_data.remarks,
+                extra_update_params={
+                    "approved_by": None,
+                    "approved_date": None,
+                },
+            )
+            return {
+                "success": True,
+                "issue_id": issue_id,
+                **result,
+            }
+
+        # For other status changes (open, cancel, reopen) — direct update
         check_query = get_issue_by_id_query()
         existing = db.execute(check_query, {"issue_id": issue_id}).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Issue not found")
 
-        # Update status
+        # Determine approval_level for the new status
+        approval_level = None
         approved_by = None
         approved_date = None
-        if status_data.status_id == 3:  # Approved
-            approved_by = user_id
-            approved_date = now.date()
 
         query = update_issue_status()
         db.execute(query, {
             "issue_id": issue_id,
             "status_id": status_data.status_id,
+            "approval_level": approval_level,
             "approved_by": approved_by,
             "approved_date": approved_date,
             "updated_by": user_id,
