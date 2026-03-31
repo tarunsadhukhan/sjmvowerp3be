@@ -42,6 +42,26 @@ class ApprovalMst(Base):
 
 
 # =============================================================================
+# BANK DETAILS MASTER
+# =============================================================================
+class BankDetailsMst(Base):
+    """Bank details master - company bank accounts."""
+    __tablename__ = "bank_details_mst"
+
+    bank_detail_id = Column(Integer, primary_key=True, autoincrement=True)
+    bank_name = Column(String(255), nullable=False)
+    bank_branch = Column(String(255), nullable=False)
+    acc_no = Column(String(50), nullable=False)
+    ifsc_code = Column(String(25), nullable=False)
+    mcr_code = Column(String(25), nullable=True)
+    swift_code = Column(String(25), nullable=True)
+    co_id = Column(Integer, ForeignKey("co_mst.co_id"), nullable=False, index=True)
+    active = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_by = Column(Integer, nullable=True)
+    updated_date_time = Column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+
+
+# =============================================================================
 # BRANCH MASTER
 # =============================================================================
 class BranchMst(Base):

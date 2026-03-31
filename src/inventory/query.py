@@ -79,6 +79,7 @@ def get_issue_by_id_query():
         ih.req_by,
         ih.internal_note,
         ih.status_id,
+        ih.approval_level,
         sm.status_name AS status,
         ih.approved_by,
         ih.approved_date,
@@ -122,7 +123,7 @@ def get_issue_details_query():
         il.inward_dtl_id,
         il.remarks,
         pi.inward_sequence_no AS sr_no,
-        pid.accepted_rate AS rate
+        COALESCE(pid.accepted_rate, pid.rate) AS rate
     FROM issue_li AS il
     LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = il.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = il.uom_id
@@ -243,6 +244,7 @@ def update_issue_status():
     """Update the status of an issue."""
     sql = """UPDATE issue_hdr SET
         status_id = :status_id,
+        approval_level = :approval_level,
         approved_by = :approved_by,
         approved_date = :approved_date,
         updated_by = :updated_by,
@@ -292,7 +294,7 @@ def get_available_inward_inventory_query():
         v.approved_qty,
         v.issue_qty,
         v.balance_qty AS available_qty,
-        v.accepted_rate AS rate,
+        COALESCE(pid.accepted_rate, pid.rate) AS rate,
         pid.warehouse_id,
         wm.warehouse_name
     FROM vw_approved_inward_qty AS v
@@ -350,7 +352,7 @@ def get_searchable_inventory_list_query():
         v.approved_qty,
         v.issue_qty,
         v.balance_qty AS available_qty,
-        v.accepted_rate AS rate,
+        COALESCE(pid.accepted_rate, pid.rate) AS rate,
         pid.warehouse_id,
         wm.warehouse_name
     FROM vw_approved_inward_qty AS v

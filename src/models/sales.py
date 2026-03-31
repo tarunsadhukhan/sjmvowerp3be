@@ -93,6 +93,7 @@ class InvoiceHdr(Base):
         Integer, ForeignKey("sales_order.sales_order_id"), nullable=True, index=True
     )
     billing_state_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bank_detail_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     # Relationships
     line_items: Mapped[List["InvoiceLineItem"]] = relationship(
