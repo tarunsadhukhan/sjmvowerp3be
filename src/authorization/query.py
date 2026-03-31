@@ -27,3 +27,13 @@ def get_org_id_by_subdomain_query():
         WHERE LOWER(TRIM(con_org_shortname)) = LOWER(TRIM(:subdomain))
         LIMIT 1
     """)
+
+
+def validate_subdomain_query():
+    return text("""
+        SELECT COUNT(*) as cnt
+        FROM vowconsole3.con_org_master
+        WHERE LOWER(TRIM(con_org_shortname)) = LOWER(TRIM(:subdomain))
+          AND active = 1
+        LIMIT 1
+    """)
