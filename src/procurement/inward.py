@@ -384,6 +384,7 @@ async def get_po_line_items(
                 "amount": mapped.get("amount") or 0,
                 "remarks": mapped.get("remarks") or "",
                 "tax_percentage": mapped.get("tax_percentage"),
+                "hsn_code": mapped.get("hsn_code") or "",
             })
 
         return {
