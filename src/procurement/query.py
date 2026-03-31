@@ -982,7 +982,7 @@ def update_proc_po():
         updated_date_time = :updated_date_time,
         po_no = COALESCE(:po_no, po_no),
         status_id = COALESCE(:status_id, status_id),
-        approval_level = :approval_level,
+        approval_level = COALESCE(:approval_level, approval_level),
         expense_type_id = :expense_type_id,
         po_type = :po_type
     WHERE po_id = :po_id;"""
