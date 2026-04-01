@@ -1459,6 +1459,16 @@ def get_invoice_by_id_query():
         si.transporter_address,
         si.transporter_state_code,
         si.transporter_state_name,
+        si.transporter_branch_id,
+        si.transporter_doc_no,
+        si.transporter_doc_date,
+        si.buyer_order_no,
+        si.buyer_order_date,
+        si.irn,
+        si.ack_no,
+        si.ack_date,
+        si.qr_code,
+        pbm_transporter.gst_no AS transporter_gst_no,
         si.vehicle_no,
         si.eway_bill_no,
         si.eway_bill_date,
@@ -1523,6 +1533,7 @@ def get_invoice_by_id_query():
     LEFT JOIN state_mst AS sship ON sship.state_id = pship.state_id
     LEFT JOIN sales_order AS so ON so.sales_order_id = si.sales_order_id
     LEFT JOIN bank_details_mst AS bdm ON bdm.bank_detail_id = si.bank_detail_id
+    LEFT JOIN party_branch_mst AS pbm_transporter ON pbm_transporter.party_mst_branch_id = si.transporter_branch_id
     WHERE si.invoice_id = :invoice_id
         AND (:co_id IS NULL OR bm.co_id = :co_id);"""
     return text(sql)
@@ -1558,7 +1569,38 @@ def get_invoice_dtl_by_id_query():
     return text(sql)
 
 
-def insert_sales_invoice():
+def insert_sales_invoice(
+    invoice_date=None, invoice_no=None,
+    branch_id=None, party_id=None,
+    sales_delivery_order_id=None, broker_id=None,
+    billing_to_id=None, shipping_to_id=None,
+    challan_no=None, challan_date=None,
+    transporter_id=None, vehicle_no=None,
+    transporter_name=None, transporter_address=None,
+    transporter_state_code=None, transporter_state_name=None,
+    eway_bill_no=None, eway_bill_date=None,
+    invoice_type=None, footer_notes=None, internal_note=None, terms=None, terms_conditions=None,
+    invoice_amount=None, tax_amount=None, tax_payable=None,
+    freight_charges=None, round_off=None,
+    shipping_state_code=None,
+    intra_inter_state=None,
+    status_id=None, active=None,
+    due_date=None, type_of_sale=None, tax_id=None,
+    container_no=None, contract_no=None, contract_date=None,
+    consignment_no=None, consignment_date=None,
+    payment_terms=None, sales_order_id=None, billing_state_code=None,
+    bank_detail_id=None,
+    updated_by=None,
+    transporter_branch_id=None,
+    transporter_doc_no=None,
+    transporter_doc_date=None,
+    buyer_order_no=None,
+    buyer_order_date=None,
+    irn=None,
+    ack_no=None,
+    ack_date=None,
+    qr_code=None,
+):
     sql = """INSERT INTO sales_invoice (
         invoice_date, invoice_no,
         branch_id, party_id,
@@ -1580,6 +1622,15 @@ def insert_sales_invoice():
         consignment_no, consignment_date,
         payment_terms, sales_order_id, billing_state_code,
         bank_detail_id,
+        transporter_branch_id,
+        transporter_doc_no,
+        transporter_doc_date,
+        buyer_order_no,
+        buyer_order_date,
+        irn,
+        ack_no,
+        ack_date,
+        qr_code,
         updated_by, updated_date_time
     ) VALUES (
         :invoice_date, :invoice_no,
@@ -1602,6 +1653,15 @@ def insert_sales_invoice():
         :consignment_no, :consignment_date,
         :payment_terms, :sales_order_id, :billing_state_code,
         :bank_detail_id,
+        :transporter_branch_id,
+        :transporter_doc_no,
+        :transporter_doc_date,
+        :buyer_order_no,
+        :buyer_order_date,
+        :irn,
+        :ack_no,
+        :ack_date,
+        :qr_code,
         :updated_by, NOW()
     );"""
     return text(sql)
@@ -1626,7 +1686,35 @@ def insert_invoice_line_item():
     return text(sql)
 
 
-def update_sales_invoice():
+def update_sales_invoice(
+    invoice_date=None, branch_id=None, party_id=None,
+    sales_delivery_order_id=None, broker_id=None,
+    billing_to_id=None, shipping_to_id=None,
+    challan_no=None, challan_date=None,
+    transporter_id=None, vehicle_no=None,
+    transporter_name=None, transporter_address=None,
+    transporter_state_code=None, transporter_state_name=None,
+    eway_bill_no=None, eway_bill_date=None,
+    invoice_type=None, footer_notes=None, internal_note=None,
+    terms=None, terms_conditions=None,
+    invoice_amount=None, tax_amount=None, tax_payable=None,
+    freight_charges=None, round_off=None,
+    shipping_state_code=None, intra_inter_state=None,
+    due_date=None, type_of_sale=None, tax_id=None,
+    container_no=None, contract_no=None, contract_date=None,
+    consignment_no=None, consignment_date=None,
+    payment_terms=None, sales_order_id=None, billing_state_code=None,
+    bank_detail_id=None, updated_by=None,
+    transporter_branch_id=None,
+    transporter_doc_no=None,
+    transporter_doc_date=None,
+    buyer_order_no=None,
+    buyer_order_date=None,
+    irn=None,
+    ack_no=None,
+    ack_date=None,
+    qr_code=None,
+):
     sql = """UPDATE sales_invoice SET
         invoice_date = :invoice_date,
         branch_id = :branch_id,
@@ -1669,6 +1757,15 @@ def update_sales_invoice():
         sales_order_id = :sales_order_id,
         billing_state_code = :billing_state_code,
         bank_detail_id = :bank_detail_id,
+        transporter_branch_id = :transporter_branch_id,
+        transporter_doc_no = :transporter_doc_no,
+        transporter_doc_date = :transporter_doc_date,
+        buyer_order_no = :buyer_order_no,
+        buyer_order_date = :buyer_order_date,
+        irn = :irn,
+        ack_no = :ack_no,
+        ack_date = :ack_date,
+        qr_code = :qr_code,
         updated_by = :updated_by,
         updated_date_time = NOW()
     WHERE invoice_id = :invoice_id;"""
@@ -2435,4 +2532,45 @@ def get_sales_invoice_additional_by_id():
     LEFT JOIN sales_invoice_additional_gst siag ON siag.sales_invoice_additional_id = sia.sales_invoice_additional_id
     WHERE sia.invoice_id = :invoice_id
     ORDER BY sia.sales_invoice_additional_id;"""
+    return text(sql)
+
+
+def get_transporter_branches(transporter_id: int):
+    """
+    Fetch all branches for a transporter party.
+    Returns: party_mst_branch_id, gst_no, address, state_id
+    """
+    sql = """
+    SELECT
+        pbm.party_mst_branch_id AS id,
+        pbm.gst_no,
+        pbm.address,
+        pbm.state_id,
+        pm.supp_name AS party_name
+    FROM party_branch_mst pbm
+    INNER JOIN party_mst pm ON pm.party_id = pbm.party_id
+    WHERE pbm.party_id = :transporter_id
+    AND pbm.active = 1
+    ORDER BY pbm.party_mst_branch_id ASC
+    """
+    return text(sql)
+
+
+def get_e_invoice_submission_history(invoice_id: int):
+    """
+    Fetch all e-invoice submission attempts for an invoice.
+    Returns most recent first.
+    """
+    sql = """
+    SELECT
+        e_invoice_response_id AS response_id,
+        submission_status,
+        submitted_date_time,
+        irn_from_response,
+        error_message,
+        submitted_by
+    FROM e_invoice_responses
+    WHERE invoice_id = :invoice_id
+    ORDER BY submitted_date_time DESC
+    """
     return text(sql)
