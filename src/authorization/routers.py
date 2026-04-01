@@ -12,6 +12,7 @@ from src.authorization.utils import (
     ALGORITHM
 )
 from src.authorization.auth import login_user, login_user_console
+from src.authorization.query import validate_subdomain_query
 from src.config.db import default_engine, extract_subdomain_from_request
 from datetime import datetime
 import jwt
@@ -71,6 +72,56 @@ def login_console_route(request: Request, login_data: LoginRequest):
     )
 
 
+
+
+@common_router.get("/validate-subdomain")
+def validate_subdomain(request: Request, subdomain: str = ""):
+    """
+    Validate if a subdomain corresponds to an active organisation in con_org_master.
+    'admin' is always valid (control desk).
+    Returns { valid: true/false }
+    """
+    subdomain = subdomain.strip().lower()
+    if not subdomain:
+        return {"valid": False}
+
+    # 'admin' is the control desk — always valid
+    if subdomain == "admin":
+        return {"valid": True}
+
+    try:
+        with Session(default_engine) as session:
+            query = validate_subdomain_query()
+            result = session.execute(query, {"subdomain": subdomain}).fetchone()
+            is_valid = result is not None and result[0] > 0
+            return {"valid": is_valid}
+    except Exception as e:
+        print(f"Error validating subdomain: {str(e)}")
+        return {"valid": False}
+
+
+@common_router.get("/valid-origins")
+def get_valid_origins(request: Request):
+    """
+    Returns all active organisation shortnames from con_org_master.
+    Used by CORS middleware to dynamically allow origins.
+    """
+    try:
+        with Session(default_engine) as session:
+            result = session.execute(
+                text("""
+                    SELECT LOWER(TRIM(con_org_shortname)) as shortname
+                    FROM vowconsole3.con_org_master
+                    WHERE active = 1
+                      AND con_org_shortname IS NOT NULL
+                      AND TRIM(con_org_shortname) != ''
+                """)
+            ).fetchall()
+            shortnames = [row[0] for row in result]
+            return {"data": shortnames}
+    except Exception as e:
+        print(f"Error fetching valid origins: {str(e)}")
+        return {"data": []}
 
 
 @common_router.get("/protected")
