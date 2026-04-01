@@ -1,4 +1,4 @@
-from fastapi import Depends, Request, HTTPException, APIRouter
+from fastapi import Depends, Request, HTTPException, APIRouter, Query
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
@@ -74,6 +74,9 @@ from src.sales.query import (
     get_sales_invoice_hessian_dtl_by_invoice_id,
     # Sales orders for invoice
     get_approved_sales_orders_for_invoice,
+    # E-invoice functions
+    get_transporter_branches,
+    get_e_invoice_submission_history,
 )
 from src.sales.constants import SALES_DOC_TYPES
 
@@ -442,6 +445,36 @@ async def get_sales_invoice_table(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_transporter_branches")
+async def get_transporter_branches_endpoint(
+    request: Request,
+    transporter_id: int = Query(..., description="Transporter party ID"),
+    co_id: int = Query(..., description="Company ID"),
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Fetch all branches for a transporter party.
+    Used to populate transporter branch dropdown and retrieve GST number.
+    """
+    try:
+        if not transporter_id or not co_id:
+            raise HTTPException(status_code=400, detail="transporter_id and co_id are required")
+
+        query = get_transporter_branches(int(transporter_id))
+        result = db.execute(query, {"transporter_id": int(transporter_id)}).fetchall()
+
+        branches = [dict(r._mapping) for r in result]
+
+        return {"data": branches}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching transporter branches")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/get_sales_invoice_by_id")
 async def get_sales_invoice_by_id(
     request: Request,
@@ -769,6 +802,14 @@ async def get_sales_invoice_by_id(
 
             response["lines"].append(line)
 
+        # Get e-invoice submission history if any
+        try:
+            history_query = get_e_invoice_submission_history(int(invoice_id))
+            history_result = db.execute(history_query, {"invoice_id": int(invoice_id)}).fetchall()
+            response["e_invoice_submission_history"] = [dict(r._mapping) for r in history_result]
+        except Exception:
+            response["e_invoice_submission_history"] = []
+
         return response
     except HTTPException:
         raise
@@ -849,6 +890,32 @@ async def create_sales_invoice(
                 consignment_date = datetime.strptime(str(payload["consignment_date"]), "%Y-%m-%d").date()
             except ValueError:
                 pass
+
+        # Extract 9 new fields for e-invoice
+        transporter_branch_id = to_int(payload.get("transporter_branch_id"), "transporter_branch_id")
+        transporter_doc_no = payload.get("transporter_doc_no")
+        transporter_doc_date = None
+        if payload.get("transporter_doc_date"):
+            try:
+                transporter_doc_date = datetime.strptime(str(payload["transporter_doc_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        buyer_order_no = payload.get("buyer_order_no")
+        buyer_order_date = None
+        if payload.get("buyer_order_date"):
+            try:
+                buyer_order_date = datetime.strptime(str(payload["buyer_order_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        irn = payload.get("irn")
+        ack_no = payload.get("ack_no")
+        ack_date = None
+        if payload.get("ack_date"):
+            try:
+                ack_date = datetime.strptime(str(payload["ack_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        qr_code = payload.get("qr_code")
 
         # Look up co_id from branch
         branch_row = db.execute(
@@ -970,6 +1037,15 @@ async def create_sales_invoice(
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
             "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
+            "transporter_branch_id": transporter_branch_id,
+            "transporter_doc_no": transporter_doc_no,
+            "transporter_doc_date": transporter_doc_date,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
+            "irn": irn,
+            "ack_no": ack_no,
+            "ack_date": ack_date,
+            "qr_code": qr_code,
             "status_id": 21,
             "active": 1,
             "updated_by": user_id,
@@ -1210,6 +1286,32 @@ async def update_sales_invoice_endpoint(
             except ValueError:
                 pass
 
+        # Extract 9 new fields for e-invoice
+        transporter_branch_id = to_int(payload.get("transporter_branch_id"), "transporter_branch_id")
+        transporter_doc_no = payload.get("transporter_doc_no")
+        transporter_doc_date = None
+        if payload.get("transporter_doc_date"):
+            try:
+                transporter_doc_date = datetime.strptime(str(payload["transporter_doc_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        buyer_order_no = payload.get("buyer_order_no")
+        buyer_order_date = None
+        if payload.get("buyer_order_date"):
+            try:
+                buyer_order_date = datetime.strptime(str(payload["buyer_order_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        irn = payload.get("irn")
+        ack_no = payload.get("ack_no")
+        ack_date = None
+        if payload.get("ack_date"):
+            try:
+                ack_date = datetime.strptime(str(payload["ack_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        qr_code = payload.get("qr_code")
+
         # Update header
         update_hdr = update_sales_invoice()
         db.execute(update_hdr, {
@@ -1255,6 +1357,15 @@ async def update_sales_invoice_endpoint(
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
             "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
+            "transporter_branch_id": transporter_branch_id,
+            "transporter_doc_no": transporter_doc_no,
+            "transporter_doc_date": transporter_doc_date,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
+            "irn": irn,
+            "ack_no": ack_no,
+            "ack_date": ack_date,
+            "qr_code": qr_code,
             "updated_by": user_id,
         })
 
