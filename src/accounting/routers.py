@@ -284,7 +284,36 @@ async def update_ledger(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 7. GET /voucher_types
+# 7. GET /parties_dropdown (for ledger party autocomplete)
+@router.get("/parties_dropdown")
+async def get_parties_dropdown(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        search = request.query_params.get("search")
+        search_param = f"%{search}%" if search else None
+
+        query = acc_query.get_parties_for_dropdown()
+        rows = db.execute(
+            query,
+            {"co_id": int(co_id), "search": search_param}
+        ).fetchall()
+        data = [dict(r._mapping) for r in rows]
+        return {"data": data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 8. GET /voucher_types
 @router.get("/voucher_types")
 async def get_voucher_types(
     request: Request,
@@ -353,19 +382,25 @@ async def create_financial_year(
                 detail="fy_start, fy_end, and fy_label are required",
             )
 
+        # Extract user_id from token
+        user_id = token_data.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+
         # Insert financial year
         result = db.execute(
             text("""
                 INSERT INTO acc_financial_year
-                    (co_id, fy_start, fy_end, fy_label, is_active, is_locked)
+                    (co_id, fy_start, fy_end, fy_label, is_active, is_locked, updated_by)
                 VALUES
-                    (:co_id, :fy_start, :fy_end, :fy_label, 1, 0)
+                    (:co_id, :fy_start, :fy_end, :fy_label, 1, 0, :updated_by)
             """),
             {
                 "co_id": int(co_id),
                 "fy_start": fy_start,
                 "fy_end": fy_end,
                 "fy_label": fy_label,
+                "updated_by": int(user_id),
             },
         )
         fy_id = result.lastrowid
@@ -389,16 +424,17 @@ async def create_financial_year(
                 text("""
                     INSERT INTO acc_period_lock
                         (acc_financial_year_id, period_month, period_start,
-                         period_end, is_locked)
+                         period_end, is_locked, updated_by)
                     VALUES
                         (:fy_id, :period_month, :period_start,
-                         :period_end, 0)
+                         :period_end, 0, :updated_by)
                 """),
                 {
                     "fy_id": int(fy_id),
                     "period_month": month_offset + 1,
                     "period_start": period_start.isoformat(),
                     "period_end": period_end.isoformat(),
+                    "updated_by": int(user_id),
                 },
             )
 

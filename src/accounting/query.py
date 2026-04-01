@@ -129,6 +129,23 @@ def get_ledger_by_party(co_id: int = None, party_id: int = None):
     return text(sql)
 
 
+def get_parties_for_dropdown():
+    """Get active parties for dropdown/autocomplete in ledger creation.
+    Returns party_id, supp_name, supp_code (up to 50 results).
+    """
+    sql = """SELECT
+        pm.party_id,
+        pm.supp_name,
+        pm.supp_code
+    FROM party_mst pm
+    WHERE pm.active = 1
+        AND (:co_id IS NULL OR pm.co_id = :co_id)
+        AND (:search IS NULL OR pm.supp_name LIKE :search OR pm.supp_code LIKE :search)
+    ORDER BY pm.supp_name
+    LIMIT 50;"""
+    return text(sql)
+
+
 # =============================================================================
 # VOUCHER TYPES & FINANCIAL YEAR
 # =============================================================================
