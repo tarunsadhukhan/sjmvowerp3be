@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     BigInteger,
     String,
+    Text,
     DECIMAL,
     TIMESTAMP,
     func,
@@ -80,6 +81,19 @@ class InvoiceHdr(Base):
     transporter_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     transporter_state_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     transporter_state_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    transporter_branch_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("party_branch_mst.party_mst_branch_id"),
+        nullable=True
+    )
+    transporter_doc_no: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    transporter_doc_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    buyer_order_no: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    buyer_order_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    irn: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ack_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    ack_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    qr_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     container_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     contract_no: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     contract_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -117,6 +131,11 @@ class InvoiceHdr(Base):
     )
     additional_charges: Mapped[List["SalesInvoiceAdditional"]] = relationship(
         "SalesInvoiceAdditional", back_populates="invoice"
+    )
+    e_invoice_responses: Mapped[list["EInvoiceResponse"]] = relationship(
+        "EInvoiceResponse",
+        back_populates="invoice",
+        cascade="all, delete-orphan"
     )
 
 
@@ -988,3 +1007,22 @@ class SaleInvoiceGovtskgDtl(Base):
     invoice_line_item: Mapped[Optional["InvoiceLineItem"]] = relationship(
         "InvoiceLineItem", back_populates="govtskg_dtl"
     )
+
+
+class EInvoiceResponse(Base):
+    """Audit trail for e-invoice portal submissions"""
+    __tablename__ = "e_invoice_responses"
+
+    e_invoice_response_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sales_invoice.invoice_id"), nullable=False)
+    co_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("co_mst.co_id"), nullable=False)
+    submission_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    submitted_date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    api_response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    irn_from_response: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    submitted_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("user_mst.user_id"), nullable=True)
+    created_date_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+    # Relationships
+    invoice: Mapped["InvoiceHdr"] = relationship(back_populates="e_invoice_responses")
