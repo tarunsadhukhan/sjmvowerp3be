@@ -248,7 +248,7 @@ async def get_sales_invoice_setup_1(
         # Company details for invoice header
         co_result = db.execute(
             text("""
-                SELECT cm.co_name, cm.co_address1, cm.co_address2, cm.co_zipcode,
+                SELECT cm.co_name, cm.co_logo, cm.co_address1, cm.co_address2, cm.co_zipcode,
                        cm.co_cin_no, cm.co_email_id, cm.co_pan_no,
                        cm.state_id, sm.state AS state_name, sm.state_code
                 FROM co_mst cm
@@ -573,6 +573,7 @@ async def get_sales_invoice_by_id(
             "bankIfscCode": header.get("bank_ifsc_code"),
             "bankBranchName": header.get("bank_branch_name"),
             "companyName": header.get("co_name"),
+            "companyLogo": header.get("co_logo"),
             "companyAddress1": header.get("co_address1"),
             "companyAddress2": header.get("co_address2"),
             "companyZipcode": header.get("co_zipcode"),

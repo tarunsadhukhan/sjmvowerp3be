@@ -102,7 +102,7 @@ class CoMst(Base):
     co_zipcode = Column(Integer, nullable=False)
     country_id = Column(Integer, ForeignKey("country_mst.country_id"), nullable=False, index=True)
     state_id = Column(Integer, ForeignKey("state_mst.state_id"), nullable=False, index=True)
-    co_logo = Column(String(255), nullable=True)
+    co_logo = Column(Text, nullable=True)
     auto_datetime_insert = Column(DateTime, nullable=True)
     created_by_con_user = Column(Integer, nullable=True)
     co_cin_no = Column(String(25), nullable=True)

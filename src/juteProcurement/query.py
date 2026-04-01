@@ -190,7 +190,9 @@ def get_jute_po_by_id_query():
             jp.brokrage_percentage,
             jp.penalty,
             jp.internal_note,
-            jp.updated_date_time
+            jp.updated_date_time,
+            cm.co_name,
+            cm.co_logo
         FROM jute_po jp
         INNER JOIN branch_mst bm ON bm.branch_id = jp.branch_id
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id
@@ -1288,7 +1290,9 @@ def get_jute_mr_by_id_query():
             jm.src_com_id,
             jm.jute_gate_entry_date,
             jm.updated_by,
-            jm.updated_date_time
+            jm.updated_date_time,
+            cm.co_name,
+            cm.co_logo
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id
