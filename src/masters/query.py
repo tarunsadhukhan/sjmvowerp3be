@@ -1122,3 +1122,101 @@ def get_bom_uom_list():
     """
     return text(sql)
 
+
+def get_item_search_list_query():
+    """
+    Get paginated searchable item list for item selection dialog.
+    Returns items with their group hierarchy path, default UOM, HSN code, and tax info.
+    Used by procurement and sales modules for item selection.
+    """
+    sql = """SELECT
+        im.item_id,
+        im.item_grp_id,
+        vip.item_group_code_display AS item_grp_code,
+        vip.item_group_name_display AS item_grp_name,
+        im.item_code,
+        vip.full_item_code,
+        im.item_name,
+        im.uom_id,
+        um.uom_name,
+        im.hsn_code,
+        im.tax_percentage,
+        im.purchaseable,
+        im.saleable
+    FROM item_mst AS im
+    INNER JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
+    LEFT JOIN uom_mst AS um ON um.uom_id = im.uom_id
+    WHERE vip.co_id = :co_id
+        AND im.active = 1
+        AND (
+            :search_like IS NULL
+            OR im.item_code LIKE :search_like
+            OR im.item_name LIKE :search_like
+            OR vip.item_group_code_display LIKE :search_like
+            OR vip.item_group_name_display LIKE :search_like
+            OR vip.full_item_code LIKE :search_like
+            OR im.hsn_code LIKE :search_like
+        )
+    ORDER BY vip.item_group_code_display ASC, im.item_code ASC
+    LIMIT :limit OFFSET :offset;"""
+    return text(sql)
+
+
+def get_item_search_count_query():
+    """
+    Get total count for paginated item search.
+    """
+    sql = """SELECT COUNT(1) AS total
+    FROM item_mst AS im
+    INNER JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
+    WHERE vip.co_id = :co_id
+        AND im.active = 1
+        AND (
+            :search_like IS NULL
+            OR im.item_code LIKE :search_like
+            OR im.item_name LIKE :search_like
+            OR vip.item_group_code_display LIKE :search_like
+            OR vip.item_group_name_display LIKE :search_like
+            OR vip.full_item_code LIKE :search_like
+            OR im.hsn_code LIKE :search_like
+        );"""
+    return text(sql)
+
+
+def get_item_makes_by_group_ids_query():
+    """
+    Get item makes for a set of item group IDs.
+    Used after item selection to populate make options.
+    """
+    sql = """SELECT
+        imk.item_make_id,
+        imk.item_make_name,
+        imk.item_grp_id
+    FROM item_make AS imk
+    WHERE imk.item_grp_id IN :item_grp_ids
+    ORDER BY imk.item_make_name;"""
+    return text(sql).bindparams(bindparam("item_grp_ids", expanding=True))
+
+
+def get_item_uoms_by_item_ids_query():
+    """
+    Get UOM mappings for a set of item IDs.
+    Used after item selection to populate UOM options.
+    """
+    sql = """SELECT
+        uimm.item_id,
+        uimm.map_from_id,
+        um_from.uom_name AS map_from_name,
+        uimm.map_to_id,
+        um_to.uom_name AS uom_name,
+        uimm.relation_value,
+        uimm.rounding
+    FROM uom_item_map_mst AS uimm
+    INNER JOIN item_mst AS im ON im.item_id = uimm.item_id
+    LEFT JOIN uom_mst AS um_to ON um_to.uom_id = uimm.map_to_id
+    LEFT JOIN uom_mst AS um_from ON um_from.uom_id = uimm.map_from_id
+    WHERE uimm.item_id IN :item_ids
+        AND im.active = 1
+    ORDER BY uimm.item_id, um_to.uom_name;"""
+    return text(sql).bindparams(bindparam("item_ids", expanding=True))
+
