@@ -69,6 +69,7 @@ from src.sales.salesInvoice import router as sales_invoice_router
 from src.hrms.employee import router as hrms_employee_router
 from src.hrms.payScheme import router as hrms_pay_scheme_router
 from src.hrms.payParam import router as hrms_pay_param_router
+from src.accounting.routers import router as accounting_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -177,6 +178,9 @@ app.include_router(sales_invoice_router, prefix="/api/salesInvoice", tags=["sale
 app.include_router(hrms_employee_router, prefix="/api/hrms", tags=["hrms-employee"])
 app.include_router(hrms_pay_scheme_router, prefix="/api/hrms", tags=["hrms-pay-scheme"])
 app.include_router(hrms_pay_param_router, prefix="/api/hrms", tags=["hrms-pay-param"])
+
+# Accounting routers
+app.include_router(accounting_router, prefix="/api/accounting", tags=["accounting"])
 
 
 logging.basicConfig(level=logging.INFO)
