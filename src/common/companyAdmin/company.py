@@ -1,8 +1,8 @@
-from fastapi import Depends, Request, HTTPException,APIRouter, Query
+from fastapi import Depends, Request, HTTPException, APIRouter, Query, UploadFile, File, Form
 from sqlalchemy.sql import text
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from src.config.db import get_db_names,default_engine, get_tenant_db
+from src.config.db import get_db_names, default_engine, get_tenant_db
 from src.authorization.utils import verify_access_token
 from src.common.ctrldskAdmin.schemas import MenuResponse, OrgCreate
 from src.common.companyAdmin.models import ConMenuMaster, ConUserRoleMapping, ConRoleMenuMap, ConOrgMaster, CoMst, CoConfig, CurrencyMst
@@ -11,6 +11,9 @@ from src.common.companyAdmin.query import get_country_query, get_state_query
 from src.common.companyAdmin.schemas import CoCreate, CoConfigCreate
 from typing import Optional, List
 from pydantic import BaseModel
+import base64
+import io
+from PIL import Image
 
 
 router = APIRouter()
@@ -464,4 +467,105 @@ async def save_co_invoice_type_map(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
 
 
+ALLOWED_LOGO_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+MAX_LOGO_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_LOGO_DIMENSION = 500  # px — reject if either side exceeds this
+TARGET_LOGO_DIMENSION = 300  # px — resize to fit within this
 
+
+@router.post("/upload_co_logo")
+async def upload_co_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    co_id: int = Form(...),
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token),
+):
+    try:
+        # Validate content type
+        if file.content_type not in ALLOWED_LOGO_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail="Only JPEG and PNG images are allowed",
+            )
+
+        # Read and validate file size
+        file_bytes = await file.read()
+        if len(file_bytes) > MAX_LOGO_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail="File size must not exceed 2 MB",
+            )
+
+        # Open and validate image dimensions
+        img = Image.open(io.BytesIO(file_bytes))
+        width, height = img.size
+        if width > MAX_LOGO_DIMENSION or height > MAX_LOGO_DIMENSION:
+            # Resize to fit within TARGET_LOGO_DIMENSION maintaining aspect ratio
+            img.thumbnail((TARGET_LOGO_DIMENSION, TARGET_LOGO_DIMENSION), Image.LANCZOS)
+
+        # Convert to base64 data URI
+        buf = io.BytesIO()
+        output_format = "PNG" if file.content_type == "image/png" else "JPEG"
+        img.save(buf, format=output_format, quality=85)
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        mime = "image/png" if output_format == "PNG" else "image/jpeg"
+        data_uri = f"data:{mime};base64,{encoded}"
+
+        # Verify company exists and update
+        company = db.query(CoMst).filter(CoMst.co_id == co_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        company.co_logo = data_uri
+        db.commit()
+
+        return {"message": "Logo uploaded successfully", "co_id": co_id, "co_logo": data_uri}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
+
+@router.get("/get_co_logo/{co_id}")
+async def get_co_logo(
+    co_id: int,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token),
+):
+    try:
+        company = db.query(CoMst).filter(CoMst.co_id == co_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        return {"data": {"co_logo": company.co_logo}}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")
+
+
+@router.delete("/delete_co_logo/{co_id}")
+async def delete_co_logo(
+    co_id: int,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(verify_access_token),
+):
+    try:
+        company = db.query(CoMst).filter(CoMst.co_id == co_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        company.co_logo = None
+        db.commit()
+
+        return {"message": "Logo deleted successfully", "co_id": co_id}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(exc)}")

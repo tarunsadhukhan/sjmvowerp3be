@@ -330,8 +330,9 @@ class TestGetSalesInvoiceById:
         data = response.json()
 
         # New header fields
-        assert data["billingToId"] == 7
-        assert data["shippingToId"] == 8
+        assert data["billingTo"] == 7
+        assert data["shippingTo"] == 8
+        assert data["branchId"] == "1"
         assert data["internalNote"] == "Test note"
         assert data["transporterNameStored"] == "ABC Transport"
         assert data["transporterAddress"] == "123 Main St"
@@ -363,6 +364,63 @@ class TestGetSalesInvoiceById:
         assert line["gst"]["cgstAmount"] == 180
         assert line["gst"]["sgstPercent"] == 9
         assert line["gst"]["taxAmount"] == 360
+
+    def test_response_contains_renamed_fields(self):
+        """Test that response uses new field names: billingTo, shippingTo, branchId (not billingToId, shippingToId, branch)."""
+        header = _mock_row({
+            "invoice_id": 1, "invoice_no": 1, "invoice_date": "2025-06-01",
+            "challan_no": None, "challan_date": None,
+            "branch_id": 18, "branch_name": "Main", "branch_prefix": "MN",
+            "co_id": 1, "co_prefix": "CO",
+            "party_id": 10, "party_name": "Customer A",
+            "sales_delivery_order_id": None, "broker_id": None,
+            "billing_to_id": 71, "shipping_to_id": 71,
+            "internal_note": None, "shipping_state_code": None,
+            "transporter_id": None, "transporter_name": None,
+            "transporter_name_stored": None, "transporter_address": None,
+            "transporter_state_code": None, "transporter_state_name": None,
+            "vehicle_no": None, "eway_bill_no": None, "eway_bill_date": None,
+            "invoice_type": None, "footer_notes": None,
+            "terms": None, "terms_conditions": None,
+            "invoice_amount": 0, "tax_amount": 0, "tax_payable": 0,
+            "freight_charges": 0, "round_off": 0,
+            "due_date": None, "type_of_sale": None, "tax_id": None,
+            "container_no": None, "contract_no": None, "contract_date": None,
+            "consignment_no": None, "consignment_date": None,
+            "status_id": 21, "status_name": "Draft",
+            "updated_by": 1, "updated_date_time": None,
+            "intra_inter_state": None,
+            "payment_terms": None, "sales_order_id": None,
+            "billing_state_code": None,
+            "sales_order_date": None, "sales_order_no": None,
+        })
+
+        header_exec = MagicMock()
+        header_exec.fetchone.return_value = header
+        detail_exec = MagicMock()
+        detail_exec.fetchall.return_value = []
+        gst_exec = MagicMock()
+        gst_exec.fetchall.return_value = []
+        jute_exec = MagicMock()
+        jute_exec.fetchone.return_value = None
+        jute_dtl_exec = MagicMock()
+        jute_dtl_exec.fetchall.return_value = []
+
+        self._mock_session.execute.side_effect = [header_exec, detail_exec, gst_exec, jute_exec, jute_dtl_exec]
+
+        response = client.get("/api/salesInvoice/get_sales_invoice_by_id?invoice_id=1&co_id=1")
+        assert response.status_code == 200
+        data = response.json()
+
+        # New field names
+        assert data["billingTo"] == 71, "Response should contain 'billingTo' (not 'billingToId')"
+        assert data["shippingTo"] == 71, "Response should contain 'shippingTo' (not 'shippingToId')"
+        assert data["branchId"] == "18", "Response should contain 'branchId' (not 'branch')"
+
+        # Old field names should not be present
+        assert "billingToId" not in data, "Response should not contain old field name 'billingToId'"
+        assert "shippingToId" not in data, "Response should not contain old field name 'shippingToId'"
+        assert "branch" not in data, "Response should not contain old field name 'branch'"
 
     def test_response_does_not_contain_tcs(self):
         """TCS fields should not be in the response."""
