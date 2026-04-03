@@ -9,6 +9,7 @@ from src.masters.models import ItemGrpMst, ItemTypeMaster, ItemMst, ItemMake
 from src.masters.query import get_item_group, get_item_group_drodown, india_gst_applicable, get_item_table, check_item_group_code_and_name
 from src.masters.query import get_item_group_details_by_id, get_item_minmax_mapping, get_item, get_item_uom_mapping, get_uom_list, get_item_by_id
 from src.masters.query import get_item_group_path, get_item_make
+from src.masters.query import get_item_search_list_query, get_item_search_count_query, get_item_makes_by_group_ids_query, get_item_uoms_by_item_ids_query
 from datetime import datetime
 from src.common.utils import now_ist
 
@@ -585,5 +586,112 @@ async def item_make_create(
         raise
     except Exception as e:
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/item_search")
+async def item_search(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Paginated searchable item list for item selection dialog.
+    Returns items with group hierarchy, default UOM, HSN code, tax info,
+    plus makes and UOM mappings for the returned items.
+
+    Query params:
+        co_id: Company ID (required)
+        page: Page number, 1-indexed (default: 1)
+        limit: Records per page, max 50 (default: 15)
+        search: Search term for item code/name, group code/name, HSN code
+        filter: Optional filter - 'purchaseable' or 'saleable'
+    """
+    try:
+        co_id = request.query_params.get("co_id")
+        if not co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+
+        try:
+            co_id_int = int(co_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid co_id format")
+
+        raw_page = request.query_params.get("page", "1")
+        raw_limit = request.query_params.get("limit", "15")
+        raw_search = request.query_params.get("search")
+        item_filter = request.query_params.get("filter")
+
+        try:
+            page = max(1, int(raw_page))
+        except (TypeError, ValueError):
+            page = 1
+
+        try:
+            limit = max(1, min(int(raw_limit), 50))
+        except (TypeError, ValueError):
+            limit = 15
+
+        offset = (page - 1) * limit
+        search_like = f"%{raw_search.strip()}%" if raw_search and raw_search.strip() else None
+
+        # Get count
+        count_query = get_item_search_count_query()
+        count_result = db.execute(count_query, {
+            "co_id": co_id_int,
+            "search_like": search_like,
+        }).fetchone()
+        total = count_result.total if count_result else 0
+
+        # Get items
+        query = get_item_search_list_query()
+        rows = db.execute(query, {
+            "co_id": co_id_int,
+            "search_like": search_like,
+            "limit": limit,
+            "offset": offset,
+        }).fetchall()
+
+        items = [dict(row._mapping) for row in rows]
+
+        # Apply purchaseable/saleable filter in Python to keep SQL simpler
+        if item_filter == "purchaseable":
+            items = [item for item in items if item.get("purchaseable") == 1]
+        elif item_filter == "saleable":
+            items = [item for item in items if item.get("saleable") == 1]
+
+        if not items:
+            return {"data": [], "total": 0 if item_filter else total, "page": page, "limit": limit, "makes": [], "uoms": []}
+
+        # Collect unique item_grp_ids and item_ids from results
+        item_grp_ids = list({item["item_grp_id"] for item in items if item.get("item_grp_id")})
+        item_ids = list({item["item_id"] for item in items if item.get("item_id")})
+
+        # Fetch makes for returned item groups
+        makes = []
+        if item_grp_ids:
+            makes_query = get_item_makes_by_group_ids_query()
+            makes_rows = db.execute(makes_query, {"item_grp_ids": item_grp_ids}).fetchall()
+            makes = [dict(row._mapping) for row in makes_rows]
+
+        # Fetch UOM mappings for returned items
+        uoms = []
+        if item_ids:
+            uoms_query = get_item_uoms_by_item_ids_query()
+            uoms_rows = db.execute(uoms_query, {"item_ids": item_ids}).fetchall()
+            uoms = [dict(row._mapping) for row in uoms_rows]
+
+        return {
+            "data": items,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "makes": makes,
+            "uoms": uoms,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

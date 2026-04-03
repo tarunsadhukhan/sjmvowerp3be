@@ -1,4 +1,4 @@
-from fastapi import Depends, Request, HTTPException, APIRouter
+from fastapi import Depends, Request, HTTPException, APIRouter, Query
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
@@ -74,6 +74,9 @@ from src.sales.query import (
     get_sales_invoice_hessian_dtl_by_invoice_id,
     # Sales orders for invoice
     get_approved_sales_orders_for_invoice,
+    # E-invoice functions
+    get_transporter_branches,
+    get_e_invoice_submission_history,
 )
 from src.sales.constants import SALES_DOC_TYPES
 
@@ -248,7 +251,7 @@ async def get_sales_invoice_setup_1(
         # Company details for invoice header
         co_result = db.execute(
             text("""
-                SELECT cm.co_name, cm.co_address1, cm.co_address2, cm.co_zipcode,
+                SELECT cm.co_name, cm.co_logo, cm.co_address1, cm.co_address2, cm.co_zipcode,
                        cm.co_cin_no, cm.co_email_id, cm.co_pan_no,
                        cm.state_id, sm.state AS state_name, sm.state_code
                 FROM co_mst cm
@@ -442,6 +445,36 @@ async def get_sales_invoice_table(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_transporter_branches")
+async def get_transporter_branches_endpoint(
+    request: Request,
+    transporter_id: int = Query(..., description="Transporter party ID"),
+    co_id: int = Query(..., description="Company ID"),
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """
+    Fetch all branches for a transporter party.
+    Used to populate transporter branch dropdown and retrieve GST number.
+    """
+    try:
+        if not transporter_id or not co_id:
+            raise HTTPException(status_code=400, detail="transporter_id and co_id are required")
+
+        query = get_transporter_branches(int(transporter_id))
+        result = db.execute(query, {"transporter_id": int(transporter_id)}).fetchall()
+
+        branches = [dict(r._mapping) for r in result]
+
+        return {"data": branches}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching transporter branches")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/get_sales_invoice_by_id")
 async def get_sales_invoice_by_id(
     request: Request,
@@ -515,17 +548,17 @@ async def get_sales_invoice_by_id(
             "invoiceDate": format_date(header.get("invoice_date")),
             "challanNo": header.get("challan_no"),
             "challanDate": format_date(header.get("challan_date")),
-            "branch": str(header.get("branch_id", "")) if header.get("branch_id") else "",
+            "branchId": str(header.get("branch_id", "")) if header.get("branch_id") else "",
             "salesDeliveryOrderId": header.get("sales_delivery_order_id"),
             "brokerId": header.get("broker_id"),
-            "billingToId": header.get("billing_to_id"),
+            "billingTo": header.get("billing_to_id"),
             "billingAddress": header.get("billing_address"),
             "billingGstNo": header.get("billing_gst_no"),
             "billingStateId": header.get("billing_state_id"),
             "billingStateName": header.get("billing_state_name"),
             "billingContactPerson": header.get("billing_contact_person"),
             "billingContactNo": header.get("billing_contact_no"),
-            "shippingToId": header.get("shipping_to_id"),
+            "shippingTo": header.get("shipping_to_id"),
             "shippingAddress": header.get("shipping_address"),
             "shippingGstNo": header.get("shipping_gst_no"),
             "shippingStateId": header.get("shipping_state_id"),
@@ -541,6 +574,16 @@ async def get_sales_invoice_by_id(
             "transporterAddress": header.get("transporter_address"),
             "transporterStateCode": header.get("transporter_state_code"),
             "transporterStateName": header.get("transporter_state_name"),
+            "transporterBranchId": header.get("transporter_branch_id"),
+            "transporterGstNo": header.get("transporter_gst_no"),
+            "transporterDocNo": header.get("transporter_doc_no"),
+            "transporterDocDate": format_date(header.get("transporter_doc_date")),
+            "buyerOrderNo": header.get("buyer_order_no"),
+            "buyerOrderDate": format_date(header.get("buyer_order_date")),
+            "irn": header.get("irn"),
+            "ackNo": header.get("ack_no"),
+            "ackDate": format_date(header.get("ack_date")),
+            "qrCode": header.get("qr_code"),
             "vehicleNo": header.get("vehicle_no"),
             "ewayBillNo": header.get("eway_bill_no"),
             "ewayBillDate": format_date(header.get("eway_bill_date")),
@@ -573,6 +616,7 @@ async def get_sales_invoice_by_id(
             "bankIfscCode": header.get("bank_ifsc_code"),
             "bankBranchName": header.get("bank_branch_name"),
             "companyName": header.get("co_name"),
+            "companyLogo": header.get("co_logo"),
             "companyAddress1": header.get("co_address1"),
             "companyAddress2": header.get("co_address2"),
             "companyZipcode": header.get("co_zipcode"),
@@ -768,6 +812,14 @@ async def get_sales_invoice_by_id(
 
             response["lines"].append(line)
 
+        # Get e-invoice submission history if any
+        try:
+            history_query = get_e_invoice_submission_history(int(invoice_id))
+            history_result = db.execute(history_query, {"invoice_id": int(invoice_id)}).fetchall()
+            response["e_invoice_submission_history"] = [dict(r._mapping) for r in history_result]
+        except Exception:
+            response["e_invoice_submission_history"] = []
+
         return response
     except HTTPException:
         raise
@@ -848,6 +900,32 @@ async def create_sales_invoice(
                 consignment_date = datetime.strptime(str(payload["consignment_date"]), "%Y-%m-%d").date()
             except ValueError:
                 pass
+
+        # Extract 9 new fields for e-invoice
+        transporter_branch_id = to_int(payload.get("transporter_branch_id"), "transporter_branch_id")
+        transporter_doc_no = payload.get("transporter_doc_no")
+        transporter_doc_date = None
+        if payload.get("transporter_doc_date"):
+            try:
+                transporter_doc_date = datetime.strptime(str(payload["transporter_doc_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        buyer_order_no = payload.get("buyer_order_no")
+        buyer_order_date = None
+        if payload.get("buyer_order_date"):
+            try:
+                buyer_order_date = datetime.strptime(str(payload["buyer_order_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        irn = payload.get("irn")
+        ack_no = payload.get("ack_no")
+        ack_date = None
+        if payload.get("ack_date"):
+            try:
+                ack_date = datetime.strptime(str(payload["ack_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        qr_code = payload.get("qr_code")
 
         # Look up co_id from branch
         branch_row = db.execute(
@@ -969,6 +1047,15 @@ async def create_sales_invoice(
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
             "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
+            "transporter_branch_id": transporter_branch_id,
+            "transporter_doc_no": transporter_doc_no,
+            "transporter_doc_date": transporter_doc_date,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
+            "irn": irn,
+            "ack_no": ack_no,
+            "ack_date": ack_date,
+            "qr_code": qr_code,
             "status_id": 21,
             "active": 1,
             "updated_by": user_id,
@@ -1209,6 +1296,32 @@ async def update_sales_invoice_endpoint(
             except ValueError:
                 pass
 
+        # Extract 9 new fields for e-invoice
+        transporter_branch_id = to_int(payload.get("transporter_branch_id"), "transporter_branch_id")
+        transporter_doc_no = payload.get("transporter_doc_no")
+        transporter_doc_date = None
+        if payload.get("transporter_doc_date"):
+            try:
+                transporter_doc_date = datetime.strptime(str(payload["transporter_doc_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        buyer_order_no = payload.get("buyer_order_no")
+        buyer_order_date = None
+        if payload.get("buyer_order_date"):
+            try:
+                buyer_order_date = datetime.strptime(str(payload["buyer_order_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        irn = payload.get("irn")
+        ack_no = payload.get("ack_no")
+        ack_date = None
+        if payload.get("ack_date"):
+            try:
+                ack_date = datetime.strptime(str(payload["ack_date"]), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        qr_code = payload.get("qr_code")
+
         # Update header
         update_hdr = update_sales_invoice()
         db.execute(update_hdr, {
@@ -1254,6 +1367,15 @@ async def update_sales_invoice_endpoint(
             "sales_order_id": to_int(payload.get("sales_order_id"), "sales_order_id"),
             "billing_state_code": to_int(payload.get("billing_state_code"), "billing_state_code"),
             "bank_detail_id": to_int(payload.get("bank_detail_id"), "bank_detail_id"),
+            "transporter_branch_id": transporter_branch_id,
+            "transporter_doc_no": transporter_doc_no,
+            "transporter_doc_date": transporter_doc_date,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
+            "irn": irn,
+            "ack_no": ack_no,
+            "ack_date": ack_date,
+            "qr_code": qr_code,
             "updated_by": user_id,
         })
 
