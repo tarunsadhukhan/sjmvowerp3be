@@ -4,7 +4,7 @@
 
 -- Add 9 new columns to sales_invoice table
 ALTER TABLE sales_invoice
-ADD COLUMN transporter_branch_id BIGINT NULL AFTER transporter_state_name,
+ADD COLUMN transporter_branch_id INT NULL AFTER transporter_state_name,
 ADD COLUMN transporter_doc_no VARCHAR(255) NULL AFTER transporter_branch_id,
 ADD COLUMN transporter_doc_date DATE NULL AFTER transporter_doc_no,
 ADD COLUMN buyer_order_no VARCHAR(255) NULL AFTER transporter_doc_date,

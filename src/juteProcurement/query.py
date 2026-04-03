@@ -1273,6 +1273,8 @@ def get_jute_mr_by_id_query():
             pm.supp_name AS party_name,
             jm.party_branch_id,
             CONCAT(COALESCE(pm.supp_name, ''), ' - ', COALESCE(pbm.address, '')) AS party_branch_name,
+            pbm.address AS party_address,
+            pbm.gst_no AS party_gst_no,
             jm.po_id,
             jp.po_no,
             jp.po_date,
@@ -1292,7 +1294,10 @@ def get_jute_mr_by_id_query():
             jm.updated_by,
             jm.updated_date_time,
             cm.co_name,
-            cm.co_logo
+            cm.co_logo,
+            cm.co_address1,
+            cm.co_address2,
+            cm.co_zipcode
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
         INNER JOIN co_mst cm ON cm.co_id = bm.co_id

@@ -82,7 +82,7 @@ class InvoiceHdr(Base):
     transporter_state_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     transporter_state_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     transporter_branch_id: Mapped[int | None] = mapped_column(
-        BigInteger,
+        Integer,
         ForeignKey("party_branch_mst.party_mst_branch_id"),
         nullable=True
     )
