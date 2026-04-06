@@ -1150,13 +1150,14 @@ def get_jute_mr_table_query(co_id: int, search: str = None):
 
     search_clause = ""
     if search:
-        search_clause = """
+        search_clause = f"""
             AND (
                 CAST(jm.branch_mr_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jm.challan_no LIKE :search
                 OR jm.vehicle_no LIKE :search
+                OR {gate_entry_num_expr} LIKE :search
             )
         """
 
@@ -1223,15 +1224,23 @@ def get_jute_mr_table_count_query(co_id: int, search: str = None):
     Query to get total count of jute MRs for pagination.
     Only counts entries where out_time IS NOT NULL (vehicle has exited).
     """
+    gate_entry_num_expr = get_jute_gate_entry_number_sql_expression(
+        gate_entry_no_column="jm.jute_gate_entry_no",
+        entry_date_column="jm.jute_gate_entry_date",
+        co_prefix_column="cm.co_prefix",
+        branch_prefix_column="bm.branch_prefix"
+    )
+
     search_clause = ""
     if search:
-        search_clause = """
+        search_clause = f"""
             AND (
                 CAST(jm.branch_mr_no AS CHAR) LIKE :search
                 OR jsm.supplier_name LIKE :search
                 OR pm.supp_name LIKE :search
                 OR jm.challan_no LIKE :search
                 OR jm.vehicle_no LIKE :search
+                OR {gate_entry_num_expr} LIKE :search
             )
         """
 
@@ -1239,6 +1248,7 @@ def get_jute_mr_table_count_query(co_id: int, search: str = None):
         SELECT COUNT(*) AS total
         FROM jute_mr jm
         INNER JOIN branch_mst bm ON bm.branch_id = jm.branch_id
+        INNER JOIN co_mst cm ON cm.co_id = bm.co_id
         LEFT JOIN jute_supplier_mst jsm ON jsm.supplier_id = jm.jute_supplier_id
         LEFT JOIN party_mst pm ON pm.party_id = CAST(jm.party_id AS UNSIGNED)
         WHERE bm.co_id = :co_id
@@ -1364,6 +1374,7 @@ def get_jute_mr_line_items_query():
             jmli.premium_amount,
             jmli.warehouse_id,
             wh.warehouse_path,
+            jmli.unit_conversion,
             jmli.remarks,
             jmli.status,
             jmli.active
