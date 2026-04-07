@@ -286,12 +286,22 @@ async def get_parties_by_supplier(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get parties mapped to a jute supplier."""
+    """Get parties mapped to a jute supplier, scoped to the caller's company."""
     try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        try:
+            co_id = int(q_co_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid co_id")
+
         query = get_parties_by_supplier_query()
-        result = db.execute(query, {"supplier_id": supplier_id}).fetchall()
+        result = db.execute(
+            query, {"supplier_id": supplier_id, "co_id": co_id}
+        ).fetchall()
         parties = [dict(r._mapping) for r in result]
-        
+
         return {"parties": parties}
 
     except HTTPException:
