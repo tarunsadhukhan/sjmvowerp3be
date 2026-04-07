@@ -367,8 +367,12 @@ def get_suppliers_by_mukam_query():
 
 def get_parties_by_supplier_query():
     """
-    Query to get parties mapped to a jute supplier.
-    Uses jute_supp_party_map to find parties linked to the selected supplier.
+    Query to get parties mapped to a jute supplier for a specific company.
+
+    The supplier↔party relationship is per-company via jute_supp_party_map.co_id,
+    so we MUST filter by co_id — the same supplier can be mapped to different
+    parties in different companies, and not filtering would leak parties from
+    other tenants/companies into the dropdown.
     """
     sql = """
         SELECT
@@ -378,6 +382,7 @@ def get_parties_by_supplier_query():
         JOIN jute_supp_party_map jspm
             ON jspm.party_id = pm.party_id
         WHERE jspm.jute_supplier_id = :supplier_id
+          AND jspm.co_id = :co_id
         ORDER BY pm.supp_name
     """
     return text(sql)
@@ -385,14 +390,24 @@ def get_parties_by_supplier_query():
 
 def get_all_suppliers_query():
     """
-    Query to get all jute suppliers for the company.
-    Suppliers are mandatory for Jute PO creation.
+    Query to get jute suppliers available for a specific company.
+
+    jute_supplier_mst itself has no co_id (suppliers are tenant-global),
+    so company scoping is enforced by requiring at least one party mapping
+    for this supplier in jute_supp_party_map for the given co_id. This
+    prevents listing suppliers that aren't usable in the current company.
     """
     sql = """
-        SELECT 
+        SELECT
             jsm.supplier_id AS supplier_id,
             jsm.supplier_name AS supplier_name
         FROM jute_supplier_mst jsm
+        WHERE EXISTS (
+            SELECT 1
+            FROM jute_supp_party_map jspm
+            WHERE jspm.jute_supplier_id = jsm.supplier_id
+              AND jspm.co_id = :co_id
+        )
         ORDER BY jsm.supplier_name
     """
     return text(sql)
