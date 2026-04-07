@@ -381,12 +381,22 @@ async def get_parties_by_supplier(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get parties mapped to a jute supplier."""
+    """Get parties mapped to a jute supplier, scoped to the caller's company."""
     try:
+        q_co_id = request.query_params.get("co_id")
+        if not q_co_id:
+            raise HTTPException(status_code=400, detail="co_id is required")
+        try:
+            co_id = int(q_co_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid co_id")
+
         query = get_parties_by_supplier_query()
-        result = db.execute(query, {"supplier_id": supplier_id}).fetchall()
+        result = db.execute(
+            query, {"supplier_id": supplier_id, "co_id": co_id}
+        ).fetchall()
         parties = [dict(r._mapping) for r in result]
-        
+
         return {"parties": parties}
 
     except HTTPException:
@@ -480,6 +490,67 @@ class JutePOUpdate(BaseModel):
 # JUTE PO CREATE / UPDATE ENDPOINTS
 # =============================================================================
 
+
+def _validate_branch_belongs_to_co(db: Session, branch_id: int, co_id: int) -> None:
+    """Raise 400 unless branch_id belongs to co_id in branch_mst."""
+    row = db.execute(
+        text("SELECT co_id FROM branch_mst WHERE branch_id = :branch_id"),
+        {"branch_id": branch_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail="Invalid branch_id")
+    if row.co_id != co_id:
+        raise HTTPException(
+            status_code=400,
+            detail="branch_id does not belong to the specified company",
+        )
+
+
+def _validate_supplier_party_for_co(
+    db: Session, supplier_id: int, party_id: Optional[int], co_id: int
+) -> None:
+    """Raise 400 unless (supplier_id, party_id) is mapped for this co_id.
+
+    If party_id is None, only verifies the supplier has at least one mapping
+    for this company (so it's a usable supplier in this company's PO at all).
+    """
+    if party_id is None:
+        row = db.execute(
+            text(
+                """
+                SELECT 1 FROM jute_supp_party_map
+                WHERE jute_supplier_id = :supplier_id AND co_id = :co_id
+                LIMIT 1
+                """
+            ),
+            {"supplier_id": supplier_id, "co_id": co_id},
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=400,
+                detail="supplier_id is not available for this company",
+            )
+        return
+
+    row = db.execute(
+        text(
+            """
+            SELECT 1 FROM jute_supp_party_map
+            WHERE jute_supplier_id = :supplier_id
+              AND party_id = :party_id
+              AND co_id = :co_id
+            LIMIT 1
+            """
+        ),
+        {"supplier_id": supplier_id, "party_id": party_id, "co_id": co_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="party_id is not mapped to this supplier for the specified company",
+        )
+
+
 @router.post("/jute_po_create")
 async def jute_po_create(
     payload: JutePOCreate,
@@ -490,9 +561,17 @@ async def jute_po_create(
     """Create a new Jute PO."""
     try:
         from src.models.jute import JutePo, JutePoLi
-        
+
         user_id = token_data.get("user_id")
-        
+
+        # Defense in depth: enforce company scoping at the persistence layer.
+        # The dropdown queries are now co_id-filtered, but a stale client cache
+        # or a direct API caller could still POST a cross-company party_id.
+        _validate_branch_belongs_to_co(db, payload.branch_id, payload.co_id)
+        _validate_supplier_party_for_co(
+            db, payload.supplier_id, payload.party_id, payload.co_id
+        )
+
         # Get vehicle weight for validation
         vehicle_result = db.execute(
             text("SELECT weight FROM jute_lorry_mst WHERE jute_lorry_type_id = :vehicle_type_id"),
@@ -680,6 +759,31 @@ async def jute_po_update(
         if jute_po.status_id not in [21, 1]:
             raise HTTPException(status_code=400, detail="Jute PO cannot be edited in current status")
         
+        # Defense in depth: re-validate branch + supplier/party against co_id
+        # using the effective values that will be saved (payload overrides
+        # existing). Prevents a stale client or direct API call from
+        # introducing a cross-company party_id on update.
+        effective_branch_id = (
+            payload.branch_id if payload.branch_id is not None else jute_po.branch_id
+        )
+        effective_supplier_id = (
+            payload.supplier_id
+            if payload.supplier_id is not None
+            else jute_po.supplier_id
+        )
+        # party_id is nullable; treat "not in payload" as "keep existing".
+        # Pydantic doesn't distinguish missing vs explicit-None here, so we
+        # only validate when supplier or party is being touched.
+        effective_party_id = (
+            payload.party_id if payload.party_id is not None else jute_po.party_id
+        )
+        if effective_branch_id is not None:
+            _validate_branch_belongs_to_co(db, effective_branch_id, co_id)
+        if effective_supplier_id is not None:
+            _validate_supplier_party_for_co(
+                db, effective_supplier_id, effective_party_id, co_id
+            )
+
         # Update header fields
         if payload.branch_id is not None:
             jute_po.branch_id = payload.branch_id
