@@ -55,12 +55,89 @@ from src.sales.query import (
     get_sales_order_with_approval_info,
     get_max_sales_order_no_for_branch_fy,
 )
-from src.sales.constants import SALES_DOC_TYPES
+from src.sales.constants import (
+    SALES_DOC_TYPES,
+    INVOICE_TYPE_CODES,
+    resolve_invoice_type_code,
+)
 from src.common.companyAdmin.query import get_co_config_by_id_query
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# =============================================================================
+# VALIDATION HELPERS
+# =============================================================================
+
+# Required header fields when invoice type resolves to Govt Sacking.
+_GOVT_SKG_REQUIRED_HEADER_FIELDS = (
+    "pcso_no",
+    "pcso_date",
+    "administrative_office_address",
+    "destination_rail_head",
+    "loading_point",
+)
+
+# Required line-detail fields when invoice type resolves to Govt Sacking.
+_GOVT_SKG_REQUIRED_LINE_FIELDS = (
+    "pack_sheet",
+    "net_weight",
+    "total_weight",
+)
+
+
+def _is_blank(value) -> bool:
+    """Treat None and empty/whitespace-only strings as missing."""
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    return False
+
+
+def _validate_govt_skg_payload(invoice_type_code: str, payload: dict, raw_items) -> None:
+    """Reject Govt Sacking sales order payloads that are missing the
+    type-specific header or line fields.
+
+    Raises HTTPException(400) with a clear message naming the missing field(s).
+    No-op for non-Govt-SKG invoice types.
+    """
+    if invoice_type_code != INVOICE_TYPE_CODES["GOVT_SKG"]:
+        return
+
+    govtskg_hdr_raw = payload.get("govtskg")
+    # Treat None / non-dict / empty dict all as "all fields missing" so the
+    # error message always names the specific fields instead of a generic
+    # "object required" which leaves the user guessing.
+    govtskg_hdr = govtskg_hdr_raw if isinstance(govtskg_hdr_raw, dict) else {}
+
+    missing_hdr = [f for f in _GOVT_SKG_REQUIRED_HEADER_FIELDS if _is_blank(govtskg_hdr.get(f))]
+    if missing_hdr:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Govt Sacking sales order is missing required header field(s): "
+                + ", ".join(f"govtskg.{f}" for f in missing_hdr)
+            ),
+        )
+
+    if not isinstance(raw_items, list):
+        return  # outer validation already rejects this case
+
+    for idx, item in enumerate(raw_items, start=1):
+        govtskg_dtl_raw = item.get("govtskg_dtl") if isinstance(item, dict) else None
+        govtskg_dtl = govtskg_dtl_raw if isinstance(govtskg_dtl_raw, dict) else {}
+        missing_line = [f for f in _GOVT_SKG_REQUIRED_LINE_FIELDS if _is_blank(govtskg_dtl.get(f))]
+        if missing_line:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Govt Sacking sales order: items[{idx}] is missing required field(s): "
+                    + ", ".join(f"govtskg_dtl.{f}" for f in missing_line)
+                ),
+            )
 
 
 # =============================================================================
@@ -382,19 +459,22 @@ async def get_sales_order_by_id(
             gd = dict(g._mapping)
             gst_map[gd.get("sales_order_dtl_id")] = gd
 
-        # Hessian extension data (invoice_type=2)
+        # Resolve invoice type by NAME (id values are not stable across deployments)
+        header_invoice_type_code = resolve_invoice_type_code(header.get("invoice_type"))
+
+        # Hessian extension data
         hessian_map: dict[int, dict] = {}
-        if header.get("invoice_type") == 2:
+        if header_invoice_type_code == INVOICE_TYPE_CODES["HESSIAN"]:
             hessian_query = get_sales_order_hessian_by_id_query()
             hessian_results = db.execute(hessian_query, {"sales_order_id": sales_order_id}).fetchall()
             for h in hessian_results:
                 hd = dict(h._mapping)
                 hessian_map[hd.get("sales_order_dtl_id")] = hd
 
-        # Jute extension (invoice_type=4)
+        # Raw Jute extension
         jute_hdr = None
         jute_dtl_map: dict[int, dict] = {}
-        if header.get("invoice_type") == 4:
+        if header_invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import get_sales_order_jute_by_id, get_sales_order_jute_dtl_by_order_id
             jute_result = db.execute(get_sales_order_jute_by_id(), {"sales_order_id": sales_order_id}).fetchone()
             if jute_result:
@@ -404,18 +484,18 @@ async def get_sales_order_by_id(
                 jdd = dict(jd._mapping)
                 jute_dtl_map[jdd.get("sales_order_dtl_id")] = jdd
 
-        # Jute Yarn extension (invoice_type=3)
+        # Jute Yarn extension
         juteyarn_hdr = None
-        if header.get("invoice_type") == 3:
+        if header_invoice_type_code == INVOICE_TYPE_CODES["JUTE_YARN"]:
             from src.sales.query import get_sales_order_juteyarn_by_id
             juteyarn_result = db.execute(get_sales_order_juteyarn_by_id(), {"sales_order_id": sales_order_id}).fetchone()
             if juteyarn_result:
                 juteyarn_hdr = dict(juteyarn_result._mapping)
 
-        # Govt SKG extension (invoice_type=5)
+        # Govt SKG extension
         govtskg_hdr = None
         govtskg_dtl_map: dict[int, dict] = {}
-        if header.get("invoice_type") == 5:
+        if header_invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import get_sales_order_govtskg_by_id, get_sales_order_govtskg_dtl_by_order_id
             govtskg_result = db.execute(get_sales_order_govtskg_by_id(), {"sales_order_id": sales_order_id}).fetchone()
             if govtskg_result:
@@ -614,6 +694,9 @@ async def create_sales_order(
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
+        # Resolve canonical code from the seeded invoice_type_mst ids
+        # (1=Regular, 2=Hessian, 3=Govt Sacking, 4=Yarn, 5=Raw Jute, 7=Govt Sacking Freight).
+        invoice_type_code = resolve_invoice_type_code(invoice_type)
         broker_commission_percent = to_float(payload.get("broker_commission_percent"), "broker_commission_percent")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
@@ -627,6 +710,9 @@ async def create_sales_order(
                 sales_order_expiry_date = datetime.strptime(str(expiry_str), "%Y-%m-%d").date()
             except ValueError:
                 pass
+
+        # Govt SKG payload validation — reject early to prevent silent data loss
+        _validate_govt_skg_payload(invoice_type_code, payload, raw_items)
 
         # Normalize items
         normalized_items = []
@@ -649,11 +735,9 @@ async def create_sales_order(
                 "total_amount": to_float(item.get("total_amount"), f"items[{idx}].total_amount"),
                 "remarks": str(item.get("remarks", "")).strip()[:255] if item.get("remarks") else None,
                 "gst": item.get("gst"),
-                # Hessian-specific fields (invoice_type=2)
+                # Type-specific extension payloads (resolved by code, not id)
                 "hessian": item.get("hessian"),
-                # Jute-specific fields (invoice_type=4)
                 "jute_dtl": item.get("jute_dtl"),
-                # Govt SKG-specific fields (invoice_type=5)
                 "govtskg_dtl": item.get("govtskg_dtl"),
             })
 
@@ -696,23 +780,23 @@ async def create_sales_order(
         # Insert details and GST
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
-        hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
+        hessian_query = insert_sales_order_dtl_hessian() if invoice_type_code == INVOICE_TYPE_CODES["HESSIAN"] else None
 
-        # Jute (invoice_type=4)
+        # Raw Jute
         jute_hdr_data = payload.get("jute") or {}
         jute_dtl_query = None
-        if invoice_type == 4:
+        if invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import insert_sales_order_jute_dtl
             jute_dtl_query = insert_sales_order_jute_dtl()
 
-        # Govt SKG (invoice_type=5)
+        # Govt SKG
         govtskg_hdr_data = payload.get("govtskg") or {}
         govtskg_dtl_query = None
-        if invoice_type == 5:
+        if invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import insert_sales_order_govtskg_dtl
             govtskg_dtl_query = insert_sales_order_govtskg_dtl()
 
-        # Jute Yarn (invoice_type=3) — header only, no detail extension
+        # Jute Yarn — header only, no detail extension
         juteyarn_hdr_data = payload.get("juteyarn") or {}
 
         for item in normalized_items:
@@ -790,7 +874,7 @@ async def create_sales_order(
                 })
 
         # Insert header-level type extensions
-        if jute_hdr_data and invoice_type == 4:
+        if jute_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import insert_sales_order_jute
             db.execute(insert_sales_order_jute(), {
                 "sales_order_id": sales_order_id,
@@ -805,7 +889,7 @@ async def create_sales_order(
                 "updated_date_time": created_at,
             })
 
-        if juteyarn_hdr_data and invoice_type == 3:
+        if juteyarn_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["JUTE_YARN"]:
             from src.sales.query import insert_sales_order_juteyarn
             db.execute(insert_sales_order_juteyarn(), {
                 "sales_order_id": sales_order_id,
@@ -816,7 +900,7 @@ async def create_sales_order(
                 "updated_date_time": created_at,
             })
 
-        if govtskg_hdr_data and invoice_type == 5:
+        if govtskg_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import insert_sales_order_govtskg
             db.execute(insert_sales_order_govtskg(), {
                 "sales_order_id": sales_order_id,
@@ -914,6 +998,7 @@ async def update_sales_order_endpoint(
         shipping_to_id = to_int(payload.get("shipping_to"), "shipping_to")
         transporter_id = to_int(payload.get("transporter"), "transporter")
         invoice_type = to_int(payload.get("invoice_type"), "invoice_type")
+        invoice_type_code = resolve_invoice_type_code(invoice_type)
         broker_commission_percent = to_float(payload.get("broker_commission_percent"), "broker_commission_percent")
         freight_charges = to_float(payload.get("freight_charges"), "freight_charges")
         gross_amount = to_float(payload.get("gross_amount"), "gross_amount")
@@ -927,6 +1012,9 @@ async def update_sales_order_endpoint(
                 sales_order_expiry_date = datetime.strptime(str(expiry_str), "%Y-%m-%d").date()
             except ValueError:
                 pass
+
+        # Govt SKG payload validation — reject early to prevent silent data loss
+        _validate_govt_skg_payload(invoice_type_code, payload, raw_items)
 
         # Normalize items
         normalized_items = []
@@ -949,11 +1037,9 @@ async def update_sales_order_endpoint(
                 "total_amount": to_float(item.get("total_amount"), f"items[{idx}].total_amount"),
                 "remarks": str(item.get("remarks", "")).strip()[:255] if item.get("remarks") else None,
                 "gst": item.get("gst"),
-                # Hessian-specific fields (invoice_type=2)
+                # Type-specific extension payloads (resolved by code, not id)
                 "hessian": item.get("hessian"),
-                # Jute-specific fields (invoice_type=4)
                 "jute_dtl": item.get("jute_dtl"),
-                # Govt SKG-specific fields (invoice_type=5)
                 "govtskg_dtl": item.get("govtskg_dtl"),
             })
 
@@ -992,15 +1078,15 @@ async def update_sales_order_endpoint(
         delete_hessian_q = delete_sales_order_dtl_hessian()
         db.execute(delete_hessian_q, {"sales_order_id": sales_order_id})
 
-        # Delete old type-specific extension data
-        if invoice_type == 4:
+        # Delete old type-specific extension data (by canonical code)
+        if invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import delete_sales_order_jute, delete_sales_order_jute_dtl
             db.execute(delete_sales_order_jute_dtl(), {"sales_order_id": sales_order_id})
             db.execute(delete_sales_order_jute(), {"sales_order_id": sales_order_id})
-        elif invoice_type == 3:
+        elif invoice_type_code == INVOICE_TYPE_CODES["JUTE_YARN"]:
             from src.sales.query import delete_sales_order_juteyarn
             db.execute(delete_sales_order_juteyarn(), {"sales_order_id": sales_order_id})
-        elif invoice_type == 5:
+        elif invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import delete_sales_order_govtskg, delete_sales_order_govtskg_dtl
             db.execute(delete_sales_order_govtskg_dtl(), {"sales_order_id": sales_order_id})
             db.execute(delete_sales_order_govtskg(), {"sales_order_id": sales_order_id})
@@ -1023,23 +1109,23 @@ async def update_sales_order_endpoint(
         # Re-insert details, GST, and type extensions
         dtl_query = insert_sales_order_dtl()
         gst_query = insert_sales_order_dtl_gst()
-        hessian_query = insert_sales_order_dtl_hessian() if invoice_type == 2 else None
+        hessian_query = insert_sales_order_dtl_hessian() if invoice_type_code == INVOICE_TYPE_CODES["HESSIAN"] else None
 
-        # Jute (invoice_type=4)
+        # Raw Jute
         jute_hdr_data = payload.get("jute") or {}
         jute_dtl_query = None
-        if invoice_type == 4:
+        if invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import insert_sales_order_jute_dtl
             jute_dtl_query = insert_sales_order_jute_dtl()
 
-        # Govt SKG (invoice_type=5)
+        # Govt SKG
         govtskg_hdr_data = payload.get("govtskg") or {}
         govtskg_dtl_query = None
-        if invoice_type == 5:
+        if invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import insert_sales_order_govtskg_dtl
             govtskg_dtl_query = insert_sales_order_govtskg_dtl()
 
-        # Jute Yarn (invoice_type=3) — header only, no detail extension
+        # Jute Yarn — header only, no detail extension
         juteyarn_hdr_data = payload.get("juteyarn") or {}
 
         for item in normalized_items:
@@ -1117,7 +1203,7 @@ async def update_sales_order_endpoint(
                 })
 
         # Insert header-level type extensions
-        if jute_hdr_data and invoice_type == 4:
+        if jute_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["RAW_JUTE"]:
             from src.sales.query import insert_sales_order_jute
             db.execute(insert_sales_order_jute(), {
                 "sales_order_id": sales_order_id,
@@ -1132,7 +1218,7 @@ async def update_sales_order_endpoint(
                 "updated_date_time": updated_at,
             })
 
-        if juteyarn_hdr_data and invoice_type == 3:
+        if juteyarn_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["JUTE_YARN"]:
             from src.sales.query import insert_sales_order_juteyarn
             db.execute(insert_sales_order_juteyarn(), {
                 "sales_order_id": sales_order_id,
@@ -1143,7 +1229,7 @@ async def update_sales_order_endpoint(
                 "updated_date_time": updated_at,
             })
 
-        if govtskg_hdr_data and invoice_type == 5:
+        if govtskg_hdr_data and invoice_type_code == INVOICE_TYPE_CODES["GOVT_SKG"]:
             from src.sales.query import insert_sales_order_govtskg
             db.execute(insert_sales_order_govtskg(), {
                 "sales_order_id": sales_order_id,
