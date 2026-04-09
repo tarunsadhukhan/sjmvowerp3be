@@ -34,11 +34,12 @@ where igm.co_id = :co_id;"""
     return query
 
 def get_item_by_group_id_purchaseable(item_group_id: int):
-    sql = f"""Select im.item_id,
-im.item_code , im.item_name , im.uom_id , um.uom_name , im.tax_percentage, im.hsn_code
+    sql = """Select im.item_id,
+im.item_code, vip.full_item_code, im.item_name, im.uom_id, um.uom_name, im.tax_percentage, im.hsn_code
 from item_mst im
-left join uom_mst um on um.uom_id= im.uom_id
-where im.item_grp_id = :item_group_id and im.active =1 and im.purchaseable =1;"""
+left join uom_mst um on um.uom_id = im.uom_id
+left join vw_item_with_group_path vip on vip.item_id = im.item_id
+where im.item_grp_id = :item_group_id and im.active = 1 and im.purchaseable = 1;"""
     query = text(sql)
     return query
 
