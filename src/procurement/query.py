@@ -2104,6 +2104,7 @@ def get_drcr_note_dtl_query():
         dnd.discount_amount,
         pid.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         ig.item_grp_name,
         pid.uom_id,
@@ -2124,6 +2125,7 @@ def get_drcr_note_dtl_query():
     LEFT JOIN proc_inward_dtl AS pid ON pid.inward_dtl_id = dnd.inward_dtl_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
     LEFT JOIN drcr_note_dtl_gst AS dndg ON dndg.drcr_note_dtl_id = dnd.drcr_note_dtl_id
     LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
