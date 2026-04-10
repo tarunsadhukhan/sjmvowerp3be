@@ -81,11 +81,11 @@ _GOVT_SKG_REQUIRED_HEADER_FIELDS = (
 )
 
 # Required line-detail fields when invoice type resolves to Govt Sacking.
-_GOVT_SKG_REQUIRED_LINE_FIELDS = (
-    "pack_sheet",
-    "net_weight",
-    "total_weight",
-)
+# pack_sheet / net_weight / total_weight were previously required at the line
+# level but have been removed from the UI; the columns still exist in
+# sales_order_govtskg_dtl and are written when provided, just no longer
+# mandatory.
+_GOVT_SKG_REQUIRED_LINE_FIELDS: tuple[str, ...] = ()
 
 
 def _is_blank(value) -> bool:
