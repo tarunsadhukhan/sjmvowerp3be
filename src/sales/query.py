@@ -92,12 +92,14 @@ def get_transporters_for_sales(co_id: int = None):
 
 def get_item_by_group_id_saleable(item_group_id: int):
     """Get saleable items for a given item group, including tax_percentage and hsn_code."""
-    sql = """SELECT im.item_id, im.item_code, im.item_name,
+    sql = """SELECT im.item_id,
+        im.item_code, vip.full_item_code, im.item_name,
         im.uom_id, um.uom_name,
         im.tax_percentage, im.hsn_code,
         im.uom_rounding, im.rate_rounding
     FROM item_mst im
     LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
+    LEFT JOIN vw_item_with_group_path vip ON vip.item_id = im.item_id
     WHERE im.item_grp_id = :item_group_id
         AND im.active = 1
         AND im.saleable = 1;"""
@@ -773,6 +775,7 @@ def get_sales_order_dtl_by_id_query():
         sod.hsn_code,
         sod.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
         igm.item_grp_code,
@@ -791,6 +794,7 @@ def get_sales_order_dtl_by_id_query():
         sod.remarks
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
     LEFT JOIN uom_mst AS qum ON qum.uom_id = sod.uom_id

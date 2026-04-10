@@ -75,9 +75,6 @@ router = APIRouter()
 _GOVT_SKG_REQUIRED_HEADER_FIELDS = (
     "pcso_no",
     "pcso_date",
-    "administrative_office_address",
-    "destination_rail_head",
-    "loading_point",
 )
 
 # Required line-detail fields when invoice type resolves to Govt Sacking.
