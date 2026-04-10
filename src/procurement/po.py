@@ -641,7 +641,24 @@ async def get_indent_line_items(
 
 		indent_line_items_query = get_indent_line_items_for_po(indent_id=indent_id)
 		line_items_result = db.execute(indent_line_items_query, {"indent_id": indent_id}).fetchall()
-		line_items = [dict(r._mapping) for r in line_items_result]
+		line_items = []
+		for r in line_items_result:
+			item = dict(r._mapping)
+			# Format indent_no using the formatter
+			raw_indent_no = item.get("indent_no")
+			if raw_indent_no is not None and raw_indent_no != 0:
+				try:
+					item["indent_no"] = format_indent_no(
+						indent_no=int(raw_indent_no),
+						co_prefix=item.get("co_prefix"),
+						branch_prefix=item.get("branch_prefix"),
+						indent_date=item.get("indent_date"),
+						document_type="INDENT",
+					)
+				except Exception:
+					logger.exception("Error formatting indent number in PO line items")
+					item["indent_no"] = str(raw_indent_no)
+			line_items.append(item)
 
 		return {
 			"indent_id": indent_id,
@@ -1393,9 +1410,25 @@ async def get_po_by_id(
 			else:
 				indent_dtl_id_int = None
 			
+			# Format indent_no
+			raw_indent_no = detail.get("indent_no")
+			formatted_indent_no = None
+			if raw_indent_no is not None and raw_indent_no != 0:
+				try:
+					formatted_indent_no = format_indent_no(
+						indent_no=int(raw_indent_no),
+						co_prefix=detail.get("indent_co_prefix"),
+						branch_prefix=detail.get("indent_branch_prefix"),
+						indent_date=detail.get("indent_date"),
+						document_type="INDENT",
+					)
+				except Exception:
+					logger.exception("Error formatting indent number in PO detail")
+					formatted_indent_no = str(raw_indent_no)
+
 			line = {
 				"id": str(detail.get("po_dtl_id", "")) if detail.get("po_dtl_id") else "",
-				"indentNo": detail.get("indent_no") if detail.get("indent_no") else None,
+				"indentNo": formatted_indent_no,
 				"indentDtlId": str(indent_dtl_id_val) if indent_dtl_id_val else None,
 				"department": str(detail.get("dept_id", "")) if detail.get("dept_id") else None,
 				"itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",

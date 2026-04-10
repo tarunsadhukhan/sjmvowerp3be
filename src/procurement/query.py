@@ -704,8 +704,11 @@ def get_indent_line_items_for_po(indent_id: int):
         pid.indent_dtl_id,
         pi.indent_id,
         pi.indent_no,
+        pi.indent_date,
         pi.expense_type_id,
         pi.indent_type_id AS indent_type,
+        cm.co_prefix,
+        bm.branch_prefix,
         pid.item_id,
         im.item_code,
         im.item_name,
@@ -726,6 +729,8 @@ def get_indent_line_items_for_po(indent_id: int):
         ibv.min_po_qty AS min_order_qty
     FROM proc_indent_dtl AS pid
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
+    LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
@@ -1131,6 +1136,9 @@ def get_po_dtl_by_id_query():
         pod.indent_dtl_id,
         pid.indent_id,
         pi.indent_no,
+        pi.indent_date AS indent_date,
+        ind_bm.branch_prefix AS indent_branch_prefix,
+        ind_cm.co_prefix AS indent_co_prefix,
         dm.dept_id,
         dm.dept_desc AS dept_name
     FROM proc_po_dtl AS pod
@@ -1141,6 +1149,8 @@ def get_po_dtl_by_id_query():
     LEFT JOIN uom_mst AS um ON um.uom_id = pod.uom_id
     LEFT JOIN proc_indent_dtl AS pid ON pid.indent_dtl_id = pod.indent_dtl_id
     LEFT JOIN proc_indent AS pi ON pi.indent_id = pid.indent_id
+    LEFT JOIN branch_mst AS ind_bm ON ind_bm.branch_id = pi.branch_id
+    LEFT JOIN co_mst AS ind_cm ON ind_cm.co_id = ind_bm.co_id
     LEFT JOIN dept_mst AS dm ON dm.dept_id = (
         SELECT dept_id FROM proc_indent_dtl WHERE indent_dtl_id = pod.indent_dtl_id
     )
@@ -1680,6 +1690,7 @@ def get_inward_dtl_for_inspection_query():
         im.item_grp_id,
         ig.item_grp_code,
         ig.item_grp_name,
+        vip.full_item_code,
         pid.item_make_id,
         imk.item_make_name AS item_make_name,
         pid.accepted_item_make_id,
@@ -1695,6 +1706,7 @@ def get_inward_dtl_for_inspection_query():
     FROM proc_inward_dtl AS pid
     LEFT JOIN item_mst AS im ON im.item_id = pid.item_id
     LEFT JOIN item_grp_mst AS ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = pid.item_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = pid.item_make_id
     LEFT JOIN item_make AS aimk ON aimk.item_make_id = pid.accepted_item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = pid.uom_id
