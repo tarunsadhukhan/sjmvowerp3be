@@ -191,16 +191,16 @@ class TestCreateGovtSkgSalesOrder:
             for e in self._session._executed
         )
 
-    def test_govt_skg_create_rejects_missing_line_fields(self):
+    def test_govt_skg_create_accepts_missing_line_fields(self):
+        # pack_sheet / net_weight / total_weight are no longer required at the
+        # line level — the UI removed those columns. Header validation still
+        # applies; line-level extras are optional.
         payload = _valid_govt_skg_payload()
         payload["items"][0]["govtskg_dtl"].pop("pack_sheet")
 
         response = client.post("/api/salesOrder/create_sales_order", json=payload)
 
-        assert response.status_code == 400, response.text
-        detail = response.json().get("detail", "")
-        assert "pack_sheet" in detail
-        assert "items[1]" in detail
+        assert response.status_code == 200, response.text
 
     def test_govt_skg_create_rejects_absent_govtskg_with_field_level_message(self):
         """Regression for the SO 11 edit bug: when the UI forwards no 'govtskg'
