@@ -514,7 +514,8 @@ def insert_sales_order():
         footer_note, terms_conditions, internal_note,
         delivery_terms, payment_terms, delivery_days,
         freight_charges, gross_amount, net_amount,
-        status_id, approval_level, active
+        status_id, approval_level, active,
+        buyer_order_no, buyer_order_date
     ) VALUES (
         :updated_by, :updated_date_time,
         :sales_order_date, :sales_no, :invoice_type,
@@ -524,7 +525,8 @@ def insert_sales_order():
         :footer_note, :terms_conditions, :internal_note,
         :delivery_terms, :payment_terms, :delivery_days,
         :freight_charges, :gross_amount, :net_amount,
-        :status_id, :approval_level, :active
+        :status_id, :approval_level, :active,
+        :buyer_order_no, :buyer_order_date
     );"""
     return text(sql)
 
@@ -586,6 +588,8 @@ def update_sales_order():
         delivery_terms = :delivery_terms,
         payment_terms = :payment_terms,
         delivery_days = :delivery_days,
+        buyer_order_no = :buyer_order_no,
+        buyer_order_date = :buyer_order_date,
         freight_charges = :freight_charges,
         gross_amount = :gross_amount,
         net_amount = :net_amount,
@@ -744,6 +748,8 @@ def get_sales_order_by_id_query():
         so.payment_terms,
         so.delivery_days,
         so.freight_charges,
+        so.buyer_order_no,
+        so.buyer_order_date,
         so.gross_amount,
         so.net_amount,
         so.status_id,
@@ -893,7 +899,9 @@ def get_approved_sales_orders_query():
 
 
 def get_sales_order_lines_for_delivery():
-    """Get sales order line items to pre-fill delivery order lines."""
+    """Get sales order line items to pre-fill delivery order lines.
+    Joins vw_sales_order_outstanding to include balance columns and
+    filters out fully-delivered lines (bal_do_qty = 0)."""
     sql = """SELECT
         sod.sales_order_dtl_id,
         sod.quotation_lineitem_id,
@@ -916,15 +924,20 @@ def get_sales_order_lines_for_delivery():
         sod.discount_amount,
         sod.net_amount,
         sod.total_amount,
-        sod.remarks
+        sod.remarks,
+        COALESCE(vso.so_qty, sod.quantity) AS so_qty,
+        COALESCE(vso.do_consumed_qty, 0) AS do_consumed_qty,
+        COALESCE(vso.bal_do_qty, sod.quantity) AS bal_do_qty
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
     LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
     LEFT JOIN uom_mst AS qum ON qum.uom_id = sod.uom_id
+    LEFT JOIN vw_sales_order_outstanding AS vso ON vso.sales_order_dtl_id = sod.sales_order_dtl_id
     WHERE sod.sales_order_id = :sales_order_id
         AND sod.active = 1
+        AND (vso.bal_do_qty > 0 OR vso.bal_do_qty IS NULL)
     ORDER BY sod.sales_order_dtl_id;"""
     return text(sql)
 
@@ -1284,7 +1297,9 @@ def get_approved_delivery_orders_query():
 
 
 def get_delivery_order_lines_for_invoice():
-    """Get delivery order line items to pre-fill invoice lines."""
+    """Get delivery order line items to pre-fill invoice lines.
+    Joins vw_sales_do_outstanding to include balance columns and
+    filters out fully-invoiced lines (bal_do_qty = 0)."""
     sql = """SELECT
         sdod.sales_delivery_order_dtl_id AS delivery_order_dtl_id,
         sdod.hsn_code,
@@ -1310,7 +1325,10 @@ def get_delivery_order_lines_for_invoice():
         COALESCE(im.tax_percentage, 0) AS tax_percentage,
         sogd.pack_sheet AS govtskg_pack_sheet,
         sogd.net_weight AS govtskg_net_weight,
-        sogd.total_weight AS govtskg_total_weight
+        sogd.total_weight AS govtskg_total_weight,
+        COALESCE(vdo.do_qty, sdod.quantity) AS do_qty,
+        COALESCE(vdo.invoice_consumed_qty, 0) AS invoice_consumed_qty,
+        COALESCE(vdo.bal_do_qty, sdod.quantity) AS bal_do_qty
     FROM sales_delivery_order_dtl AS sdod
     LEFT JOIN item_mst AS im ON im.item_id = sdod.item_id
     LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
@@ -1318,14 +1336,18 @@ def get_delivery_order_lines_for_invoice():
     LEFT JOIN item_make AS imk ON imk.item_make_id = sdod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = sdod.uom_id
     LEFT JOIN sales_order_govtskg_dtl AS sogd ON sogd.sales_order_dtl_id = sdod.sales_order_dtl_id
+    LEFT JOIN vw_sales_do_outstanding AS vdo ON vdo.sales_delivery_order_dtl_id = sdod.sales_delivery_order_dtl_id
     WHERE sdod.sales_delivery_order_id = :sales_delivery_order_id
         AND sdod.active = 1
+        AND (vdo.bal_do_qty > 0 OR vdo.bal_do_qty IS NULL)
     ORDER BY sdod.sales_delivery_order_dtl_id;"""
     return text(sql)
 
 
 def get_sales_order_lines_for_invoice():
-    """Get sales order line items to pre-fill invoice lines."""
+    """Get sales order line items to pre-fill invoice lines.
+    Joins vw_sales_order_outstanding to include balance columns and
+    filters out fully-invoiced lines (bal_invoice_qty = 0)."""
     sql = """SELECT
         sod.sales_order_dtl_id,
         sod.hsn_code,
@@ -1348,15 +1370,20 @@ def get_sales_order_lines_for_invoice():
         sod.net_amount,
         sod.total_amount,
         sod.remarks,
-        COALESCE(im.tax_percentage, 0) AS tax_percentage
+        COALESCE(im.tax_percentage, 0) AS tax_percentage,
+        COALESCE(vso.so_qty, sod.quantity) AS so_qty,
+        COALESCE(vso.invoice_consumed_qty, 0) AS invoice_consumed_qty,
+        COALESCE(vso.bal_invoice_qty, sod.quantity) AS bal_invoice_qty
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
     LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = sod.uom_id
+    LEFT JOIN vw_sales_order_outstanding AS vso ON vso.sales_order_dtl_id = sod.sales_order_dtl_id
     WHERE sod.sales_order_id = :sales_order_id
         AND sod.active = 1
+        AND (vso.bal_invoice_qty > 0 OR vso.bal_invoice_qty IS NULL)
     ORDER BY sod.sales_order_dtl_id;"""
     return text(sql)
 
@@ -1379,7 +1406,9 @@ def get_approved_sales_orders_for_invoice():
         so.broker_id,
         so.billing_to_id,
         so.shipping_to_id,
-        so.transporter_id
+        so.transporter_id,
+        so.buyer_order_no,
+        so.buyer_order_date
     FROM sales_order AS so
     LEFT JOIN branch_mst AS bm ON bm.branch_id = so.branch_id
     LEFT JOIN co_mst AS cm ON cm.co_id = bm.co_id
@@ -2619,4 +2648,96 @@ def get_e_invoice_submission_history(invoice_id: int):
     WHERE invoice_id = :invoice_id
     ORDER BY submitted_date_time DESC
     """
+    return text(sql)
+
+
+# =============================================================================
+# SALES OUTSTANDING / FULFILLMENT VIEW QUERIES
+# =============================================================================
+
+def get_sales_order_outstanding():
+    """Query vw_sales_order_outstanding with optional filters."""
+    sql = """SELECT
+        sales_order_dtl_id,
+        sales_order_id,
+        sales_no,
+        sales_order_date,
+        branch_id,
+        co_id,
+        party_id,
+        invoice_type,
+        status_id,
+        item_id,
+        item_code,
+        item_name,
+        uom_id,
+        uom_name,
+        rate,
+        so_qty,
+        do_consumed_qty,
+        inv_via_do_qty,
+        inv_direct_qty,
+        invoice_consumed_qty,
+        bal_do_qty,
+        bal_invoice_qty
+    FROM vw_sales_order_outstanding
+    WHERE (:co_id IS NULL OR co_id = :co_id)
+      AND (:branch_id IS NULL OR branch_id = :branch_id)
+      AND (:party_id IS NULL OR party_id = :party_id)
+      AND (:item_id IS NULL OR item_id = :item_id)
+    ORDER BY sales_order_date DESC, sales_order_dtl_id;"""
+    return text(sql)
+
+
+def get_sales_do_outstanding():
+    """Query vw_sales_do_outstanding with optional filters."""
+    sql = """SELECT
+        sales_delivery_order_dtl_id,
+        sales_delivery_order_id,
+        delivery_order_no,
+        delivery_order_date,
+        sales_order_dtl_id,
+        sales_order_id,
+        branch_id,
+        co_id,
+        party_id,
+        invoice_type,
+        status_id,
+        item_id,
+        item_code,
+        item_name,
+        uom_id,
+        uom_name,
+        rate,
+        do_qty,
+        invoice_consumed_qty,
+        bal_do_qty
+    FROM vw_sales_do_outstanding
+    WHERE (:co_id IS NULL OR co_id = :co_id)
+      AND (:branch_id IS NULL OR branch_id = :branch_id)
+      AND (:party_id IS NULL OR party_id = :party_id)
+      AND (:item_id IS NULL OR item_id = :item_id)
+    ORDER BY delivery_order_date DESC, sales_delivery_order_dtl_id;"""
+    return text(sql)
+
+
+def get_sales_fulfillment_summary():
+    """Query vw_sales_fulfillment_summary with optional filters."""
+    sql = """SELECT
+        co_id,
+        branch_id,
+        party_id,
+        item_id,
+        uom_id,
+        total_so_qty,
+        total_do_qty,
+        total_invoiced_qty,
+        bal_so_to_deliver,
+        bal_so_to_invoice
+    FROM vw_sales_fulfillment_summary
+    WHERE (:co_id IS NULL OR co_id = :co_id)
+      AND (:branch_id IS NULL OR branch_id = :branch_id)
+      AND (:party_id IS NULL OR party_id = :party_id)
+      AND (:item_id IS NULL OR item_id = :item_id)
+    ORDER BY co_id, branch_id, party_id, item_id;"""
     return text(sql)

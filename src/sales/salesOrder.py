@@ -581,6 +581,8 @@ async def get_sales_order_by_id(
             "freightCharges": header.get("freight_charges"),
             "grossAmount": header.get("gross_amount"),
             "netAmount": header.get("net_amount"),
+            "buyerOrderNo": header.get("buyer_order_no"),
+            "buyerOrderDate": format_date(header.get("buyer_order_date")),
             "status": header.get("status_name"),
             "statusId": status_id,
             "approvalLevel": approval_level,
@@ -715,6 +717,15 @@ async def create_sales_order(
             except ValueError:
                 pass
 
+        buyer_order_no_val = payload.get("buyer_order_no")
+        buyer_order_date_val = None
+        raw_buyer_date = payload.get("buyer_order_date")
+        if raw_buyer_date:
+            try:
+                buyer_order_date_val = datetime.strptime(str(raw_buyer_date), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
         # Govt SKG payload validation — reject early to prevent silent data loss
         _validate_govt_skg_payload(invoice_type_code, payload, raw_items)
 
@@ -774,6 +785,8 @@ async def create_sales_order(
             "status_id": 21,
             "approval_level": 0,
             "active": 1,
+            "buyer_order_no": buyer_order_no_val,
+            "buyer_order_date": buyer_order_date_val,
         }
 
         result = db.execute(insert_header, header_params)
@@ -1018,6 +1031,15 @@ async def update_sales_order_endpoint(
             except ValueError:
                 pass
 
+        buyer_order_no_val = payload.get("buyer_order_no")
+        buyer_order_date_val = None
+        raw_buyer_date = payload.get("buyer_order_date")
+        if raw_buyer_date:
+            try:
+                buyer_order_date_val = datetime.strptime(str(raw_buyer_date), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
         # Govt SKG payload validation — reject early to prevent silent data loss
         _validate_govt_skg_payload(invoice_type_code, payload, raw_items)
 
@@ -1077,6 +1099,8 @@ async def update_sales_order_endpoint(
             "sales_no": existing.get("sales_no"),
             "active": existing.get("active"),
             "status_id": existing.get("status_id"),
+            "buyer_order_no": buyer_order_no_val,
+            "buyer_order_date": buyer_order_date_val,
         })
 
         # Delete old hessian, GST, then soft-delete old details

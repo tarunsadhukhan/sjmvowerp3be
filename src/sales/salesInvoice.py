@@ -244,6 +244,8 @@ async def get_sales_invoice_setup_1(
                 "billing_to_id": mapped.get("billing_to_id"),
                 "shipping_to_id": mapped.get("shipping_to_id"),
                 "transporter_id": mapped.get("transporter_id"),
+                "buyer_order_no": mapped.get("buyer_order_no"),
+                "buyer_order_date": format_date(mapped.get("buyer_order_date")),
             })
 
         # Additional charges master
