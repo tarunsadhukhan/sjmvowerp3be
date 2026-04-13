@@ -1015,6 +1015,7 @@ def get_bom_items_with_children(co_id: int = None):
     SELECT
       im.item_id,
       im.item_code,
+      vip.full_item_code,
       im.item_name,
       ig.item_grp_name AS item_group_name,
       COUNT(ib.bom_id) AS component_count,
@@ -1025,14 +1026,15 @@ def get_bom_items_with_children(co_id: int = None):
       COALESCE(snap.total_cost, 0) AS total_cost
     FROM item_mst im
     INNER JOIN item_bom ib ON ib.parent_item_id = im.item_id AND ib.co_id = :co_id AND ib.active = 1
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
     LEFT JOIN item_bom_hdr_mst bh
         ON bh.item_id = im.item_id AND bh.co_id = :co_id AND bh.active = 1 AND bh.is_current = 1
     LEFT JOIN status_mst sm ON sm.status_id = bh.status_id
     LEFT JOIN bom_cost_snapshot snap
         ON snap.bom_hdr_id = bh.bom_hdr_id AND snap.co_id = :co_id AND snap.is_current = 1 AND snap.active = 1
-    WHERE (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
-    GROUP BY im.item_id, im.item_code, im.item_name, ig.item_grp_name,
+    WHERE (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search OR vip.full_item_code LIKE :search)
+    GROUP BY im.item_id, im.item_code, vip.full_item_code, im.item_name, ig.item_grp_name,
              bh.bom_hdr_id, bh.bom_version, bh.version_label, sm.status_name, snap.total_cost
     ORDER BY im.item_code;
     """
@@ -1051,6 +1053,7 @@ def get_bom_children_query():
       um.uom_name,
       ib.sequence_no,
       im.item_code AS child_item_code,
+      vip.full_item_code AS child_full_item_code,
       im.item_name AS child_item_name,
       im.assembly AS child_is_assembly,
       EXISTS(
@@ -1060,6 +1063,7 @@ def get_bom_children_query():
       ) AS has_children
     FROM item_bom ib
     INNER JOIN item_mst im ON im.item_id = ib.child_item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = ib.child_item_id
     LEFT JOIN uom_mst um ON um.uom_id = ib.uom_id
     WHERE ib.parent_item_id = :parent_item_id
       AND ib.co_id = :co_id
@@ -1076,12 +1080,14 @@ def get_bom_parents_query():
       ib.bom_id,
       ib.parent_item_id,
       im.item_code AS parent_item_code,
+      vip.full_item_code AS parent_full_item_code,
       im.item_name AS parent_item_name,
       ib.qty,
       ib.uom_id,
       um.uom_name
     FROM item_bom ib
     INNER JOIN item_mst im ON im.item_id = ib.parent_item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = ib.parent_item_id
     LEFT JOIN uom_mst um ON um.uom_id = ib.uom_id
     WHERE ib.child_item_id = :child_item_id
       AND ib.co_id = :co_id
@@ -1097,15 +1103,17 @@ def get_items_for_bom_dropdown():
     SELECT
       im.item_id,
       im.item_code,
+      vip.full_item_code,
       im.item_name,
       im.uom_id,
       um.uom_name
     FROM item_mst im
     LEFT JOIN uom_mst um ON um.uom_id = im.uom_id
     LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     WHERE ig.co_id = :co_id
       AND im.active = 1
-      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
+      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search OR vip.full_item_code LIKE :search)
     ORDER BY im.item_code
     LIMIT 50;
     """

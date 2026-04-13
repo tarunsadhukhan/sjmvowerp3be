@@ -900,8 +900,11 @@ def get_sales_order_lines_for_delivery():
         sod.hsn_code,
         sod.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
+        igm.item_grp_code,
+        igm.item_grp_name,
         sod.item_make_id,
         imk.item_make_name,
         sod.quantity,
@@ -916,6 +919,8 @@ def get_sales_order_lines_for_delivery():
         sod.remarks
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
+    LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
     LEFT JOIN uom_mst AS qum ON qum.uom_id = sod.uom_id
     WHERE sod.sales_order_id = :sales_order_id
@@ -1152,6 +1157,7 @@ def get_delivery_order_dtl_by_id_query():
         sdod.hsn_code,
         sdod.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
         igm.item_grp_code,
@@ -1170,6 +1176,7 @@ def get_delivery_order_dtl_by_id_query():
         sdod.remarks
     FROM sales_delivery_order_dtl AS sdod
     LEFT JOIN item_mst AS im ON im.item_id = sdod.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sdod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = sdod.uom_id
@@ -1283,6 +1290,7 @@ def get_delivery_order_lines_for_invoice():
         sdod.hsn_code,
         sdod.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
         igm.item_grp_code AS item_grp_code,
@@ -1299,12 +1307,17 @@ def get_delivery_order_lines_for_invoice():
         sdod.net_amount,
         sdod.total_amount,
         sdod.remarks,
-        COALESCE(im.tax_percentage, 0) AS tax_percentage
+        COALESCE(im.tax_percentage, 0) AS tax_percentage,
+        sogd.pack_sheet AS govtskg_pack_sheet,
+        sogd.net_weight AS govtskg_net_weight,
+        sogd.total_weight AS govtskg_total_weight
     FROM sales_delivery_order_dtl AS sdod
     LEFT JOIN item_mst AS im ON im.item_id = sdod.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sdod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = sdod.uom_id
+    LEFT JOIN sales_order_govtskg_dtl AS sogd ON sogd.sales_order_dtl_id = sdod.sales_order_dtl_id
     WHERE sdod.sales_delivery_order_id = :sales_delivery_order_id
         AND sdod.active = 1
     ORDER BY sdod.sales_delivery_order_dtl_id;"""
@@ -1318,6 +1331,7 @@ def get_sales_order_lines_for_invoice():
         sod.hsn_code,
         sod.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
         igm.item_grp_code AS item_grp_code,
@@ -1337,6 +1351,7 @@ def get_sales_order_lines_for_invoice():
         COALESCE(im.tax_percentage, 0) AS tax_percentage
     FROM sales_order_dtl AS sod
     LEFT JOIN item_mst AS im ON im.item_id = sod.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN item_grp_mst AS igm ON igm.item_grp_id = im.item_grp_id
     LEFT JOIN item_make AS imk ON imk.item_make_id = sod.item_make_id
     LEFT JOIN uom_mst AS um ON um.uom_id = sod.uom_id
@@ -1549,6 +1564,8 @@ def get_invoice_dtl_by_id_query():
         ili.invoice_id,
         ili.hsn_code,
         ili.item_id,
+        im.item_code,
+        vip.full_item_code,
         im.item_name,
         im.item_grp_id,
         ili.item_make_id,
@@ -1567,6 +1584,7 @@ def get_invoice_dtl_by_id_query():
         ili.sales_order_dtl_id
     FROM sales_invoice_dtl AS ili
     LEFT JOIN item_mst AS im ON im.item_id = ili.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN uom_mst AS um ON um.uom_id = ili.uom_id
     WHERE ili.invoice_id = :invoice_id
     ORDER BY ili.invoice_line_item_id;"""
@@ -2220,11 +2238,11 @@ def insert_sales_invoice_govtskg():
     sql = """INSERT INTO sales_invoice_govtskg (
         invoice_id, pcso_no, pcso_date,
         administrative_office_address, destination_rail_head,
-        loading_point, pack_sheet, net_weight, total_weight
+        loading_point, mode_of_transport, pack_sheet, net_weight, total_weight
     ) VALUES (
         :invoice_id, :pcso_no, :pcso_date,
         :administrative_office_address, :destination_rail_head,
-        :loading_point, :pack_sheet, :net_weight, :total_weight
+        :loading_point, :mode_of_transport, :pack_sheet, :net_weight, :total_weight
     );"""
     return text(sql)
 
@@ -2246,6 +2264,7 @@ def get_sales_invoice_govtskg_by_id():
         sg.administrative_office_address,
         sg.destination_rail_head,
         sg.loading_point,
+        sg.mode_of_transport,
         sg.pack_sheet,
         sg.net_weight,
         sg.total_weight
@@ -2384,10 +2403,10 @@ def get_sales_order_juteyarn_by_id():
 def insert_sales_order_govtskg():
     sql = """INSERT INTO sales_order_govtskg (
         sales_order_id, pcso_no, pcso_date, administrative_office_address,
-        destination_rail_head, loading_point, updated_by, updated_date_time
+        destination_rail_head, loading_point, mode_of_transport, updated_by, updated_date_time
     ) VALUES (
         :sales_order_id, :pcso_no, :pcso_date, :administrative_office_address,
-        :destination_rail_head, :loading_point, :updated_by, :updated_date_time
+        :destination_rail_head, :loading_point, :mode_of_transport, :updated_by, :updated_date_time
     );"""
     return text(sql)
 
@@ -2425,6 +2444,29 @@ def get_sales_order_govtskg_dtl_by_order_id():
     FROM sales_order_govtskg_dtl sogd
     INNER JOIN sales_order_dtl sod ON sod.sales_order_dtl_id = sogd.sales_order_dtl_id
     WHERE sod.sales_order_id = :sales_order_id AND sod.active = 1;"""
+    return text(sql)
+
+
+# =============================================================================
+# GOVT SKG TRANSPORT CHARGE RATE QUERIES
+# =============================================================================
+
+
+def get_govtskg_transport_charge_rates():
+    """Fetch all active transport charge rates. Returns mode, charge_id, and rate."""
+    sql = """SELECT id, mode_of_transport, additional_charges_id, rate_per_100pcs, co_id
+    FROM govtskg_transport_charge_rate
+    WHERE active = 1
+    ORDER BY mode_of_transport, additional_charges_id;"""
+    return text(sql)
+
+
+def get_govtskg_transport_modes():
+    """Fetch distinct active transport modes."""
+    sql = """SELECT DISTINCT mode_of_transport
+    FROM govtskg_transport_charge_rate
+    WHERE active = 1
+    ORDER BY mode_of_transport;"""
     return text(sql)
 
 

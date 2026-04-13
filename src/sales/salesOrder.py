@@ -271,6 +271,11 @@ async def get_sales_order_setup_1(
         charges_result = db.execute(get_additional_charges_dropdown()).fetchall()
         additional_charges_master = [dict(r._mapping) for r in charges_result]
 
+        # Transport charge rates for Govt Sacking
+        from src.sales.query import get_govtskg_transport_charge_rates
+        transport_rates_result = db.execute(get_govtskg_transport_charge_rates()).fetchall()
+        transport_charge_rates = [dict(r._mapping) for r in transport_rates_result]
+
         return {
             "branches": branches,
             "customers": customers,
@@ -282,6 +287,7 @@ async def get_sales_order_setup_1(
             "invoice_types": invoice_types,
             "mukam_list": mukam_list,
             "additional_charges_master": additional_charges_master,
+            "transport_charge_rates": transport_charge_rates,
         }
     except HTTPException:
         raise
@@ -601,6 +607,7 @@ async def get_sales_order_by_id(
                 "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
                 "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
                 "itemName": detail.get("item_name"),
+                "fullItemCode": detail.get("full_item_code") or detail.get("item_code") or "",
                 "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
                 "qtyUom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
@@ -906,6 +913,7 @@ async def create_sales_order(
                 "administrative_office_address": govtskg_hdr_data.get("administrative_office_address"),
                 "destination_rail_head": govtskg_hdr_data.get("destination_rail_head"),
                 "loading_point": govtskg_hdr_data.get("loading_point"),
+                "mode_of_transport": govtskg_hdr_data.get("mode_of_transport"),
                 "updated_by": updated_by,
                 "updated_date_time": created_at,
             })
@@ -1235,6 +1243,7 @@ async def update_sales_order_endpoint(
                 "administrative_office_address": govtskg_hdr_data.get("administrative_office_address"),
                 "destination_rail_head": govtskg_hdr_data.get("destination_rail_head"),
                 "loading_point": govtskg_hdr_data.get("loading_point"),
+                "mode_of_transport": govtskg_hdr_data.get("mode_of_transport"),
                 "updated_by": updated_by,
                 "updated_date_time": updated_at,
             })

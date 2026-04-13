@@ -209,6 +209,7 @@ class SaleInvoiceGovtskg(Base):
     administrative_office_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     destination_rail_head: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     loading_point: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mode_of_transport: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     pack_sheet: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
     net_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
     total_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
@@ -656,6 +657,7 @@ class SalesOrderGovtskg(Base):
     administrative_office_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     destination_rail_head: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     loading_point: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mode_of_transport: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_date_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
@@ -687,6 +689,23 @@ class SalesOrderGovtskgDtl(Base):
     order_dtl: Mapped[Optional["SalesOrderDtl"]] = relationship(
         "SalesOrderDtl", back_populates="govtskg_dtl"
     )
+
+
+# =============================================================================
+# GOVT SKG TRANSPORT CHARGE RATE CONFIG
+# =============================================================================
+
+
+class GovtskgTransportChargeRate(Base):
+    """Configurable charge rates per mode of transport for Govt Sacking."""
+    __tablename__ = "govtskg_transport_charge_rate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mode_of_transport: Mapped[str] = mapped_column(String(20), nullable=False)
+    additional_charges_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    rate_per_100pcs: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 # =============================================================================
