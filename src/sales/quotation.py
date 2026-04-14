@@ -268,6 +268,7 @@ async def get_quotation_table(
     limit: int = 10,
     search: str | None = None,
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
     """Return paginated sales quotation list."""
     try:
@@ -278,6 +279,7 @@ async def get_quotation_table(
 
         params = {
             "co_id": co_id,
+            "branch_id": branch_id,
             "search_like": search_like,
             "limit": limit,
             "offset": offset,
@@ -316,7 +318,7 @@ async def get_quotation_table(
             })
 
         count_query = get_quotation_table_count_query()
-        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        count_result = db.execute(count_query, {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}).scalar()
         total = int(count_result) if count_result is not None else 0
 
         return {"data": data, "total": total}

@@ -134,6 +134,7 @@ def get_bom_costing_list_query():
         bh.bom_hdr_id,
         bh.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         bh.bom_version,
         bh.version_label,
@@ -153,6 +154,7 @@ def get_bom_costing_list_query():
         snap.status AS snapshot_status
     FROM item_bom_hdr_mst bh
     INNER JOIN item_mst im ON im.item_id = bh.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN status_mst sm ON sm.status_id = bh.status_id
     LEFT JOIN bom_cost_snapshot snap
         ON snap.bom_hdr_id = bh.bom_hdr_id
@@ -160,7 +162,7 @@ def get_bom_costing_list_query():
         AND snap.is_current = 1
         AND snap.active = 1
     WHERE bh.co_id = :co_id AND bh.active = 1
-      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
+      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search OR vip.full_item_code LIKE :search)
     ORDER BY bh.updated_date_time DESC;
     """
     return text(sql)
@@ -175,6 +177,7 @@ def get_bom_costing_detail_query():
         bh.bom_hdr_id,
         bh.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         bh.bom_version,
         bh.version_label,
@@ -189,6 +192,7 @@ def get_bom_costing_detail_query():
         bh.updated_date_time
     FROM item_bom_hdr_mst bh
     INNER JOIN item_mst im ON im.item_id = bh.item_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     LEFT JOIN status_mst sm ON sm.status_id = bh.status_id
     WHERE bh.bom_hdr_id = :bom_hdr_id
       AND bh.co_id = :co_id
@@ -253,13 +257,15 @@ def get_items_for_bom_costing_dropdown_query():
     SELECT
         im.item_id,
         im.item_code,
+        vip.full_item_code,
         im.item_name,
         ig.item_grp_name
     FROM item_mst im
     LEFT JOIN item_grp_mst ig ON ig.item_grp_id = im.item_grp_id
+    LEFT JOIN vw_item_with_group_path AS vip ON vip.item_id = im.item_id
     WHERE ig.co_id = :co_id
       AND im.active = 1
-      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search)
+      AND (:search IS NULL OR im.item_code LIKE :search OR im.item_name LIKE :search OR vip.full_item_code LIKE :search)
     ORDER BY im.item_code
     LIMIT 50;
     """

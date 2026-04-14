@@ -77,6 +77,9 @@ from src.sales.query import (
     # E-invoice functions
     get_transporter_branches,
     get_e_invoice_submission_history,
+    # SO extension data for invoice pre-fill
+    get_sales_order_govtskg_by_id,
+    get_sales_order_additional_by_id,
 )
 from src.sales.constants import SALES_DOC_TYPES
 
@@ -241,12 +244,19 @@ async def get_sales_invoice_setup_1(
                 "billing_to_id": mapped.get("billing_to_id"),
                 "shipping_to_id": mapped.get("shipping_to_id"),
                 "transporter_id": mapped.get("transporter_id"),
+                "buyer_order_no": mapped.get("buyer_order_no"),
+                "buyer_order_date": format_date(mapped.get("buyer_order_date")),
             })
 
         # Additional charges master
         from src.sales.query import get_additional_charges_dropdown
         charges_result = db.execute(get_additional_charges_dropdown()).fetchall()
         additional_charges_master = [dict(r._mapping) for r in charges_result]
+
+        # Transport charge rates for Govt Sacking
+        from src.sales.query import get_govtskg_transport_charge_rates
+        transport_rates_result = db.execute(get_govtskg_transport_charge_rates()).fetchall()
+        transport_charge_rates = [dict(r._mapping) for r in transport_rates_result]
 
         # Company details for invoice header
         co_result = db.execute(
@@ -285,6 +295,7 @@ async def get_sales_invoice_setup_1(
             "mukam_list": mukam_list,
             "approved_sales_orders": approved_sales_orders,
             "additional_charges_master": additional_charges_master,
+            "transport_charge_rates": transport_charge_rates,
             "company": company,
             "bank_details": bank_details,
         }
@@ -337,17 +348,64 @@ async def get_delivery_order_lines(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get delivery order line items to pre-fill a new invoice."""
+    """Get delivery order line items plus linked SO extension data to pre-fill a new invoice.
+
+    Returns line items and, when a linked sales order exists, also returns
+    govtskg header/detail and additional charges from the SO — so the
+    frontend receives everything it needs in a single call.
+    """
     try:
         q_id = request.query_params.get("sales_delivery_order_id")
         if q_id is None:
             raise HTTPException(status_code=400, detail="sales_delivery_order_id is required")
 
         sales_delivery_order_id = int(q_id)
+
+        # 1. Line items
         query = get_delivery_order_lines_for_invoice()
         result = db.execute(query, {"sales_delivery_order_id": sales_delivery_order_id}).fetchall()
         data = [dict(r._mapping) for r in result]
-        return {"data": data}
+
+        response: dict = {"data": data}
+
+        # 2. Look up linked SO from the DO header
+        do_header = db.execute(
+            text("SELECT sales_order_id, invoice_type FROM sales_delivery_order WHERE sales_delivery_order_id = :id"),
+            {"id": sales_delivery_order_id},
+        ).fetchone()
+
+        if do_header:
+            do_hdr = dict(do_header._mapping)
+            so_id = do_hdr.get("sales_order_id")
+            inv_type = do_hdr.get("invoice_type")
+
+            if inv_type is not None:
+                response["invoice_type"] = inv_type
+
+            if so_id:
+                # 3a. Govtskg header (PCSO, mode of transport, etc.)
+                govtskg_row = db.execute(
+                    get_sales_order_govtskg_by_id(), {"sales_order_id": so_id}
+                ).fetchone()
+                if govtskg_row:
+                    g = dict(govtskg_row._mapping)
+                    response["so_govtskg"] = {
+                        "pcso_no": g.get("pcso_no"),
+                        "pcso_date": str(g["pcso_date"]) if g.get("pcso_date") else None,
+                        "mode_of_transport": g.get("mode_of_transport"),
+                        "administrative_office_address": g.get("administrative_office_address"),
+                        "destination_rail_head": g.get("destination_rail_head"),
+                        "loading_point": g.get("loading_point"),
+                    }
+
+                # 3b. SO additional charges (with GST)
+                additional_results = db.execute(
+                    get_sales_order_additional_by_id(), {"sales_order_id": so_id}
+                ).fetchall()
+                if additional_results:
+                    response["so_additional_charges"] = [dict(r._mapping) for r in additional_results]
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -360,7 +418,7 @@ async def get_sales_order_lines(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get sales order line items to pre-fill a new invoice."""
+    """Get sales order line items plus SO extension data to pre-fill a new invoice."""
     try:
         q_id = request.query_params.get("sales_order_id")
         if q_id is None:
@@ -370,7 +428,42 @@ async def get_sales_order_lines(
         query = get_sales_order_lines_for_invoice()
         result = db.execute(query, {"sales_order_id": sales_order_id}).fetchall()
         data = [dict(r._mapping) for r in result]
-        return {"data": data}
+
+        response: dict = {"data": data}
+
+        # SO header — invoice_type (so the frontend can align the invoice type)
+        so_header = db.execute(
+            text("SELECT invoice_type FROM sales_order WHERE sales_order_id = :id"),
+            {"id": sales_order_id},
+        ).fetchone()
+        if so_header:
+            inv_type = dict(so_header._mapping).get("invoice_type")
+            if inv_type is not None:
+                response["invoice_type"] = inv_type
+
+        # SO extension data — govtskg header
+        govtskg_row = db.execute(
+            get_sales_order_govtskg_by_id(), {"sales_order_id": sales_order_id}
+        ).fetchone()
+        if govtskg_row:
+            g = dict(govtskg_row._mapping)
+            response["so_govtskg"] = {
+                "pcso_no": g.get("pcso_no"),
+                "pcso_date": str(g["pcso_date"]) if g.get("pcso_date") else None,
+                "mode_of_transport": g.get("mode_of_transport"),
+                "administrative_office_address": g.get("administrative_office_address"),
+                "destination_rail_head": g.get("destination_rail_head"),
+                "loading_point": g.get("loading_point"),
+            }
+
+        # SO additional charges (with GST)
+        additional_results = db.execute(
+            get_sales_order_additional_by_id(), {"sales_order_id": sales_order_id}
+        ).fetchall()
+        if additional_results:
+            response["so_additional_charges"] = [dict(r._mapping) for r in additional_results]
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -391,6 +484,7 @@ async def get_sales_invoice_table(
     limit: int = 10,
     search: str | None = None,
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
     """Return paginated sales invoice list."""
     try:
@@ -399,7 +493,7 @@ async def get_sales_invoice_table(
         offset = (page - 1) * limit
         search_like = f"%{search.strip()}%" if search else None
 
-        params = {"co_id": co_id, "search_like": search_like, "limit": limit, "offset": offset}
+        params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like, "limit": limit, "offset": offset}
 
         list_query = get_invoice_table_query()
         rows = db.execute(list_query, params).fetchall()
@@ -434,7 +528,7 @@ async def get_sales_invoice_table(
             })
 
         count_query = get_invoice_table_count_query()
-        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        count_result = db.execute(count_query, {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}).scalar()
         total = int(count_result) if count_result is not None else 0
 
         return {"data": data, "total": total}
@@ -694,6 +788,7 @@ async def get_sales_invoice_by_id(
                     "administrativeOfficeAddress": govtskg.get("administrative_office_address"),
                     "destinationRailHead": govtskg.get("destination_rail_head"),
                     "loadingPoint": govtskg.get("loading_point"),
+                    "modeOfTransport": govtskg.get("mode_of_transport"),
                     "packSheet": float(govtskg["pack_sheet"]) if govtskg.get("pack_sheet") is not None else None,
                     "netWeight": float(govtskg["net_weight"]) if govtskg.get("net_weight") is not None else None,
                     "totalWeight": float(govtskg["total_weight"]) if govtskg.get("total_weight") is not None else None,
@@ -746,6 +841,7 @@ async def get_sales_invoice_by_id(
                 "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
                 "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
                 "itemName": detail.get("item_name"),
+                "fullItemCode": detail.get("full_item_code") or detail.get("item_code") or "",
                 "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
                 "uom": str(detail.get("uom_id", "")) if detail.get("uom_id") else "",
@@ -1165,6 +1261,7 @@ async def create_sales_invoice(
                 "administrative_office_address": govtskg_data.get("administrative_office_address"),
                 "destination_rail_head": govtskg_data.get("destination_rail_head"),
                 "loading_point": govtskg_data.get("loading_point"),
+                "mode_of_transport": govtskg_data.get("mode_of_transport"),
                 "pack_sheet": to_float(govtskg_data.get("pack_sheet"), "pack_sheet"),
                 "net_weight": to_float(govtskg_data.get("net_weight"), "net_weight"),
                 "total_weight": to_float(govtskg_data.get("total_weight"), "total_weight"),
@@ -1533,6 +1630,7 @@ async def update_sales_invoice_endpoint(
                 "administrative_office_address": govtskg_data.get("administrative_office_address"),
                 "destination_rail_head": govtskg_data.get("destination_rail_head"),
                 "loading_point": govtskg_data.get("loading_point"),
+                "mode_of_transport": govtskg_data.get("mode_of_transport"),
                 "pack_sheet": to_float(govtskg_data.get("pack_sheet"), "pack_sheet"),
                 "net_weight": to_float(govtskg_data.get("net_weight"), "net_weight"),
                 "total_weight": to_float(govtskg_data.get("total_weight"), "total_weight"),
