@@ -209,6 +209,7 @@ class SaleInvoiceGovtskg(Base):
     administrative_office_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     destination_rail_head: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     loading_point: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mode_of_transport: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     pack_sheet: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
     net_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
     total_weight: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(10, 3), nullable=True)
@@ -455,6 +456,8 @@ class SalesOrder(Base):
     status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     approval_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    buyer_order_no: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    buyer_order_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Relationships
     quotation: Mapped[Optional["SalesQuotation"]] = relationship("SalesQuotation")
@@ -656,6 +659,7 @@ class SalesOrderGovtskg(Base):
     administrative_office_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     destination_rail_head: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     loading_point: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    mode_of_transport: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_date_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.current_timestamp()
@@ -687,6 +691,23 @@ class SalesOrderGovtskgDtl(Base):
     order_dtl: Mapped[Optional["SalesOrderDtl"]] = relationship(
         "SalesOrderDtl", back_populates="govtskg_dtl"
     )
+
+
+# =============================================================================
+# GOVT SKG TRANSPORT CHARGE RATE CONFIG
+# =============================================================================
+
+
+class GovtskgTransportChargeRate(Base):
+    """Configurable charge rates per mode of transport for Govt Sacking."""
+    __tablename__ = "govtskg_transport_charge_rate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mode_of_transport: Mapped[str] = mapped_column(String(20), nullable=False)
+    additional_charges_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    rate_per_100pcs: Mapped[float] = mapped_column(Double, nullable=False, default=0)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 # =============================================================================
@@ -1026,3 +1047,103 @@ class EInvoiceResponse(Base):
 
     # Relationships
     invoice: Mapped["InvoiceHdr"] = relationship(back_populates="e_invoice_responses")
+
+
+# =============================================================================
+# SALES OUTSTANDING VIEWS (read-only)
+# =============================================================================
+
+class VwSalesOrderOutstanding(Base):
+    """
+    Read-only model for vw_sales_order_outstanding view.
+
+    Per sales_order_dtl row (for approved/closed SOs), provides:
+    - so_qty: original order quantity
+    - do_consumed_qty: total qty consumed by DOs (status 3/5/20)
+    - invoice_consumed_qty: total invoiced qty (both DO and direct paths)
+    - bal_do_qty: remaining to deliver (so_qty - do_consumed_qty)
+    - bal_invoice_qty: remaining to invoice (so_qty - invoice_consumed_qty)
+
+    Consumed statuses: 3 (Approved), 5 (Closed), 20 (Pending Approval).
+    """
+    __tablename__ = "vw_sales_order_outstanding"
+    __table_args__ = {"extend_existing": True}
+
+    sales_order_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sales_order_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sales_no: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    sales_order_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    party_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    invoice_type: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    item_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    so_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    do_consumed_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    inv_via_do_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    inv_direct_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    invoice_consumed_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_do_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_invoice_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+
+
+class VwSalesDoOutstanding(Base):
+    """
+    Read-only model for vw_sales_do_outstanding view.
+
+    Per sales_delivery_order_dtl row (for approved/closed DOs), provides:
+    - do_qty: delivery order line quantity
+    - invoice_consumed_qty: total invoiced qty against this DO line (status 3/5/20)
+    - bal_do_qty: remaining to invoice (do_qty - invoice_consumed_qty)
+    """
+    __tablename__ = "vw_sales_do_outstanding"
+    __table_args__ = {"extend_existing": True}
+
+    sales_delivery_order_dtl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sales_delivery_order_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    delivery_order_no: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    delivery_order_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    sales_order_dtl_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sales_order_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    co_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    party_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    invoice_type: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    item_code: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    item_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uom_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rate: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    do_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    invoice_consumed_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_do_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+
+
+class VwSalesFulfillmentSummary(Base):
+    """
+    Read-only model for vw_sales_fulfillment_summary view.
+
+    Aggregate view grouped by co_id + branch_id + party_id + item_id + uom_id.
+    Provides totals and balances across all approved/closed sales orders.
+    """
+    __tablename__ = "vw_sales_fulfillment_summary"
+    __table_args__ = {"extend_existing": True}
+
+    co_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uom_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_so_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    total_do_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    total_invoiced_qty: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_so_to_deliver: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    bal_so_to_invoice: Mapped[Optional[float]] = mapped_column(Double, nullable=True)

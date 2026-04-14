@@ -261,6 +261,7 @@ async def get_delivery_order_table(
     limit: int = 10,
     search: str | None = None,
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
     """Return paginated delivery order list."""
     try:
@@ -269,7 +270,7 @@ async def get_delivery_order_table(
         offset = (page - 1) * limit
         search_like = f"%{search.strip()}%" if search else None
 
-        params = {"co_id": co_id, "search_like": search_like, "limit": limit, "offset": offset}
+        params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like, "limit": limit, "offset": offset}
 
         list_query = get_delivery_order_table_query()
         rows = db.execute(list_query, params).fetchall()
@@ -304,7 +305,7 @@ async def get_delivery_order_table(
             })
 
         count_query = get_delivery_order_table_count_query()
-        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        count_result = db.execute(count_query, {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}).scalar()
         total = int(count_result) if count_result is not None else 0
 
         return {"data": data, "total": total}
@@ -434,21 +435,22 @@ async def get_delivery_order_by_id(
         inv_type = header.get("invoice_type")
         if so_id and inv_type:
             try:
-                if inv_type == 4:  # Jute
-                    from src.sales.query import get_sales_order_jute_by_id
-                    jute_row = db.execute(get_sales_order_jute_by_id(), {"sales_order_id": so_id}).fetchone()
-                    if jute_row:
-                        so_extension["jute"] = dict(jute_row._mapping)
-                elif inv_type == 5:  # Govt SKG
+                from src.sales.constants import INVOICE_TYPE_IDS
+                if inv_type == INVOICE_TYPE_IDS["GOVT_SKG"]:  # 3
                     from src.sales.query import get_sales_order_govtskg_by_id
                     govtskg_row = db.execute(get_sales_order_govtskg_by_id(), {"sales_order_id": so_id}).fetchone()
                     if govtskg_row:
                         so_extension["govtskg"] = dict(govtskg_row._mapping)
-                elif inv_type == 3:  # Jute Yarn
+                elif inv_type == INVOICE_TYPE_IDS["JUTE_YARN"]:  # 4
                     from src.sales.query import get_sales_order_juteyarn_by_id
                     juteyarn_row = db.execute(get_sales_order_juteyarn_by_id(), {"sales_order_id": so_id}).fetchone()
                     if juteyarn_row:
                         so_extension["juteyarn"] = dict(juteyarn_row._mapping)
+                elif inv_type == INVOICE_TYPE_IDS["RAW_JUTE"]:  # 5
+                    from src.sales.query import get_sales_order_jute_by_id
+                    jute_row = db.execute(get_sales_order_jute_by_id(), {"sales_order_id": so_id}).fetchone()
+                    if jute_row:
+                        so_extension["jute"] = dict(jute_row._mapping)
             except Exception:
                 logger.exception("Error loading SO extension data for DO")
 
@@ -467,6 +469,7 @@ async def get_delivery_order_by_id(
                 "hsnCode": detail.get("hsn_code"),
                 "itemGroup": str(detail.get("item_grp_id", "")) if detail.get("item_grp_id") else "",
                 "item": str(detail.get("item_id", "")) if detail.get("item_id") else "",
+                "itemCode": detail.get("full_item_code") or detail.get("item_code") or "",
                 "itemName": detail.get("item_name"),
                 "itemMake": str(detail.get("item_make_id", "")) if detail.get("item_make_id") else None,
                 "quantity": float(detail.get("quantity", 0)) if detail.get("quantity") is not None else 0,
