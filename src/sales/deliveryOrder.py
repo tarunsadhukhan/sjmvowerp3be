@@ -261,6 +261,7 @@ async def get_delivery_order_table(
     limit: int = 10,
     search: str | None = None,
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
     """Return paginated delivery order list."""
     try:
@@ -269,7 +270,7 @@ async def get_delivery_order_table(
         offset = (page - 1) * limit
         search_like = f"%{search.strip()}%" if search else None
 
-        params = {"co_id": co_id, "search_like": search_like, "limit": limit, "offset": offset}
+        params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like, "limit": limit, "offset": offset}
 
         list_query = get_delivery_order_table_query()
         rows = db.execute(list_query, params).fetchall()
@@ -304,7 +305,7 @@ async def get_delivery_order_table(
             })
 
         count_query = get_delivery_order_table_count_query()
-        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        count_result = db.execute(count_query, {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}).scalar()
         total = int(count_result) if count_result is not None else 0
 
         return {"data": data, "total": total}

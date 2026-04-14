@@ -379,6 +379,9 @@ async def get_delivery_order_lines(
             so_id = do_hdr.get("sales_order_id")
             inv_type = do_hdr.get("invoice_type")
 
+            if inv_type is not None:
+                response["invoice_type"] = inv_type
+
             if so_id:
                 # 3a. Govtskg header (PCSO, mode of transport, etc.)
                 govtskg_row = db.execute(
@@ -428,6 +431,16 @@ async def get_sales_order_lines(
 
         response: dict = {"data": data}
 
+        # SO header — invoice_type (so the frontend can align the invoice type)
+        so_header = db.execute(
+            text("SELECT invoice_type FROM sales_order WHERE sales_order_id = :id"),
+            {"id": sales_order_id},
+        ).fetchone()
+        if so_header:
+            inv_type = dict(so_header._mapping).get("invoice_type")
+            if inv_type is not None:
+                response["invoice_type"] = inv_type
+
         # SO extension data — govtskg header
         govtskg_row = db.execute(
             get_sales_order_govtskg_by_id(), {"sales_order_id": sales_order_id}
@@ -471,6 +484,7 @@ async def get_sales_invoice_table(
     limit: int = 10,
     search: str | None = None,
     co_id: int | None = None,
+    branch_id: int | None = None,
 ):
     """Return paginated sales invoice list."""
     try:
@@ -479,7 +493,7 @@ async def get_sales_invoice_table(
         offset = (page - 1) * limit
         search_like = f"%{search.strip()}%" if search else None
 
-        params = {"co_id": co_id, "search_like": search_like, "limit": limit, "offset": offset}
+        params = {"co_id": co_id, "branch_id": branch_id, "search_like": search_like, "limit": limit, "offset": offset}
 
         list_query = get_invoice_table_query()
         rows = db.execute(list_query, params).fetchall()
@@ -514,7 +528,7 @@ async def get_sales_invoice_table(
             })
 
         count_query = get_invoice_table_count_query()
-        count_result = db.execute(count_query, {"co_id": co_id, "search_like": search_like}).scalar()
+        count_result = db.execute(count_query, {"co_id": co_id, "branch_id": branch_id, "search_like": search_like}).scalar()
         total = int(count_result) if count_result is not None else 0
 
         return {"data": data, "total": total}

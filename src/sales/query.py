@@ -261,6 +261,7 @@ def get_quotation_table_query():
     LEFT JOIN status_mst AS sm ON sm.status_id = sq.status_id
     WHERE sq.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR sq.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR sq.quotation_no LIKE :search_like
@@ -279,6 +280,7 @@ def get_quotation_table_count_query():
     LEFT JOIN party_mst AS pm ON pm.party_id = sq.party_id
     WHERE sq.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR sq.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR sq.quotation_no LIKE :search_like
@@ -686,6 +688,7 @@ def get_sales_order_table_query():
     LEFT JOIN status_mst AS sm ON sm.status_id = so.status_id
     WHERE so.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR so.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR so.sales_no LIKE :search_like
@@ -706,6 +709,7 @@ def get_sales_order_table_count_query():
     LEFT JOIN sales_quotation AS sq ON sq.sales_quotation_id = so.quotation_id
     WHERE so.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR so.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR so.sales_no LIKE :search_like
@@ -1081,6 +1085,7 @@ def get_delivery_order_table_query():
     LEFT JOIN status_mst AS sm ON sm.status_id = sdo.status_id
     WHERE sdo.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR sdo.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR sdo.delivery_order_no LIKE :search_like
@@ -1101,6 +1106,7 @@ def get_delivery_order_table_count_query():
     LEFT JOIN sales_order AS so ON so.sales_order_id = sdo.sales_order_id
     WHERE sdo.active = 1
         AND (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR sdo.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR sdo.delivery_order_no LIKE :search_like
@@ -1443,6 +1449,7 @@ def get_invoice_table_query():
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     LEFT JOIN status_mst AS sm ON sm.status_id = si.status_id
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR si.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR CAST(si.invoice_no AS CHAR) LIKE :search_like
@@ -1460,6 +1467,7 @@ def get_invoice_table_count_query():
     LEFT JOIN branch_mst AS bm ON bm.branch_id = si.branch_id
     LEFT JOIN party_mst AS pm ON pm.party_id = si.party_id
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND (:branch_id IS NULL OR si.branch_id = :branch_id)
         AND (
             :search_like IS NULL
             OR CAST(si.invoice_no AS CHAR) LIKE :search_like
