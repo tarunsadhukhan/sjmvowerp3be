@@ -36,8 +36,13 @@ def format_inward_no(
     co_prefix: Optional[str],
     branch_prefix: Optional[str],
     inward_date,
+    doc_type: str = "IN",
 ) -> str:
-    """Format Inward/IN number as 'co_prefix/branch_prefix/IN/financial_year/sequence_no'."""
+    """Format doc number as 'co_prefix/branch_prefix/{doc_type}/financial_year/sequence_no'.
+
+    Shared formatter for procurement document numbers. Pass doc_type="SR" for
+    Stores Receipt, default "IN" for Inward/GRN.
+    """
     if inward_sequence_no is None or inward_sequence_no == 0:
         return ""
 
@@ -50,8 +55,8 @@ def format_inward_no(
         parts.append(co_pref)
     if branch_pref:
         parts.append(branch_pref)
-    parts.extend(["IN", fy, str(inward_sequence_no)])
-    
+    parts.extend([doc_type, fy, str(inward_sequence_no)])
+
     return "/".join(parts)
 
 

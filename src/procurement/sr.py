@@ -33,6 +33,7 @@ from src.procurement.query import (
 from src.procurement.po import calculate_gst_amounts, extract_formatted_po_no
 from src.common.companyAdmin.query import get_co_config_by_id_query
 from src.procurement.inward import format_inward_no
+from src.procurement.indent import calculate_financial_year
 
 logger = logging.getLogger(__name__)
 
@@ -114,29 +115,46 @@ class SRApproveRequest(BaseModel):
 # =============================================================================
 
 def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
-    """Generate next SR number for the branch and financial year."""
-    # Get max SR number for the branch
-    # SR format: SR-YYYY-NNNNN
+    """Generate next SR number for the branch and financial year.
+
+    Format matches Inward: 'co_prefix/branch_prefix/SR/FY/sequence_no'.
+    Sequence is a per-branch per-financial-year counter (MAX+1) parsed from
+    the trailing segment of existing sr_no values.
+    """
     try:
-        year = sr_date.year if hasattr(sr_date, 'year') else datetime.strptime(str(sr_date), '%Y-%m-%d').year
-        
-        query = text("""
-            SELECT MAX(CAST(SUBSTRING_INDEX(sr_no, '-', -1) AS UNSIGNED)) as max_no
+        fy = calculate_financial_year(sr_date)
+
+        prefix_query = text("""
+            SELECT cm.co_prefix, bm.branch_prefix
+            FROM branch_mst bm
+            LEFT JOIN co_mst cm ON cm.co_id = bm.co_id
+            WHERE bm.branch_id = :branch_id
+        """)
+        prefix_row = db.execute(prefix_query, {"branch_id": branch_id}).fetchone()
+        co_prefix = prefix_row.co_prefix if prefix_row else None
+        branch_prefix = prefix_row.branch_prefix if prefix_row else None
+
+        counter_query = text("""
+            SELECT MAX(CAST(SUBSTRING_INDEX(sr_no, '/', -1) AS UNSIGNED)) AS max_no
             FROM proc_inward
             WHERE branch_id = :branch_id
             AND sr_no LIKE :pattern
         """)
-        
-        pattern = f"SR-{year}-%"
-        result = db.execute(query, {"branch_id": branch_id, "pattern": pattern}).fetchone()
-        
+        pattern = f"%/SR/{fy}/%"
+        result = db.execute(counter_query, {"branch_id": branch_id, "pattern": pattern}).fetchone()
+
         next_no = 1
         if result and result.max_no:
             next_no = int(result.max_no) + 1
-        
-        return f"SR-{year}-{next_no:05d}"
+
+        return format_inward_no(
+            inward_sequence_no=next_no,
+            co_prefix=co_prefix,
+            branch_prefix=branch_prefix,
+            inward_date=sr_date,
+            doc_type="SR",
+        )
     except Exception:
-        # Fallback to timestamp-based number
         return f"SR-{now_ist().strftime('%Y%m%d%H%M%S')}"
 
 
