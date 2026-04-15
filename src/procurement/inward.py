@@ -36,22 +36,27 @@ def format_inward_no(
     co_prefix: Optional[str],
     branch_prefix: Optional[str],
     inward_date,
+    doc_type: str = "IN",
 ) -> str:
-    """Format Inward/GRN number as 'co_prefix/branch_prefix/GRN/financial_year/sequence_no'."""
+    """Format doc number as 'co_prefix/branch_prefix/{doc_type}/financial_year/sequence_no'.
+
+    Shared formatter for procurement document numbers. Pass doc_type="SR" for
+    Stores Receipt, default "IN" for Inward/GRN.
+    """
     if inward_sequence_no is None or inward_sequence_no == 0:
         return ""
-    
+
     fy = calculate_financial_year(inward_date)
     co_pref = co_prefix or ""
     branch_pref = branch_prefix or ""
-    
+
     parts = []
     if co_pref:
         parts.append(co_pref)
     if branch_pref:
         parts.append(branch_pref)
-    parts.extend(["GRN", fy, str(inward_sequence_no)])
-    
+    parts.extend([doc_type, fy, str(inward_sequence_no)])
+
     return "/".join(parts)
 
 
@@ -891,6 +896,14 @@ async def update_inward(
                 detail="Cannot modify inward after material inspection is completed",
             )
 
+        # Guard: prevent updates to a fully cancelled inward
+        cancelled_row = db.execute(
+            text("SELECT COUNT(*) FROM proc_inward_dtl WHERE inward_id = :inward_id AND status_id != 6"),
+            {"inward_id": int(inward_id)},
+        ).fetchone()
+        if cancelled_row and cancelled_row[0] == 0:
+            raise HTTPException(status_code=403, detail="Cannot modify a cancelled inward")
+
         updated_by = token_data.get("user_id") if token_data else None
         updated_at = now_ist()
 
@@ -1038,6 +1051,75 @@ async def update_inward(
                 "error": str(e),
             },
         )
+
+
+@router.post("/cancel_inward")
+async def cancel_inward(
+    payload: dict,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Cancel an inward by setting all proc_inward_dtl lines to status_id = 6."""
+    from src.procurement.query import cancel_inward_dtl_query
+
+    try:
+        inward_id = payload.get("inward_id")
+        if inward_id is None:
+            raise HTTPException(status_code=400, detail="inward_id is required")
+        try:
+            inward_id = int(inward_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid inward_id")
+
+        # Verify inward exists and inspection has not been completed
+        inspection_row = db.execute(
+            text("SELECT inspection_check FROM proc_inward WHERE inward_id = :inward_id"),
+            {"inward_id": inward_id},
+        ).fetchone()
+        if not inspection_row:
+            raise HTTPException(status_code=404, detail="Inward not found")
+        if inspection_row[0]:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot cancel inward after material inspection is completed",
+            )
+
+        # Verify there are still active (non-cancelled) lines
+        active_row = db.execute(
+            text(
+                "SELECT COUNT(*) FROM proc_inward_dtl "
+                "WHERE inward_id = :inward_id AND status_id != 6"
+            ),
+            {"inward_id": inward_id},
+        ).fetchone()
+        if not active_row or active_row[0] == 0:
+            raise HTTPException(status_code=400, detail="Inward is already cancelled")
+
+        user_id = token_data.get("user_id") if token_data else None
+        updated_at = now_ist()
+
+        db.execute(
+            cancel_inward_dtl_query(),
+            {
+                "inward_id": inward_id,
+                "updated_by": user_id,
+                "updated_date_time": updated_at,
+            },
+        )
+        db.commit()
+
+        return {
+            "status": "success",
+            "new_status_id": 6,
+            "message": "Inward cancelled successfully",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error cancelling inward")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # from fastapi import Depends, Request, HTTPException, APIRouter
