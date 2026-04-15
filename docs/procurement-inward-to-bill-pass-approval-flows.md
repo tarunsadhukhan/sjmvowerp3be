@@ -1,7 +1,7 @@
 # Procurement Inward → Bill Pass Approval Flows
 
 > **Audience:** engineers working on the VoWERP3 procurement chain.
-> **Scope:** PO approved → Inward/GRN → Material Inspection → Store Receipt (SR) → Bill Pass → Debit/Credit Notes.
+> **Scope:** PO approved → Inward → Material Inspection → Store Receipt (SR) → Bill Pass → Debit/Credit Notes.
 > **Covers:** backend ([c:\code\vowerp3be](c:\code\vowerp3be)) **and** frontend ([c:\code\vowerp3ui](c:\code\vowerp3ui)).
 
 ---
@@ -14,9 +14,9 @@ The procurement approval pipeline takes an approved Purchase Order through five 
 
 ```mermaid
 flowchart LR
-    PO[PO Approved<br/>status_id=3] --> INW[Inward / GRN<br/>+ GRN no<br/>status_id=21]
+    PO[PO Approved<br/>status_id=3] --> INW[Inward<br/>+ Inward no<br/>status_id=21]
     INW --> INS[Material<br/>Inspection<br/>inspection_check=TRUE]
-    INS --> SR[Store Receipt<br/>+ SR no<br/>sr_status: 21 → 1 → 3/4]
+    INS --> SR[Store Receipt<br/>SR no minted on approve<br/>sr_status: 21 → 1 → 3/4]
     SR -->|sr_status=3| BP[Bill Pass<br/>reuses SR no<br/>billpass_status: 0 → 1]
     SR -.auto on approve.-> DRCR[Debit/Credit Note<br/>+ DN/CN no<br/>status_id: 21 → 1 → 3/4]
     BP -.manual.-> DRCR
@@ -60,15 +60,15 @@ Defined in [src/config/db.py](src/config/db.py) and [src/authorization/utils.py]
 | Stage | Number assigned at… |
 |-------|---------------------|
 | Inward | Immediately after `INSERT proc_inward` (sequence = inward_id PK) |
-| SR | First `save_sr` call |
+| SR | On `/approve_sr` (when `sr_status` flips to 3) |
 | Bill Pass | Reuses SR number — nothing new minted |
 | Debit/Credit Note | After `INSERT drcr_note` (prefix + note_id PK) |
 
 ---
 
-## Flow 1 — Procurement Inward / GRN
+## Flow 1 — Procurement Inward
 
-This flow covers receipt of materials against an approved Purchase Order (PO), generation of a GRN (Goods Receipt Note) number, and the downstream Material Inspection step that gates Stores Receipt (SR) creation.
+This flow covers receipt of materials against an approved Purchase Order (PO), generation of an Inward number (formerly "GRN" — renamed to keep terminology consistent with the `proc_inward` table), and the downstream Material Inspection step that gates Stores Receipt (SR) creation. A pre-inspection **Cancel Inward** path is also available.
 
 ### Flow diagram
 
@@ -76,9 +76,11 @@ This flow covers receipt of materials against an approved Purchase Order (PO), g
 flowchart TD
     PO[Approved PO<br/>proc_po / proc_po_dtl] -->|Supplier delivers| CREATE[POST /api/procurementInward/create_inward<br/>inward.py:570]
     CREATE -->|INSERT proc_inward + proc_inward_dtl<br/>status_id=21 Draft| SEQ[UPDATE inward_sequence_no = inward_id<br/>inward.py:816]
-    SEQ --> DRAFT[Draft GRN<br/>inspection_check = NULL]
+    SEQ --> DRAFT[Draft Inward<br/>inspection_check = NULL]
     DRAFT -->|User edits| UPDATE[PUT /api/procurementInward/update_inward<br/>inward.py:868]
     UPDATE -->|inspection_check gate| DRAFT
+    DRAFT -->|User cancels before inspection| CANCEL[POST /api/procurementInward/cancel_inward<br/>proc_inward_dtl.status_id = 6]
+    CANCEL -.->|Hidden from inspection + inward lists| END[Cancelled]
     DRAFT -->|User opens Material Inspection page| INSPECT_FETCH[GET inspection_get_by_inward_id<br/>material_inspection.py]
     INSPECT_FETCH --> INSPECT_UI[materialInspection/inspect page<br/>User enters rejected_qty + reasons]
     INSPECT_UI -->|Complete Inspection| COMPLETE[POST /api/materialInspection/complete_inspection<br/>material_inspection.py:218]
@@ -86,21 +88,25 @@ flowchart TD
     READY -.->|Feeds Flow 2| SR[Stores Receipt]
 ```
 
+> **Note:** Cancel is allowed only while `inspection_check` is NULL/FALSE. Once inspection is completed, `cancel_inward` returns HTTP 403.
+
+
 ### Backend endpoints
 
 | Method | Path | File:Line | Purpose |
 |--------|------|-----------|---------|
-| GET  | `/api/procurementInward/get_inward_table` | `c:\code\vowerp3be\src\procurement\inward.py:58` | Paginated GRN list |
-| POST | `/api/procurementInward/create_inward` | `c:\code\vowerp3be\src\procurement\inward.py:570` | Create GRN header + detail rows (status 21 Draft) |
-| PUT  | `/api/procurementInward/update_inward` | `c:\code\vowerp3be\src\procurement\inward.py:868` | Update GRN header + lines (blocked after inspection) |
+| GET  | `/api/procurementInward/get_inward_table` | `c:\code\vowerp3be\src\procurement\inward.py:58` | Paginated Inward list (cancelled rows filtered out) |
+| POST | `/api/procurementInward/create_inward` | `c:\code\vowerp3be\src\procurement\inward.py:570` | Create Inward header + detail rows (status 21 Draft) |
+| PUT  | `/api/procurementInward/update_inward` | `c:\code\vowerp3be\src\procurement\inward.py:868` | Update Inward header + lines (blocked after inspection or if cancelled) |
+| POST | `/api/procurementInward/cancel_inward` | `c:\code\vowerp3be\src\procurement\inward.py` | Cancel Inward — sets `proc_inward_dtl.status_id = 6`; blocked after inspection (403) |
 | GET  | `/api/materialInspection/get_inward_for_inspection/{inward_id}` | `c:\code\vowerp3be\src\procurement\material_inspection.py` | Load inspection view |
 | POST | `/api/materialInspection/complete_inspection` | `c:\code\vowerp3be\src\procurement\material_inspection.py:218` | Finalize inspection, sets `inspection_check = TRUE` |
 
 Helper: `format_inward_no()` at `c:\code\vowerp3be\src\procurement\inward.py:34`.
 
-### GRN number generation
+### Inward number generation
 
-GRN numbers are formatted on read from the raw `inward_sequence_no` column — there is **no separate counter table**. The sequence is simply the `inward_id` primary key, assigned via a follow-up UPDATE immediately after the header insert.
+Inward numbers are formatted on read from the raw `inward_sequence_no` column — there is **no separate counter table**. The sequence is simply the `inward_id` primary key, assigned via a follow-up UPDATE immediately after the header insert.
 
 Verbatim (`c:\code\vowerp3be\src\procurement\inward.py:34-55`):
 
@@ -111,7 +117,7 @@ def format_inward_no(
     branch_prefix: Optional[str],
     inward_date,
 ) -> str:
-    """Format Inward/GRN number as 'co_prefix/branch_prefix/GRN/financial_year/sequence_no'."""
+    """Format Inward number as 'co_prefix/branch_prefix/IN/financial_year/sequence_no'."""
     if inward_sequence_no is None or inward_sequence_no == 0:
         return ""
     
@@ -124,12 +130,12 @@ def format_inward_no(
         parts.append(co_pref)
     if branch_pref:
         parts.append(branch_pref)
-    parts.extend(["GRN", fy, str(inward_sequence_no)])
+    parts.extend(["IN", fy, str(inward_sequence_no)])
     
     return "/".join(parts)
 ```
 
-**Format:** `{co_prefix}/{branch_prefix}/GRN/{FY}/{seq}` — e.g. `VOW/HQ/GRN/2025-26/1234`.
+**Format:** `{co_prefix}/{branch_prefix}/IN/{FY}/{seq}` — e.g. `VOW/HQ/IN/2025-26/1234`.
 
 **Sequence assignment** — in `create_inward` after `result.lastrowid` is obtained (`inward.py:813-818`):
 
@@ -194,9 +200,10 @@ if inspection_row and inspection_row[0]:
 
 | Trigger | Endpoint | Before | After | Side effects |
 |---------|----------|--------|-------|--------------|
-| Create GRN | `POST /create_inward` | (none) | `proc_inward_dtl.status_id = 21` (Draft); `inspection_check = NULL` | Back-patches `inward_sequence_no = inward_id` |
-| Edit GRN | `PUT /update_inward` | Draft, `inspection_check` NULL/FALSE | Draft (unchanged) | 403 if inspection already complete |
-| Complete Inspection | `POST /complete_inspection` | `inspection_check` NULL/FALSE | `inspection_check = TRUE`; `inspection_date = today`; `inspection_approved_by = user_id` | Writes `approved_qty`, `rejected_qty`, `accepted_item_make_id`, `reasons` on every line; locks GRN from further edits; GRN becomes visible to SR pending list |
+| Create Inward | `POST /create_inward` | (none) | `proc_inward_dtl.status_id = 21` (Draft); `inspection_check = NULL` | Back-patches `inward_sequence_no = inward_id` |
+| Edit Inward | `PUT /update_inward` | Draft, `inspection_check` NULL/FALSE, not cancelled | Draft (unchanged) | 403 if inspection already complete; 403 if fully cancelled |
+| Cancel Inward | `POST /cancel_inward` | `inspection_check` NULL/FALSE | `proc_inward_dtl.status_id = 6` on every line | 403 if `inspection_check = TRUE`; 400 if already cancelled; cancelled inwards drop out of inward list and Material Inspection pending list |
+| Complete Inspection | `POST /complete_inspection` | `inspection_check` NULL/FALSE | `inspection_check = TRUE`; `inspection_date = today`; `inspection_approved_by = user_id` | Writes `approved_qty`, `rejected_qty`, `accepted_item_make_id`, `reasons` on every line; locks Inward from further edits and from cancel; Inward becomes visible to SR pending list |
 
 ### Tables touched
 
@@ -209,8 +216,8 @@ if inspection_row and inspection_row[0]:
 
 | Page | File:Line | Role |
 |------|-----------|------|
-| GRN list | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\inward\page.tsx:169` | Fetches `INWARD_TABLE`, maps `inward_no`, `inspection_check` flag into grid rows |
-| Create / Edit / View GRN | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\inward\createInward\page.tsx:347` | `handleFormSubmit` — validates challan OR invoice required (`page.tsx:340-344`), line items non-empty, then posts to `createInward` or `updateInward` |
+| Inward list | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\inward\page.tsx:169` | Fetches `INWARD_TABLE`, maps `inward_no`, `inspection_check` flag into grid rows |
+| Create / Edit / View Inward | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\inward\createInward\page.tsx:347` | `handleFormSubmit` — validates challan OR invoice required (`page.tsx:340-344`), line items non-empty, then posts to `createInward` or `updateInward`. Cancel button visible only in edit mode and while `inspection_check !== true` — calls `cancelInward()` → `/api/procurementInward/cancel_inward`. |
 | Edit → Update call | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\inward\createInward\page.tsx:451` | `await updateInward(updatePayload)` in edit mode; on success redirects to `?mode=view&id=...` |
 | Material Inspection edit | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\materialInspection\inspect\page.tsx:274` | `handleCompleteInspection` — builds `line_items` payload (`inward_dtl_id`, `rejected_qty`, `approved_qty`, `reasons`, `accepted_item_make_id`) and POSTs to `INSPECTION_COMPLETE` |
 | Inspection grid | `c:\code\vowerp3ui\src\app\dashboardportal\procurement\materialInspection\inspect\page.tsx:251-269` | `handleLineItemChange` auto-recomputes `approved_qty = inward_qty - rejected_qty` locally so UI mirrors backend derivation |
@@ -218,7 +225,7 @@ if inspection_row and inspection_row[0]:
 Key client-side UX gate: once `header.inspection_check === true`, the "Complete Inspection" button is hidden and a success Chip is shown (`inspect\page.tsx:454, 469-476, 546`); editable cells disable themselves via the `disabled={header?.inspection_check ?? false}` prop.
 ## Flow 2 — Store Receipt (SR)
 
-A Store Receipt (SR) is the post-inspection accounting/warehousing gate in the procurement chain. Once inspection is complete on an inward (GRN), the SR step lets the accountant review accepted rates, discounts, taxes (HSN/GST), additional charges, and warehouse allocation for each accepted line item. On approval the SR finalises the receipt value, and any rate or quantity variance versus the PO automatically generates Debit/Credit Notes.
+A Store Receipt (SR) is the post-inspection accounting/warehousing gate in the procurement chain. Once inspection is complete on an inward, the SR step lets the accountant review accepted rates, discounts, taxes (HSN/GST), additional charges, and warehouse allocation for each accepted line item. On approval the SR finalises the receipt value, and any rate or quantity variance versus the PO automatically generates Debit/Credit Notes.
 
 ### Flow diagram
 
@@ -281,16 +288,16 @@ def generate_sr_no(db: Session, branch_id: int, sr_date) -> str:
 
 **Format:** `SR-{YYYY}-{NNNNN}` — zero-padded 5-digit counter, scoped per `branch_id` per calendar year. The counter is derived by taking `SUBSTRING_INDEX(sr_no, '-', -1)` (the trailing numeric segment) from existing `proc_inward.sr_no` rows for the same branch matching the pattern `SR-{year}-%`, casting to UNSIGNED, taking MAX, and incrementing by 1. Falls back to a timestamp-based `SR-YYYYMMDDHHMMSS` on any error.
 
-**Assignment timing:** `sr_no` is generated and written to `proc_inward.sr_no` on the **first** `/save_sr` call (when the column is still NULL); subsequent saves keep the existing number.
+**Assignment timing:** `sr_no` is generated and written to `proc_inward.sr_no` on `/approve_sr` — when `sr_status` flips from OPEN (1) to APPROVED (3). Through DRAFT (21) and OPEN (1), `sr_no` stays NULL so that the Inward number and the SR number have fully independent lifecycles. Only one re-generation attempt is made: if `sr_no` is already set (e.g. on a rare reject → re-approve path) it is preserved.
 
 ### Status transitions
 
 | Trigger | Endpoint | Before (`sr_status`) | After | Side effects |
 |---------|----------|----------------------|-------|--------------|
-| Save draft | `/save_sr` (`sr.py:395`) | NULL / 21 | 21 (DRAFT) | `sr_no` generated on first save; updates `proc_inward_dtl` (rate/disc/hsn/warehouse via `query.py:1964`) and `proc_inward` header (`query.py:1981`); writes additional charges and `po_gst` rows |
-| Open for approval | `/open_sr` (`sr.py:667`) | 21 | 1 (OPEN) | Simple UPDATE of `sr_status`, `updated_by`, `updated_date_time` |
-| Approve | `/approve_sr` (`sr.py:701`) | 1 | 3 (APPROVED) | **Auto-creates Debit/Credit Notes** (`sr.py:770-786` / `809-847`) when `accepted_rate != po_rate` or `rejected_qty > 0`; sets `sr_approved_by = user_id` (`sr.py:850-861`) |
-| Reject | `/reject_sr` (`sr.py:883`) | 1 | 4 (REJECTED) | Stores `reason` into `sr_remarks` |
+| Save draft | `/save_sr` (`sr.py:395`) | NULL / 21 | 21 (DRAFT) | Updates `proc_inward_dtl` (rate/disc/hsn/warehouse via `query.py:1964`) and `proc_inward` header (`query.py:1981`); writes additional charges and `po_gst` rows. **Does not generate `sr_no`** — it stays NULL until approval. |
+| Open for approval | `/open_sr` (`sr.py:667`) | 21 | 1 (OPEN) | Simple UPDATE of `sr_status`, `updated_by`, `updated_date_time`. `sr_no` still NULL. |
+| Approve | `/approve_sr` (`sr.py:701`) | 1 | 3 (APPROVED) | **Mints `sr_no`** via `generate_sr_no()` if still NULL and writes it to `proc_inward.sr_no`; **auto-creates Debit/Credit Notes** (`sr.py:770-786` / `809-847`) when `accepted_rate != po_rate` or `rejected_qty > 0`; sets `sr_approved_by = user_id` (`sr.py:850-861`) |
+| Reject | `/reject_sr` (`sr.py:883`) | 1 | 4 (REJECTED) | Stores `reason` into `sr_remarks`. `sr_no` stays NULL. |
 
 ### Auto-DRCR creation on approval
 
@@ -596,8 +603,8 @@ The list page also renders an **Auto-Generated** chip when `header.auto_create` 
 
 | Doc | Format | Generator | File:Line | Assigned When |
 |-----|--------|-----------|-----------|---------------|
-| GRN / Inward | `{co_prefix}/{branch_prefix}/GRN/{FY}/{seq}` | `format_inward_no` | [inward.py:34](src/procurement/inward.py#L34) | After `INSERT proc_inward` (seq = inward_id PK) |
-| SR | `SR-{YYYY}-{NNNNN}` | `generate_sr_no` | [sr.py:116](src/procurement/sr.py#L116) | First `save_sr` call |
+| Inward | `{co_prefix}/{branch_prefix}/IN/{FY}/{seq}` | `format_inward_no` | [inward.py:34](src/procurement/inward.py#L34) | After `INSERT proc_inward` (seq = inward_id PK) |
+| SR | `SR-{YYYY}-{NNNNN}` | `generate_sr_no` | [sr.py:116](src/procurement/sr.py#L116) | On `/approve_sr` (when `sr_status` → 3) |
 | Bill Pass | *(reuses SR number)* | — | — | — |
 | Debit Note | `DN-{YYYY}-{note_id:05d}` | `format_drcr_note_no` | [drcr_note.py:89](src/procurement/drcr_note.py#L89) | After `INSERT drcr_note` |
 | Credit Note | `CN-{YYYY}-{note_id:05d}` | `format_drcr_note_no` | [drcr_note.py:89](src/procurement/drcr_note.py#L89) | After `INSERT drcr_note` |
@@ -610,7 +617,7 @@ The list page also renders an **Auto-Generated** chip when `header.auto_create` 
 
 | Flow | Field | 21 DRAFT | 1 OPEN | 3 APPROVED | 4 REJECTED | 6 CANCELLED |
 |------|-------|----------|--------|------------|------------|-------------|
-| Inward | `proc_inward_dtl.status_id` | ✅ on create | — | — | — | — |
+| Inward | `proc_inward_dtl.status_id` | ✅ on create | — | — | — | ✅ `/cancel_inward` (pre-inspection only) |
 | Inspection | `proc_inward.inspection_check` | FALSE initially | — | TRUE post-inspection | — | — |
 | SR | `proc_inward.sr_status` | ✅ on save | ✅ `/open_sr` | ✅ `/approve_sr` (+auto-DRCR) | ✅ `/reject_sr` | ❌ not used |
 | Bill Pass | `proc_inward.billpass_status` | 0 = editable | — | 1 = complete | — | — |
@@ -628,12 +635,18 @@ sequenceDiagram
     participant BE as FastAPI (vowerp3be)
     participant DB as MySQL (tenant DB)
 
-    Note over User,DB: Stage 1 — Create GRN
+    Note over User,DB: Stage 1 — Create Inward
     User->>FE: Open /dashboardportal/procurement/inward/createInward
     FE->>BE: POST /api/procurementInward/create_inward
     BE->>DB: INSERT proc_inward, proc_inward_dtl (status_id=21)
     BE->>DB: UPDATE proc_inward SET inward_sequence_no = inward_id
     BE-->>FE: {inward_id, inward_no}
+
+    Note over User,DB: Stage 1a — Cancel Inward (optional, pre-inspection only)
+    User->>FE: Click Cancel on createInward
+    FE->>BE: POST /api/procurementInward/cancel_inward
+    BE->>DB: Guard proc_inward.inspection_check IS NULL/FALSE
+    BE->>DB: UPDATE proc_inward_dtl SET status_id=6 WHERE inward_id=X
 
     Note over User,DB: Stage 2 — Complete Inspection
     User->>FE: Open /materialInspection/inspect?id=X
@@ -644,13 +657,13 @@ sequenceDiagram
     Note over User,DB: Stage 3 — Store Receipt
     User->>FE: Open /procurement/sr/createSR?id=X
     FE->>BE: POST /save_sr
-    BE->>DB: generate_sr_no (MAX+1 per branch per year)
-    BE->>DB: UPDATE proc_inward SET sr_no, sr_status=21
+    BE->>DB: UPDATE proc_inward SET sr_status=21 (sr_no stays NULL)
     User->>FE: Click "Open for Approval"
     FE->>BE: POST /open_sr → sr_status=1
     User->>FE: Click "Approve"
     FE->>BE: POST /approve_sr
-    BE->>DB: UPDATE proc_inward SET sr_status=3
+    BE->>DB: generate_sr_no (MAX+1 per branch per year) if sr_no NULL
+    BE->>DB: UPDATE proc_inward SET sr_no, sr_status=3, sr_approved_by
     BE->>DB: INSERT drcr_note + drcr_note_dtl (auto, if variance)
 
     Note over User,DB: Stage 4 — Bill Pass
@@ -671,7 +684,7 @@ sequenceDiagram
 
 - **DN/CN GST not persisted on create.** `drcr_note_dtl_gst` schema exists but `create_drcr_note` does not populate it ([drcr_note.py:287](src/procurement/drcr_note.py#L287)). Manual notes assume pre-calculated amounts.
 - **No stock movement in this chain.** Neither SR approval nor Bill Pass writes to inventory tables. Verify with inventory module owner whether a downstream job or Bill Pass completion is expected to trigger stock receipt.
-- **No reopen/cancel on SR.** Only `reject_sr` (→ status 4) exists; there is no transition back to DRAFT (21) from rejected aside from overwriting via next save.
+- **Cancel exists on Inward but not on SR.** Inward has `/cancel_inward` which sets every `proc_inward_dtl.status_id = 6` — allowed only pre-inspection; returns 403 once `inspection_check=TRUE`. SR still has no reopen/cancel: only `/reject_sr` (→ status 4) exists; there is no transition back to DRAFT (21) from rejected aside from overwriting via next save.
 - **Inward has no approval levels.** Unlike Indent/PO, `proc_inward` has no `approval_level` column — inspection is single-shot, SR approval is single-user (`sr_approved_by`).
 - **Bill Pass has no independent approval workflow.** `billpass_status` is boolean 0/1; there is no OPEN → APPROVED chain.
 - **`proc_po` has no `active` column** (only `proc_po_dtl` does) — do not filter the header by `active` in joins.

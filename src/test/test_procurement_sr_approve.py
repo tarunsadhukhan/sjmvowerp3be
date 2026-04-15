@@ -66,13 +66,20 @@ class TestApproveSREndpoint:
         note_id_row = MagicMock()
         note_id_row.id = 42
 
+        # Header row used for SR-no minting check (sr_no already set so no mint)
+        header_row = MagicMock()
+        header_row.branch_id = 1
+        header_row.sr_no = "SR-EXISTING"
+        header_row.sr_date = date(2025, 1, 1)
+
         # Configure mock: first call returns line items, second returns note_id,
-        # third is the detail insert, fourth is the status update
+        # third is the detail insert, fourth header SELECT, fifth status UPDATE
         self.mock_session.execute.side_effect = [
             MagicMock(fetchall=MagicMock(return_value=[line_row])),  # get line items
             MagicMock(),  # insert note header
             MagicMock(fetchone=MagicMock(return_value=note_id_row)),  # LAST_INSERT_ID
             MagicMock(),  # insert detail line
+            MagicMock(fetchone=MagicMock(return_value=header_row)),  # header SELECT for sr_no minting
             MagicMock(),  # update SR status
         ]
 
@@ -106,11 +113,17 @@ class TestApproveSREndpoint:
         note_id_row = MagicMock()
         note_id_row.id = 55
 
+        header_row = MagicMock()
+        header_row.branch_id = 1
+        header_row.sr_no = "SR-EXISTING"
+        header_row.sr_date = date(2025, 1, 1)
+
         self.mock_session.execute.side_effect = [
             MagicMock(fetchall=MagicMock(return_value=[line_row])),  # get line items
             MagicMock(),  # insert credit note header
             MagicMock(fetchone=MagicMock(return_value=note_id_row)),  # LAST_INSERT_ID
             MagicMock(),  # insert detail line
+            MagicMock(fetchone=MagicMock(return_value=header_row)),  # header SELECT for sr_no minting
             MagicMock(),  # update SR status
         ]
 
@@ -141,8 +154,14 @@ class TestApproveSREndpoint:
             "approved_qty": 10.0,
         })
 
+        header_row = MagicMock()
+        header_row.branch_id = 1
+        header_row.sr_no = "SR-EXISTING"
+        header_row.sr_date = date(2025, 1, 1)
+
         self.mock_session.execute.side_effect = [
             MagicMock(fetchall=MagicMock(return_value=[line_row])),  # get line items
+            MagicMock(fetchone=MagicMock(return_value=header_row)),  # header SELECT for sr_no minting
             MagicMock(),  # update SR status (no DRCR inserts)
         ]
 
@@ -152,8 +171,8 @@ class TestApproveSREndpoint:
         )
 
         assert response.status_code == 200
-        # Only 2 execute calls: get line items + update SR status
-        assert self.mock_session.execute.call_count == 2
+        # 3 execute calls: get line items + header SELECT + update SR status
+        assert self.mock_session.execute.call_count == 3
 
 
 class TestInsertDrcrNoteDtlQuery:

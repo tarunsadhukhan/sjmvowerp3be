@@ -304,6 +304,10 @@ def get_inward_table_query():
     LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
     LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND EXISTS (
+            SELECT 1 FROM proc_inward_dtl pid
+            WHERE pid.inward_id = pi.inward_id AND pid.status_id <> 6
+        )
         AND (
             :search_like IS NULL
             OR pi.inward_sequence_no LIKE :search_like
@@ -321,14 +325,18 @@ def get_inward_table_count_query():
     FROM proc_inward AS pi
     LEFT JOIN branch_mst AS bm ON bm.branch_id = pi.branch_id
     LEFT JOIN proc_po AS pp ON pp.po_id = (
-        SELECT DISTINCT ppd.po_id 
-        FROM proc_inward_dtl AS pid 
+        SELECT DISTINCT ppd.po_id
+        FROM proc_inward_dtl AS pid
         LEFT JOIN proc_po_dtl AS ppd ON ppd.po_dtl_id = pid.po_dtl_id
         WHERE pid.inward_id = pi.inward_id
         LIMIT 1
     )
     LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
+        AND EXISTS (
+            SELECT 1 FROM proc_inward_dtl pid
+            WHERE pid.inward_id = pi.inward_id AND pid.status_id <> 6
+        )
         AND (
             :search_like IS NULL
             OR pi.inward_sequence_no LIKE :search_like
@@ -1618,6 +1626,10 @@ def get_pending_inspection_list_query():
     LEFT JOIN status_mst AS sm ON sm.status_id = pi.sr_status
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
         AND (pi.inspection_check IS NULL OR pi.inspection_check = FALSE)
+        AND EXISTS (
+            SELECT 1 FROM proc_inward_dtl pid
+            WHERE pid.inward_id = pi.inward_id AND pid.status_id <> 6
+        )
         AND (
             :search_like IS NULL
             OR pi.inward_sequence_no LIKE :search_like
@@ -1637,6 +1649,10 @@ def get_pending_inspection_count_query():
     LEFT JOIN party_mst AS pm ON pm.party_id = pi.supplier_id
     WHERE (:co_id IS NULL OR bm.co_id = :co_id)
         AND (pi.inspection_check IS NULL OR pi.inspection_check = FALSE)
+        AND EXISTS (
+            SELECT 1 FROM proc_inward_dtl pid
+            WHERE pid.inward_id = pi.inward_id AND pid.status_id <> 6
+        )
         AND (
             :search_like IS NULL
             OR pi.inward_sequence_no LIKE :search_like
@@ -1959,6 +1975,17 @@ def get_inward_dtl_for_sr_query():
         AND pid.active = 1
     ORDER BY pid.inward_dtl_id;"""
     return text(sql)
+
+
+def cancel_inward_dtl_query():
+    """Cancel all proc_inward_dtl lines for an inward by setting status_id = 6."""
+    return text("""
+        UPDATE proc_inward_dtl
+        SET status_id = 6,
+            updated_by = :updated_by,
+            updated_date_time = :updated_date_time
+        WHERE inward_id = :inward_id
+    """)
 
 
 def update_inward_dtl_sr():

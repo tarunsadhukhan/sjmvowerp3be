@@ -483,16 +483,14 @@ async def save_sr(
         gross_amount += additional_charges_total
         net_amount += additional_charges_total
         
-        # Get branch_id and current SR status for number generation
+        # Get branch_id and current SR status. SR number is NOT generated here —
+        # it is minted on approval. Existing sr_no is preserved if already set.
         header_query = text("SELECT branch_id, sr_no, sr_status FROM proc_inward WHERE inward_id = :id")
         header_result = db.execute(header_query, {"id": request_body.inward_id}).fetchone()
         branch_id = header_result.branch_id if header_result else None
         sr_no = header_result.sr_no if header_result and header_result.sr_no else None
         current_sr_status = header_result.sr_status if header_result and header_result.sr_status else None
-        
-        if not sr_no and branch_id:
-            sr_no = generate_sr_no(db, branch_id, sr_date)
-        
+
         # Preserve existing status; only default to Draft for new SRs
         sr_status = current_sr_status if current_sr_status and current_sr_status != 0 else STATUS_DRAFT
         
@@ -846,22 +844,58 @@ async def approve_sr(
                         "updated_date_time": now,
                     })
         
-        # Update SR status to Approved
-        query = text("""
-            UPDATE proc_inward
-            SET sr_status = :status_id, sr_approved_by = :approved_by, updated_by = :updated_by, updated_date_time = :updated_date_time
-            WHERE inward_id = :inward_id
-        """)
-        db.execute(query, {
-            "inward_id": request_body.inward_id,
-            "status_id": STATUS_APPROVED,
-            "approved_by": user_id,
-            "updated_by": user_id,
-            "updated_date_time": now,
-        })
-        
+        # Fetch header to determine if SR number needs to be minted
+        header_query = text(
+            "SELECT branch_id, sr_no, sr_date FROM proc_inward WHERE inward_id = :inward_id"
+        )
+        header_result = db.execute(
+            header_query, {"inward_id": request_body.inward_id}
+        ).fetchone()
+        existing_sr_no = header_result.sr_no if header_result else None
+        branch_id = header_result.branch_id if header_result else None
+        sr_date_value = (
+            header_result.sr_date if header_result and header_result.sr_date else today
+        )
+
+        new_sr_no = None
+        if not existing_sr_no and branch_id:
+            new_sr_no = generate_sr_no(db, branch_id, sr_date_value)
+
+        # Update SR status to Approved (and mint sr_no if first approval)
+        if new_sr_no:
+            query = text("""
+                UPDATE proc_inward
+                SET sr_status = :status_id,
+                    sr_approved_by = :approved_by,
+                    sr_no = :sr_no,
+                    updated_by = :updated_by,
+                    updated_date_time = :updated_date_time
+                WHERE inward_id = :inward_id
+            """)
+            db.execute(query, {
+                "inward_id": request_body.inward_id,
+                "status_id": STATUS_APPROVED,
+                "approved_by": user_id,
+                "sr_no": new_sr_no,
+                "updated_by": user_id,
+                "updated_date_time": now,
+            })
+        else:
+            query = text("""
+                UPDATE proc_inward
+                SET sr_status = :status_id, sr_approved_by = :approved_by, updated_by = :updated_by, updated_date_time = :updated_date_time
+                WHERE inward_id = :inward_id
+            """)
+            db.execute(query, {
+                "inward_id": request_body.inward_id,
+                "status_id": STATUS_APPROVED,
+                "approved_by": user_id,
+                "updated_by": user_id,
+                "updated_date_time": now,
+            })
+
         db.commit()
-        
+
         drcr_created = len(drcr_lines_debit) > 0 or len(drcr_lines_credit) > 0
         message = "SR approved successfully"
         if drcr_created:
