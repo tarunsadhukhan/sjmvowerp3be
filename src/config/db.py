@@ -56,7 +56,7 @@ def extract_subdomain_from_request(request: Request) -> str:
     """
     if STATIC_TENANT:
         return STATIC_TENANT
-
+    print("\n=== Extracting Subdomain =main==")
     print("\n=== Extracting Subdomain ===")
     
     # Try X-Forwarded-Host first (common with proxies)
