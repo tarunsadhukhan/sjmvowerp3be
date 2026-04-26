@@ -158,15 +158,28 @@ async def category_create_setup(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get dropdown options needed for category creation (branches)."""
+    """Get dropdown options needed for category creation (branches).
+
+    Optional `branch_id` query param (single value or CSV) restricts the
+    branches list returned for the dropdown.
+    """
     try:
         co_id = request.query_params.get("co_id")
         if not co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
 
-        branch_query = text("""
+        raw_branch_ids = request.query_params.get("branch_id")
+        branch_ids = parse_branch_ids(raw_branch_ids)
+
+        branch_filter = ""
+        if branch_ids:
+            placeholders = ",".join(str(int(b)) for b in branch_ids)
+            branch_filter = f"AND branch_id IN ({placeholders})"
+
+        branch_query = text(f"""
             SELECT branch_id, branch_name FROM branch_mst
             WHERE co_id = :co_id AND active = 1
+            {branch_filter}
             ORDER BY branch_name
         """)
         branches = db.execute(branch_query, {"co_id": int(co_id)}).fetchall()
@@ -199,19 +212,24 @@ async def category_create(
         if not cata_desc:
             raise HTTPException(status_code=400, detail="Category name (cata_desc) is required")
 
-        # Check duplicate code
+        branch_id = int(body["branch_id"]) if body.get("branch_id") else None
+        if branch_id is None:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+
+        # Check duplicate (cata_code + branch_id)
         dup_query = text("""
             SELECT COUNT(*) AS cnt FROM category_mst
-            WHERE cata_code = :cata_code
+            WHERE cata_code = :cata_code AND branch_id = :branch_id
         """)
         dup_result = db.execute(dup_query, {
             "cata_code": cata_code,
+            "branch_id": branch_id,
         }).fetchone()
 
         if dup_result and dup_result.cnt > 0:
             raise HTTPException(
                 status_code=400,
-                detail="Category with this code already exists",
+                detail="Category with this code already exists for this branch",
             )
 
         user_id = token_data.get("user_id") if token_data else None
@@ -219,7 +237,7 @@ async def category_create(
         new_cat = CategoryMst(
             cata_code=cata_code,
             cata_desc=cata_desc,
-            branch_id=int(body["branch_id"]) if body.get("branch_id") else None,
+            branch_id=branch_id,
             updated_by=str(user_id) if user_id else None,
             updated_date_time=datetime.now(),
         )
@@ -265,27 +283,31 @@ async def category_edit(
         if not existing:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        # Check duplicate code (excluding current record)
+        # Check duplicate (cata_code + branch_id, excluding current record)
+        new_branch_id = int(body["branch_id"]) if body.get("branch_id") else existing.branch_id
         dup_query = text("""
             SELECT COUNT(*) AS cnt FROM category_mst
-            WHERE cata_code = :cata_code AND cata_id != :cata_id
+            WHERE cata_code = :cata_code
+              AND branch_id = :branch_id
+              AND cata_id != :cata_id
         """)
         dup_result = db.execute(dup_query, {
             "cata_code": cata_code,
+            "branch_id": new_branch_id,
             "cata_id": cata_id,
         }).fetchone()
 
         if dup_result and dup_result.cnt > 0:
             raise HTTPException(
                 status_code=400,
-                detail="Category with this code already exists",
+                detail="Category with this code already exists for this branch",
             )
 
         user_id = token_data.get("user_id") if token_data else None
 
         existing.cata_code = cata_code
         existing.cata_desc = cata_desc
-        existing.branch_id = int(body["branch_id"]) if body.get("branch_id") else existing.branch_id
+        existing.branch_id = new_branch_id
         existing.updated_by = str(user_id) if user_id else existing.updated_by
         existing.updated_date_time = datetime.now()
 

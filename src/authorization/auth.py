@@ -2,7 +2,7 @@ from src.authorization.utils import create_access_token, create_refresh_token, v
 from fastapi import Request, HTTPException, Response
 from sqlalchemy.sql import text
 from sqlalchemy import create_engine
-from src.config.db import get_db_names, default_engine, Session, extract_subdomain_from_request
+from src.config.db import STATIC_TENANT, get_db_names, default_engine, Session, extract_subdomain_from_request
 from fastapi.responses import JSONResponse
 from src.authorization.query import (
     get_admin_login_query,
@@ -20,10 +20,11 @@ def login_user_console(
     """Login logic - Queries user table where username, password, and subdomain match"""
     try:
         with Session(default_engine) as session:
-            request_subdomain = extract_subdomain_from_request(request).strip().lower()
-            header_subdomain = (subdomain or "").strip().lower()
-            resolved_subdomain = request_subdomain if request_subdomain and request_subdomain != "default" else header_subdomain
-
+            resolved_subdomain = (STATIC_TENANT or "").strip().lower()
+            if not resolved_subdomain:
+                resolved_subdomain = extract_subdomain_from_request(request).strip().lower()
+            if not resolved_subdomain:
+                resolved_subdomain = (subdomain or "").strip().lower()
             if not resolved_subdomain:
                 resolved_subdomain = "default"
 

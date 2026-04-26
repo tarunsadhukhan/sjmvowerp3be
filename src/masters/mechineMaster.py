@@ -202,28 +202,27 @@ async def mechine_master_create_setup(
 ):
     try:
         print("ENTER mechine_master_create_setup", flush=True)
-        # parse branch ids (accept CSV, JSON-array, repeated params)
-        print('request', request, response)
-        url = str(request.url)
-        print("Request URL:", url, flush=True)
-        parsed_url = urlparse(url)
-        raw_query = parsed_url.query              # e.g. "%5B1,2,3%5D="
-#        print("Raw query string:", raw_query, flush=True)
-        # Decode to text like "[1,2,3]" or "[4]"
-        decoded = unquote(raw_query)              # e.g. "[1,2,3]="
-        if decoded.endswith("="):                 # our case puts the array in the key
-            decoded = decoded[:-1]                # -> "[1,2,3]"
-
-        # Safely convert to Python list
-        try:
-            ids = ast.literal_eval(decoded)       # -> [1, 2, 3] or [4]
-            if not isinstance(ids, list):
-                ids = [ids]
-        except Exception:
-            ids = []  # fallback if someone sends junk
-
-        print("IDs:", ids)
-        branch_ids = ids  # existing helper expected to return list[int] or None
+        # parse branch ids — accept CSV ("1,2"), single int ("1"), or JSON array ("[1,2]")
+        raw_branch = request.query_params.get("branch_id")
+        branch_ids: list[int] | None = None
+        if raw_branch:
+            try:
+                parsed = json.loads(raw_branch)
+                if isinstance(parsed, list):
+                    branch_ids = [int(x) for x in parsed if str(x).strip()]
+                else:
+                    branch_ids = [int(parsed)]
+            except Exception:
+                cleaned = re.sub(r"^[\[\(]+|[\]\)]+$", "", str(raw_branch)).strip()
+                parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+                out: list[int] = []
+                for p in parts:
+                    m = re.search(r"-?\d+", p)
+                    if m:
+                        out.append(int(m.group(0)))
+                branch_ids = out or None
+        if branch_ids == []:
+            branch_ids = None
         print("parsed branch_ids:", branch_ids, flush=True)
 
         search_param = f"%{search}%" if search else None
@@ -271,42 +270,63 @@ async def mechine_master_create(
 
     Accepts payload keys: item_grp_id, item_make or item_make_name, (optional) co_id.
     """
+    def _to_int(v):
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
     try:
         branch_id = payload.get("branch_id")
-        # accept either `item_make` or `item_make_name` from clients
-        mechine_name = payload.get("mechine_name") 
+        mechine_name = payload.get("mechine_name")
         mechine_code = payload.get("mechine_code")
-        dept_id = payload.get("dept_id")
-        mechine_type_id = payload.get("mechine_type_id")
-        mech_posting_code = payload.get("mechine_posting_code")
+        dept_id = _to_int(payload.get("dept_id"))
+        mechine_type_id = _to_int(payload.get("mechine_type_id"))
+        # accept both spellings from frontend
+        mech_posting_code = _to_int(
+            payload.get("mech_posting_code")
+            if payload.get("mech_posting_code") is not None
+            else payload.get("mechine_posting_code")
+        )
         remarks = payload.get("remarks")
-        active = payload.get("active", 1)
-        print(f"Creating department with branch_id={branch_id}, mechine_code={mechine_code}, mechine_name={mechine_name}", flush=True)  
-        # Prefer user id from token_data; fall back to payload.updated_by if token missing
+        active = _to_int(payload.get("active", 1)) or 1
+        print(
+            f"Creating machine: branch_id={branch_id}, mechine_code={mechine_code}, "
+            f"mechine_name={mechine_name}, dept_id={dept_id}, mechine_type_id={mechine_type_id}",
+            flush=True,
+        )
+
         user_id = None
         if token_data and token_data.get("user_id"):
             user_id = token_data.get("user_id")
         else:
             user_id = payload.get("updated_by")
+        # machine_mst.updated_by is NOT NULL — fall back to system user (1) if no token
+        user_id_int = _to_int(user_id) or 1
 
         if not branch_id or not mechine_name or not mechine_code:
             raise HTTPException(status_code=400, detail="Branch ID, mechine code, and mechine name are required")
+        if not dept_id:
+            raise HTTPException(status_code=400, detail="dept_id is required")
+        if not mechine_type_id:
+            raise HTTPException(status_code=400, detail="mechine_type_id is required")
 
         new_mechine_master = MachineMst(
             dept_id=dept_id,
             machine_name=mechine_name,
             machine_type_id=mechine_type_id,
-            updated_by=int(user_id) if user_id and str(user_id).isdigit() else None,
+            updated_by=user_id_int,
             remarks=remarks,
             updated_date_time=now_ist(),
             active=active,
             mech_posting_code=mech_posting_code,
             mech_code=mechine_code,
             mech_shr_code=payload.get("mech_shr_code"),
-            line_no=int(payload["line_no"]) if payload.get("line_no") not in (None, "") else None,
-            no_of_mechines=int(payload["no_of_mechines"]) if payload.get("no_of_mechines") not in (None, "") else None,
+            line_no=_to_int(payload.get("line_no")),
+            no_of_mechines=_to_int(payload.get("no_of_mechines")),
         )
-        print(f"New MachineMst object: {new_mechine_master}", flush=True)
         db.add(new_mechine_master)
         db.commit()
         db.refresh(new_mechine_master)
@@ -319,7 +339,9 @@ async def mechine_master_create(
             db.rollback()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 

@@ -186,18 +186,32 @@ async def spell_create_setup(
 
         branch_id = request.query_params.get("branch_id")
 
-        shift_query = text("""
+        # branch_id may be a single value "103" or CSV "103,104"
+        branch_ids: list[int] = []
+        if branch_id:
+            for part in str(branch_id).split(","):
+                part = part.strip()
+                if part:
+                    try:
+                        branch_ids.append(int(part))
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail="Invalid branch_id format")
+
+        if branch_ids:
+            placeholders = ",".join(str(b) for b in branch_ids)
+            branch_filter = f"AND s.branch_id IN ({placeholders})"
+        else:
+            branch_filter = ""
+
+        shift_query = text(f"""
             SELECT s.shift_id, s.shift_name FROM shift_mst s
             JOIN branch_mst b ON b.branch_id = s.branch_id
             WHERE b.co_id = :co_id AND s.status = 1
-              AND (:branch_id IS NULL OR s.branch_id = :branch_id)
+              {branch_filter}
             ORDER BY s.shift_name
         """)
 
-        shifts = db.execute(shift_query, {
-            "co_id": int(co_id),
-            "branch_id": int(branch_id) if branch_id else None,
-        }).fetchall()
+        shifts = db.execute(shift_query, {"co_id": int(co_id)}).fetchall()
 
         return {
             "shifts": [dict(r._mapping) for r in shifts],
@@ -227,19 +241,26 @@ async def spell_create(
         if not shift_id:
             raise HTTPException(status_code=400, detail="Shift is required")
 
-        # Check duplicate name (globally unique)
+        # Check duplicate (spell_name + branch_id, branch resolved via shift)
         dup_query = text("""
-            SELECT COUNT(*) AS cnt FROM spell_mst
-            WHERE spell_name = :spell_name AND status = 1
+            SELECT COUNT(*) AS cnt
+            FROM spell_mst sp
+            JOIN shift_mst sh ON sh.shift_id = sp.shift_id
+            WHERE sp.spell_name = :spell_name
+              AND sp.status = 1
+              AND sh.branch_id = (
+                  SELECT branch_id FROM shift_mst WHERE shift_id = :shift_id
+              )
         """)
         dup_result = db.execute(dup_query, {
             "spell_name": spell_name,
+            "shift_id": int(shift_id),
         }).fetchone()
-
+        print(f"Duplicate check for spell_name='{spell_name}' and shift_id={shift_id} returned count={dup_result.cnt if dup_result else 'None'}")
         if dup_result and dup_result.cnt > 0:
             raise HTTPException(
                 status_code=400,
-                detail="Spell with this name already exists",
+                detail="Spell with this name already exists for this branch",
             )
 
         user_id = token_data.get("user_id") if token_data else None
@@ -308,21 +329,30 @@ async def spell_edit(
         if not existing:
             raise HTTPException(status_code=404, detail="Spell not found")
 
-        # Check duplicate name (globally unique, excluding current record)
+        # Check duplicate (spell_name + branch_id, excluding current record).
+        # Branch resolved via the shift_id of incoming body, falling back to existing.
+        new_shift_id = int(body["shift_id"]) if body.get("shift_id") else existing.shift_id
         dup_query = text("""
-            SELECT COUNT(*) AS cnt FROM spell_mst
-            WHERE spell_name = :spell_name
-              AND status = 1 AND spell_id != :spell_id
+            SELECT COUNT(*) AS cnt
+            FROM spell_mst sp
+            JOIN shift_mst sh ON sh.shift_id = sp.shift_id
+            WHERE sp.spell_name = :spell_name
+              AND sp.status = 1
+              AND sp.spell_id != :spell_id
+              AND sh.branch_id = (
+                  SELECT branch_id FROM shift_mst WHERE shift_id = :shift_id
+              )
         """)
         dup_result = db.execute(dup_query, {
             "spell_name": spell_name,
             "spell_id": spell_id,
+            "shift_id": new_shift_id,
         }).fetchone()
 
         if dup_result and dup_result.cnt > 0:
             raise HTTPException(
                 status_code=400,
-                detail="Spell with this name already exists",
+                detail="Spell with this name already exists for this branch",
             )
 
         user_id = token_data.get("user_id") if token_data else None

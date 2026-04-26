@@ -182,12 +182,15 @@ class MachineMst(Base):
     dept_id = Column(Integer, ForeignKey("dept_mst.dept_id"), nullable=False)
     machine_name = Column(String(255), nullable=False)
     machine_type_id = Column(Integer, nullable=False)
-    updated_by = Column(Integer, nullable=False)
+    updated_by = Column(Integer, nullable=True)
     remarks = Column(String(255), nullable=True)
     updated_date_time = Column(DateTime, nullable=False, default=func.now())
     active = Column(Integer, nullable=False, default=1)
     mech_posting_code = Column(Integer, nullable=True)
     mech_code = Column(String(100), nullable=False)
+    mech_shr_code = Column(String(100), nullable=True)
+    line_no = Column(Integer, nullable=True)
+    no_of_mechines = Column(Integer, nullable=True)
 
     # relationships
   #  dept = relationship("DeptMst", foreign_keys=[dept_id])

@@ -186,19 +186,36 @@ async def shift_create_setup(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Get dropdown options needed for shift creation (branches, spells)."""
+    """Get dropdown options needed for shift creation (branches, spells).
+
+    Accepts:
+        co_id (required): company ID to scope branch list
+        branch_id (optional): when provided, returns only that branch
+    """
     try:
         co_id = request.query_params.get("co_id")
         if not co_id:
             raise HTTPException(status_code=400, detail="co_id is required")
 
-        branch_query = text("""
+        branch_id = request.query_params.get("branch_id")
+
+        params: dict = {"co_id": int(co_id)}
+        branch_filter = ""
+        if branch_id:
+            try:
+                params["branch_id"] = int(branch_id)
+                branch_filter = "AND branch_id = :branch_id"
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid branch_id format")
+
+        branch_query = text(f"""
             SELECT branch_id, branch_name FROM branch_mst
             WHERE co_id = :co_id AND active = 1
+              {branch_filter}
             ORDER BY branch_name
         """)
 
-        branches = db.execute(branch_query, {"co_id": int(co_id)}).fetchall()
+        branches = db.execute(branch_query, params).fetchall()
 
         return {
             "branches": [dict(r._mapping) for r in branches],

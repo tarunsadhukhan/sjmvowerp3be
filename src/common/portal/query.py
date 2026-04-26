@@ -89,6 +89,7 @@ def get_portal_user_menus(user_id: int = None):
     where urm.user_id = :user_id and ifnull(ccm.access_type,0) not in (2) ;
     """
     query = text(sql)
+    print(f"Constructed SQL for get_portal_user_menus: {query} == {user_id}")
     return query
 
 

@@ -10,4 +10,7 @@ if getattr(sys, 'frozen', False):
 from src.main import app
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)
+    workers = int(os.environ.get("UVICORN_WORKERS", "4"))
+    # When --reload is desired in dev, use the CLI directly:
+    #   uvicorn src.main:app --reload --workers 1 --port 8000
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, workers=workers)

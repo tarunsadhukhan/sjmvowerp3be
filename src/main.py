@@ -47,6 +47,9 @@ from src.masters.batchPlanMaster import router as batch_plan_master_router
 from src.masters.designation import router as designation_router
 from src.masters.category import router as category_router
 from src.masters.contractor import router as contractor_router
+from src.masters.shift import router as shift_router
+from src.masters.spell import router as spell_router
+from src.masters.machineType import router as machine_type_router
 from src.juteProcurement.jutePO import router as jute_po_router
 from src.juteProcurement.juteGateEntry import router as jute_gate_entry_router
 from src.juteProcurement.materialInspection import router as jute_material_inspection_router
@@ -67,6 +70,9 @@ from src.hrms.payParam import router as hrms_pay_param_router
 from src.hrms.payRegister import router as hrms_pay_register_router
 from src.hrms.payComponent import router as hrms_pay_component_router
 from src.hrms.leaveType import router as hrms_leave_type_router
+from src.hrms.empRateEntry import router as hrms_emp_rate_entry_router
+from src.hrms.bioAttUpdation import router as hrms_bio_att_router
+from src.hrms.dailyMachineEntry import router as hrms_daily_machine_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -130,6 +136,9 @@ app.include_router(batch_plan_master_router, prefix="/api/batchPlanMaster", tags
 app.include_router(designation_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(category_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(contractor_router, prefix="/api/contractorMaster", tags=["masters-contractor"])
+app.include_router(shift_router, prefix="/api/masters", tags=["masters-shift"])
+app.include_router(spell_router, prefix="/api/masters", tags=["masters-spell"])
+app.include_router(machine_type_router, prefix="/api/machineTypeMaster", tags=["masters-machine-type"])
 
 app.include_router(indent_router, prefix="/api/procurementIndent", tags=["procurement-indent"])
 app.include_router(po_router, prefix="/api/procurementPO", tags=["procurement-po"])
@@ -171,6 +180,9 @@ app.include_router(hrms_pay_param_router, prefix="/api/hrms", tags=["hrms-pay-pa
 app.include_router(hrms_pay_register_router, prefix="/api/hrms", tags=["hrms-pay-register"])
 app.include_router(hrms_pay_component_router, prefix="/api/hrms", tags=["hrms-pay-component"])
 app.include_router(hrms_leave_type_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_emp_rate_entry_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_bio_att_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_daily_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 
 
 logging.basicConfig(level=logging.INFO)

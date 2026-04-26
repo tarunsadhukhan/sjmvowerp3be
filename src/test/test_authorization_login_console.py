@@ -2,6 +2,9 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+import src.authorization.auth as auth_module
+
 from src.authorization.auth import login_user_console
 
 
@@ -26,6 +29,11 @@ def _make_request_with_host(host: str):
     request = MagicMock()
     request.headers = {"host": host}
     return request
+
+
+@pytest.fixture(autouse=True)
+def _set_static_tenant(monkeypatch):
+    monkeypatch.setattr(auth_module, "STATIC_TENANT", "dev3")
 
 
 @patch("src.authorization.auth.create_access_token", return_value="test-access-token")
@@ -126,14 +134,14 @@ def test_login_console_admin_rejects_non_ctrldesk_user():
     assert data["message"] == "User is not registered"
 
 
-def test_login_console_uses_request_subdomain_over_passed_subdomain():
-    """Prevents bypass by sending a different subdomain in header/body than actual host subdomain."""
+def test_login_console_always_uses_static_tenant_for_query_binding():
+    """Console login should bind STATIC_TENANT even if host/body carry a different subdomain."""
     mock_session = MagicMock()
     mock_session.execute.side_effect = [_make_result(None)]
 
     with patch("src.authorization.auth.Session", return_value=_SessionContextManager(mock_session)):
         response = login_user_console(
-            request=_make_request_with_host("dev3.vowerp.co.in"),
+            request=_make_request_with_host("sls.vowerp.co.in"),
             username="org1-user@example.com",
             password="secret",
             logintype="console",
@@ -143,6 +151,10 @@ def test_login_console_uses_request_subdomain_over_passed_subdomain():
     data = json.loads(response.body)
     assert response.status_code == 401
     assert data["message"] == "User is not registered"
+
+    first_call_args = mock_session.execute.call_args_list[0][0]
+    first_call_params = first_call_args[1]
+    assert first_call_params["subdomain"] == "dev3"
 
 
 def test_login_console_binds_dev3_subdomain_in_tenant_query():
@@ -196,7 +208,6 @@ def test_login_console_jwt_includes_org_context(mock_verify, mock_refresh, mock_
 
 # --- verify-session endpoint tests ---
 
-import pytest
 from fastapi.testclient import TestClient
 from src.main import app
 from src.authorization.utils import get_current_user_with_refresh, verify_access_token, create_access_token

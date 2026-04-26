@@ -12,7 +12,7 @@ from src.authorization.utils import (
     ALGORITHM
 )
 from src.authorization.auth import login_user, login_user_console
-from src.config.db import default_engine, extract_subdomain_from_request
+from src.config.db import STATIC_TENANT, default_engine, extract_subdomain_from_request
 from datetime import datetime
 import jwt
 
@@ -57,9 +57,11 @@ def login_console_route(request: Request, login_data: LoginRequest):
     """Login Route (calls login_user_console from auth.py)"""
     print("Login User")
 
-    # For console login, prefer frontend-provided subdomain from browser hostname; fallback to request extraction.
-    header_subdomain = (request.headers.get("X-Subdomain") or "").strip().lower()
-    subdomain = header_subdomain if header_subdomain else extract_subdomain_from_request(request)
+    # Console login is pinned to STATIC_TENANT when configured.
+    subdomain = (STATIC_TENANT or "").strip().lower()
+    if not subdomain:
+        subdomain = extract_subdomain_from_request(request)
+
     print(f"DEBUG: Extracted Subdomain = {subdomain}")  # Debugging
     print('hhhsub=====',subdomain)
     return login_user_console(

@@ -92,7 +92,7 @@ async def compmenuitems(
                 ORDER BY order_by
             """)
             
-            print(f"🔍 Executing query for user_id: {user_id}")
+            print(f"🔍 Executing query for user_id===: {user_id}")
             result = session.execute(query, {"user_id": user_id})
             menu_items = result.fetchall()
             print(f"📋 Retrieved {len(menu_items)} menu items")
