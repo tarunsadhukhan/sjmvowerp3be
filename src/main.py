@@ -73,6 +73,8 @@ from src.hrms.leaveType import router as hrms_leave_type_router
 from src.hrms.empRateEntry import router as hrms_emp_rate_entry_router
 from src.hrms.bioAttUpdation import router as hrms_bio_att_router
 from src.hrms.dailyMachineEntry import router as hrms_daily_machine_router
+from src.hrms.manMachine import router as hrms_man_machine_router
+from src.hrms.desigNormsSet import router as hrms_desig_norms_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -183,6 +185,8 @@ app.include_router(hrms_leave_type_router, prefix="/api/hrmsMasters", tags=["hrm
 app.include_router(hrms_emp_rate_entry_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_bio_att_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_daily_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_man_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_desig_norms_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 
 
 logging.basicConfig(level=logging.INFO)

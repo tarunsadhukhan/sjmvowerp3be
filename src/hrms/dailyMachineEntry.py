@@ -23,8 +23,8 @@ router = APIRouter()
 # ─── SQL ────────────────────────────────────────────────────────────
 
 
-def _list_query():
-    return text("""
+def _list_query(branch_filter_sql: str = ""):
+    return text(f"""
         SELECT
             d.daily_sum_mc_id,
             d.tran_date,
@@ -35,14 +35,14 @@ def _list_query():
             d.shift_b,
             d.shift_c,
             (COALESCE(d.shift_a,0) + COALESCE(d.shift_b,0) + COALESCE(d.shift_c,0)) AS total_mc,
-            d.company_id,
+            m.company_id,
             d.branch_id,
             d.is_active,
             d.created_on
         FROM tbl_daily_summ_mechine_data d
         LEFT JOIN mechine_code_master m ON m.mc_code_id = d.mc_code_id
         WHERE COALESCE(d.is_active, 1) = 1
-          AND d.company_id = :company_id
+          {branch_filter_sql}
           AND (:search IS NULL
                OR m.mc_code LIKE :search
                OR m.Mechine_type_name LIKE :search
@@ -63,7 +63,7 @@ def _by_id_query():
             d.shift_b,
             d.shift_c,
             (COALESCE(d.shift_a,0) + COALESCE(d.shift_b,0) + COALESCE(d.shift_c,0)) AS total_mc,
-            d.company_id,
+            m.company_id,
             d.branch_id,
             d.is_active
         FROM tbl_daily_summ_mechine_data d
@@ -105,7 +105,9 @@ async def daily_machine_lookup_mc(
 
         if not row:
             return {"found": False, "data": None}
-        return {"found": True, "data": dict(row._mapping)}
+        payload = dict(row._mapping)
+        payload["machine_type_id"] = _get_mc_machine_type_id(db, int(row.mc_code_id))
+        return {"found": True, "data": payload}
     except HTTPException:
         raise
     except Exception as e:
@@ -131,9 +133,33 @@ async def get_daily_machine_table(
         page = int(request.query_params.get("page", 1))
         limit = int(request.query_params.get("limit", 10))
 
+        # Optional branch filter (comma-separated list of ids)
+        branch_raw = request.query_params.get("branch_id")
+        branch_ids: list[int] = []
+        if branch_raw:
+            for tok in str(branch_raw).split(","):
+                tok = tok.strip()
+                if tok:
+                    try:
+                        branch_ids.append(int(tok))
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid branch_id: {tok}",
+                        )
+
+        params: dict = {"company_id": int(co_id), "search": search_param}
+        branch_filter_sql = ""
+        if branch_ids:
+            placeholders = ",".join(f":b{i}" for i in range(len(branch_ids)))
+            branch_filter_sql = f"AND d.branch_id IN ({placeholders})"
+            for i, bid in enumerate(branch_ids):
+                params[f"b{i}"] = bid
+        print("DEBUG: branch_filter_sql =", branch_filter_sql)
+        print("DEBUG: params =", params)    
         result = db.execute(
-            _list_query(),
-            {"company_id": int(co_id), "search": search_param},
+            _list_query(branch_filter_sql),
+            params,
         ).fetchall()
 
         all_data = [dict(r._mapping) for r in result]
@@ -166,7 +192,9 @@ async def get_daily_machine_by_id(
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Daily machine entry not found")
-        return {"data": dict(row._mapping)}
+        payload = dict(row._mapping)
+        payload["machine_type_id"] = _get_mc_machine_type_id(db, int(row.mc_code_id))
+        return {"data": payload}
     except HTTPException:
         raise
     except Exception as e:
@@ -219,6 +247,116 @@ def _resolve_mc_code_id(db: Session, body: dict) -> tuple[int, int | None, int |
     return int(row.mc_code_id), row.company_id, row.branch_id
 
 
+def _validate_machine_type_id(db: Session, body: dict) -> int | None:
+    """Validate optional machine_type_id against machine_type_mst.
+
+    Returns int machine_type_id when provided, else None.
+    """
+    raw_id = body.get("machine_type_id")
+    if raw_id is None or raw_id == "":
+        return None
+    try:
+        machine_type_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid machine_type_id")
+
+    row = db.execute(
+        text(
+            """
+            SELECT machine_type_id
+            FROM machine_type_mst
+            WHERE machine_type_id = :machine_type_id
+              AND COALESCE(active, 1) = 1
+            LIMIT 1
+            """
+        ),
+        {"machine_type_id": machine_type_id},
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=400, detail="machine_type_id not found")
+    return machine_type_id
+
+
+def _validate_mc_type_consistency(db: Session, mc_code_id: int, machine_type_id: int | None) -> None:
+    """If both IDs are provided, verify mc_code_id belongs to the selected machine type.
+
+    Some deployments store type link as `machine_type_id`, others as `mechine_type_id`.
+    We detect whichever column exists before validating.
+    """
+    if machine_type_id is None:
+        return
+
+    col_row = db.execute(
+        text(
+            """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'mechine_code_master'
+              AND COLUMN_NAME IN ('machine_type_id', 'mechine_type_id')
+            LIMIT 1
+            """
+        )
+    ).fetchone()
+    if not col_row:
+        return
+
+    type_col = str(col_row[0])
+    row = db.execute(
+        text(
+            f"""
+            SELECT mc_code_id
+            FROM mechine_code_master
+            WHERE mc_code_id = :mc_code_id
+              AND {type_col} = :machine_type_id
+              AND COALESCE(is_active, 1) = 1
+            LIMIT 1
+            """
+        ),
+        {"mc_code_id": mc_code_id, "machine_type_id": machine_type_id},
+    ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected machine_type_id does not match machine code",
+        )
+
+
+def _get_mc_machine_type_id(db: Session, mc_code_id: int) -> int | None:
+    """Return machine type id for mc_code_id when type column exists."""
+    col_row = db.execute(
+        text(
+            """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'mechine_code_master'
+              AND COLUMN_NAME IN ('machine_type_id', 'mechine_type_id')
+            LIMIT 1
+            """
+        )
+    ).fetchone()
+    if not col_row:
+        return None
+
+    type_col = str(col_row[0])
+    row = db.execute(
+        text(
+            f"""
+            SELECT {type_col} AS machine_type_id
+            FROM mechine_code_master
+            WHERE mc_code_id = :mc_code_id
+              AND COALESCE(is_active, 1) = 1
+            LIMIT 1
+            """
+        ),
+        {"mc_code_id": mc_code_id},
+    ).fetchone()
+    if not row or row.machine_type_id is None:
+        return None
+    return int(row.machine_type_id)
+
+
 @router.post("/daily_machine_create")
 async def daily_machine_create(
     request: Request,
@@ -238,7 +376,9 @@ async def daily_machine_create(
         if not tran_date:
             raise HTTPException(status_code=400, detail="tran_date is required")
 
+        machine_type_id = _validate_machine_type_id(db, body)
         mc_code_id, mc_company_id, mc_branch_id = _resolve_mc_code_id(db, body)
+        _validate_mc_type_consistency(db, mc_code_id, machine_type_id)
 
         shift_a = _parse_decimal(body.get("shift_a"), "shift_a") or 0
         shift_b = _parse_decimal(body.get("shift_b"), "shift_b") or 0
@@ -267,10 +407,10 @@ async def daily_machine_create(
             text("""
                 INSERT INTO tbl_daily_summ_mechine_data
                     (tran_date, mc_code_id, shift_a, shift_b, shift_c,
-                     company_id, branch_id, is_active, created_on)
+                     branch_id, is_active, created_on)
                 VALUES
                     (:tran_date, :mc_code_id, :shift_a, :shift_b, :shift_c,
-                     :company_id, :branch_id, 1, :created_on)
+                     :branch_id, 1, :created_on)
             """),
             {
                 "tran_date": tran_date,
@@ -278,7 +418,6 @@ async def daily_machine_create(
                 "shift_a": shift_a,
                 "shift_b": shift_b,
                 "shift_c": shift_c,
-                "company_id": int(co_id),
                 "branch_id": int(branch_id) if branch_id is not None else None,
                 "created_on": datetime.now(),
             },
@@ -309,7 +448,7 @@ async def daily_machine_edit(
 
         existing = db.execute(
             text("""
-                SELECT daily_sum_mc_id, company_id, branch_id
+                SELECT daily_sum_mc_id, branch_id
                 FROM tbl_daily_summ_mechine_data
                 WHERE daily_sum_mc_id = :id
             """),
@@ -322,7 +461,9 @@ async def daily_machine_edit(
         if not tran_date:
             raise HTTPException(status_code=400, detail="tran_date is required")
 
+        machine_type_id = _validate_machine_type_id(db, body)
         mc_code_id, _mc_co, mc_branch_id = _resolve_mc_code_id(db, body)
+        _validate_mc_type_consistency(db, mc_code_id, machine_type_id)
 
         shift_a = _parse_decimal(body.get("shift_a"), "shift_a") or 0
         shift_b = _parse_decimal(body.get("shift_b"), "shift_b") or 0
@@ -377,6 +518,108 @@ async def daily_machine_edit(
         return {
             "message": "Daily machine entry updated successfully",
             "daily_sum_mc_id": daily_sum_mc_id,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/daily_machine_final_process")
+async def daily_machine_final_process(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Finalize daily machine entries for a given date / branch.
+
+    Steps:
+      1. Delete previously-finalised rows in tbl_daily_summ_mechine_data
+         where tran_date = :tran_date AND updated = 'Y'
+         (optionally scoped by branch_id).
+      2. Re-insert finalised rows aggregated from
+         daily_ebmc_attendance + daily_attendance + machine_mst +
+         mechine_code_master for that date / branch.
+    """
+    try:
+        body = await request.json()
+        tran_date = body.get("tran_date")
+        branch_id = body.get("branch_id")
+        if not tran_date:
+            raise HTTPException(status_code=400, detail="tran_date is required")
+        if not branch_id:
+            raise HTTPException(status_code=400, detail="branch_id is required")
+
+        try:
+            branch_id_int = int(branch_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+        # 1) Delete previously finalised rows for this date + branch
+        del_result = db.execute(
+            text("""
+                DELETE FROM tbl_daily_summ_mechine_data
+                WHERE tran_date = :tran_date
+                  AND updated = 'Y'
+                  AND branch_id = :branch_id
+            """),
+            {"tran_date": tran_date, "branch_id": branch_id_int},
+        )
+
+        # 2) Re-insert aggregated rows
+        ins_result = db.execute(
+            text("""
+                INSERT INTO tbl_daily_summ_mechine_data
+                    (tran_date, shift_a, shift_b, shift_c, updated,
+                     branch_id, mc_code_id, is_active)
+                SELECT
+                    attendance_date,
+                    shift_a,
+                    shift_b,
+                    shift_c,
+                    'Y' AS upd,
+                    :branch_id AS branchid,
+                    mc_code_id,
+                    1 AS act
+                FROM (
+                    SELECT
+                        da.attendance_date,
+                        mm.machine_type_id,
+                        mcm.mc_code_id,
+                        COUNT(DISTINCT CASE WHEN da.spell = 'A' THEN dea.mc_id END) AS shift_a,
+                        COUNT(DISTINCT CASE WHEN da.spell = 'B' THEN dea.mc_id END) AS shift_b,
+                        COUNT(DISTINCT CASE WHEN da.spell = 'C' THEN dea.mc_id END) AS shift_c
+                    FROM daily_ebmc_attendance dea
+                    LEFT JOIN daily_attendance da
+                        ON da.daily_atten_id = dea.daily_atten_id
+                    LEFT JOIN machine_mst mm
+                        ON dea.mc_id = mm.machine_id
+                    LEFT JOIN mechine_code_master mcm
+                        ON mm.machine_type_id = mcm.machine_type
+                    WHERE dea.is_active = 1
+                      AND da.is_active = 1
+                      AND da.branch_id = :branch_id
+                      AND da.attendance_date = :tran_date
+                    GROUP BY
+                        da.attendance_date,
+                        mm.machine_type_id,
+                        mcm.mc_code_id
+                ) dmc
+            """),
+            {"tran_date": tran_date, "branch_id": branch_id_int},
+        )
+
+        db.commit()
+        return {
+            "message": (
+                f"Final process completed for {tran_date} (branch {branch_id_int}): "
+                f"deleted {del_result.rowcount or 0}, inserted {ins_result.rowcount or 0}"
+            ),
+            "deleted": del_result.rowcount or 0,
+            "inserted": ins_result.rowcount or 0,
         }
     except HTTPException:
         db.rollback()
