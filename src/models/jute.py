@@ -98,6 +98,51 @@ class MachineSpgDetails(Base):
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
 
+
+# =============================================================================
+# SPINNING QUALITY MASTER
+# =============================================================================
+
+class SpinningQualityMst(Base):
+    """Spinning quality master table - stores spinning quality specifications."""
+    __tablename__ = "spinning_quality_mst"
+
+    spg_quality_mst_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    spg_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    spg_quality: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    speed: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tpi: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    std_count: Mapped[Optional[float]] = mapped_column(Double, nullable=True)
+    no_of_spindles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    frame_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    target_eff: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=func.current_timestamp()
+    )
+
+
+# =============================================================================
+# TROLLY MASTER
+# =============================================================================
+
+class TrollyMst(Base):
+    """Trolly master table - stores trolly definitions per branch/department."""
+    __tablename__ = "trolly_mst"
+
+    trolly_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trolly_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    trolly_weight: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    busket_weight: Mapped[Optional[Decimal]] = mapped_column(Double, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    dept_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[datetime] = mapped_column(
+        TIMESTAMP, nullable=False, server_default=func.current_timestamp()
+    )
+
+
 # =============================================================================
 # JUTE MR (MATERIAL RECEIPT) MODELS
 # =============================================================================

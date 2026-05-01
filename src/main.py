@@ -41,6 +41,8 @@ from src.masters.juteSupplier import router as jute_supplier_router
 from src.masters.juteSupplierMap import router as jute_supplier_map_router
 from src.masters.yarnQuality import router as yarn_quality_router
 from src.masters.machineSpgDetails import router as machine_spg_details_router
+from src.masters.spinningQuality import router as spinning_quality_router
+from src.masters.trolly import router as trolly_router
 from src.masters.yarnTypeMaster import router as yarn_type_router
 from src.masters.yarnMaster import router as yarn_master_router
 from src.masters.batchPlanMaster import router as batch_plan_master_router
@@ -75,6 +77,8 @@ from src.hrms.bioAttUpdation import router as hrms_bio_att_router
 from src.hrms.dailyMachineEntry import router as hrms_daily_machine_router
 from src.hrms.manMachine import router as hrms_man_machine_router
 from src.hrms.desigNormsSet import router as hrms_desig_norms_router
+from src.hrms.empAttendanceReport import router as hrms_emp_attendance_report_router
+from src.hrms.empWagesReport import router as hrms_emp_wages_report_router
 from src.config.cors import add_cors_middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
@@ -131,6 +135,8 @@ app.include_router(jute_supplier_router, prefix="/api/juteSupplierMaster", tags=
 app.include_router(jute_supplier_map_router, prefix="/api/juteSupplierMap", tags=["masters-jute-supplier-map"])
 app.include_router(yarn_quality_router, prefix="/api/yarnQualityMaster", tags=["masters-yarn-quality"])
 app.include_router(machine_spg_details_router, prefix="/api/machineSpgDetailsMaster", tags=["masters-machine-spg-details"])
+app.include_router(spinning_quality_router, prefix="/api/spinningQualityMaster", tags=["masters-spinning-quality"])
+app.include_router(trolly_router, prefix="/api/trollyMaster", tags=["masters-trolly"])
 
 app.include_router(yarn_type_router, prefix="/api/yarnTypeMaster", tags=["masters-yarn-type"])
 app.include_router(yarn_master_router, prefix="/api/yarnMaster", tags=["masters-yarn"])
@@ -187,6 +193,8 @@ app.include_router(hrms_bio_att_router, prefix="/api/hrmsMasters", tags=["hrms-m
 app.include_router(hrms_daily_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_man_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_desig_norms_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_emp_attendance_report_router, prefix="/api/hrmsReports", tags=["hrms-reports"])
+app.include_router(hrms_emp_wages_report_router, prefix="/api/hrmsReports", tags=["hrms-reports"])
 
 
 logging.basicConfig(level=logging.INFO)

@@ -1011,6 +1011,176 @@ def check_yarn_quality_code_exists(branch_id: int, quality_code: str, exclude_id
 
 
 # =============================================================================
+# SPINNING QUALITY MASTER QUERIES
+# =============================================================================
+
+def get_spinning_type_list():
+    """List spinning types from spinning_type_mst (used as Spinning Group dropdown)."""
+    sql = """
+    SELECT
+      st.spg_type_mst_id,
+      st.spg_type_code,
+      st.spg_type_name,
+      st.spg_group_id
+    FROM spinning_type_mst st
+    ORDER BY st.spg_type_name
+    """
+    return text(sql)
+
+
+def get_spinning_quality_list(branch_id: int = None):
+    """Get list of spinning qualities with related yarn type & branch info."""
+    sql = """
+    SELECT
+      sq.spg_quality_mst_id,
+      sq.spg_quality,
+      sq.spg_type_id,
+      st.spg_type_name AS spg_type_name,
+      sq.speed,
+      sq.tpi,
+      sq.std_count,
+      sq.no_of_spindles,
+      sq.frame_type,
+      sq.target_eff,
+      sq.branch_id,
+      bm.branch_name,
+      sq.updated_by,
+      sq.updated_date_time
+    FROM spinning_quality_mst sq
+    LEFT JOIN spinning_type_mst st ON sq.spg_type_id = st.spg_type_mst_id
+    LEFT JOIN branch_mst bm ON sq.branch_id = bm.branch_id
+    WHERE (:search IS NULL
+        OR sq.spg_quality LIKE :search
+        OR st.spg_type_name LIKE :search
+        OR sq.frame_type LIKE :search)
+    {branch_filter}
+    ORDER BY sq.spg_quality_mst_id DESC
+    """
+    branch_filter = ""
+    if branch_id:
+        branch_filter = "AND sq.branch_id = :branch_id"
+    sql = sql.format(branch_filter=branch_filter)
+    return text(sql)
+
+
+def get_spinning_quality_by_id():
+    """Get spinning quality details by ID."""
+    sql = """
+    SELECT
+      sq.spg_quality_mst_id,
+      sq.spg_quality,
+      sq.spg_type_id,
+      st.spg_type_name AS spg_type_name,
+      sq.speed,
+      sq.tpi,
+      sq.std_count,
+      sq.no_of_spindles,
+      sq.frame_type,
+      sq.target_eff,
+      sq.branch_id,
+      bm.branch_name,
+      sq.updated_by,
+      sq.updated_date_time
+    FROM spinning_quality_mst sq
+    LEFT JOIN spinning_type_mst st ON sq.spg_type_id = st.spg_type_mst_id
+    LEFT JOIN branch_mst bm ON sq.branch_id = bm.branch_id
+    WHERE sq.spg_quality_mst_id = :spg_quality_mst_id
+    """
+    return text(sql)
+
+
+def check_spinning_quality_exists(
+    spg_quality: str,
+    spg_type_id: int,
+    no_of_spindles: int,
+    frame_type: str,
+    exclude_id: int = None,
+):
+    """Check if a spinning quality with the same combination of
+    spg_quality + spg_type_id + no_of_spindles + frame_type already exists."""
+    sql = """
+    SELECT COUNT(*) AS count
+    FROM spinning_quality_mst
+    WHERE spg_quality = :spg_quality
+      AND spg_type_id = :spg_type_id
+      AND no_of_spindles = :no_of_spindles
+      AND frame_type = :frame_type
+    """
+    if exclude_id:
+        sql += " AND spg_quality_mst_id != :exclude_id"
+    return text(sql)
+
+
+# =============================================================================
+# TROLLY MASTER QUERIES
+# =============================================================================
+
+def get_trolly_list(branch_id: int = None):
+    """Paginated trolly list with branch + dept names. Optional branch filter."""
+    branch_filter = "AND tm.branch_id = :branch_id" if branch_id else ""
+    sql = f"""
+    SELECT
+      tm.trolly_id,
+      tm.trolly_name,
+      tm.trolly_weight,
+      tm.busket_weight,
+      tm.branch_id,
+      bm.branch_name,
+      tm.dept_id,
+      dm.dept_desc AS dept_name,
+      tm.updated_by,
+      tm.updated_date_time
+    FROM trolly_mst tm
+    LEFT JOIN branch_mst bm ON tm.branch_id = bm.branch_id
+    LEFT JOIN dept_mst dm ON tm.dept_id = dm.dept_id
+    WHERE 1=1
+      {branch_filter}
+      AND (
+        :search IS NULL
+        OR tm.trolly_name LIKE :search
+        OR dm.dept_desc LIKE :search
+      )
+    ORDER BY tm.trolly_id DESC
+    """
+    return text(sql)
+
+
+def get_trolly_by_id():
+    sql = """
+    SELECT
+      tm.trolly_id,
+      tm.trolly_name,
+      tm.trolly_weight,
+      tm.busket_weight,
+      tm.branch_id,
+      bm.branch_name,
+      tm.dept_id,
+      dm.dept_desc AS dept_name,
+      tm.updated_by,
+      tm.updated_date_time
+    FROM trolly_mst tm
+    LEFT JOIN branch_mst bm ON tm.branch_id = bm.branch_id
+    LEFT JOIN dept_mst dm ON tm.dept_id = dm.dept_id
+    WHERE tm.trolly_id = :trolly_id
+    """
+    return text(sql)
+
+
+def check_trolly_exists(branch_id: int, dept_id: int, trolly_name: str, exclude_id: int = None):
+    """Duplicate check on (branch_id, dept_id, trolly_name)."""
+    sql = """
+    SELECT COUNT(*) AS count
+    FROM trolly_mst
+    WHERE branch_id = :branch_id
+      AND dept_id = :dept_id
+      AND trolly_name = :trolly_name
+    """
+    if exclude_id:
+        sql += " AND trolly_id != :exclude_id"
+    return text(sql)
+
+
+# =============================================================================
 # ITEM BOM MASTER QUERIES
 # =============================================================================
 

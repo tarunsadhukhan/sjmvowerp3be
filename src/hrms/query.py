@@ -757,3 +757,215 @@ def delete_employee_photo():
         DELETE FROM hrms_employee_face
         WHERE eb_id = :eb_id
     """)
+
+
+# ─── Employee Attendance Report queries ─────────────────────────────
+# Driver = hrms_ed_official_details so that all joined employees appear
+# even when they have no attendance in the period (LEFT JOIN to a
+# pre-aggregated daily_attendance subquery).
+
+from sqlalchemy.sql import bindparam
+
+
+def get_emp_attendance_report():
+    sql="""SELECT
+            heod.eb_id                                                       AS eb_id,
+            COALESCE(heod.emp_code, CAST(heod.eb_id AS CHAR))                AS emp_code,
+            TRIM(CONCAT_WS(' ',
+                           hepd.first_name,
+                           IFNULL(hepd.middle_name, ''),
+                           IFNULL(hepd.last_name, '')))                       AS emp_name,
+            sm.status_name                                                   AS status_name,
+            sdm.sub_dept_code                                                AS sub_dept_code,
+            sdm.sub_dept_desc                                                AS sub_dept_name,
+            da.attendance_date                                               AS attendance_date,
+            da.whrs                                                          AS working_hours
+        FROM hrms_ed_official_details heod
+        LEFT JOIN hrms_ed_personal_details hepd
+               ON hepd.eb_id = heod.eb_id
+        LEFT JOIN status_mst sm
+               ON sm.status_id = hepd.status_id
+        LEFT JOIN sub_dept_mst sdm
+               ON sdm.sub_dept_id = heod.sub_dept_id
+        LEFT JOIN (
+            SELECT eb_id,
+                   attendance_date,
+                   SUM(working_hours) AS whrs
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id, attendance_date
+        ) da ON da.eb_id = heod.eb_id
+        LEFT JOIN (
+            SELECT eb_id, COUNT(DISTINCT attendance_date) AS attended_days
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id
+        ) ad ON ad.eb_id = heod.eb_id
+        WHERE COALESCE(heod.active, 1) = 1
+          AND heod.branch_id IN :branch_ids
+          AND (:dept_id IS NULL OR sdm.sub_dept_id = :dept_id)
+          AND (:scope = 'all' OR ad.attended_days IS NOT NULL)
+          AND (:less_than = 0 OR COALESCE(ad.attended_days, 0) < :less_than)
+        ORDER BY sdm.sub_dept_code, heod.emp_code
+        """
+    print('report',sql)
+    return text(
+        """
+        SELECT
+            heod.eb_id                                                       AS eb_id,
+            COALESCE(heod.emp_code, CAST(heod.eb_id AS CHAR))                AS emp_code,
+            TRIM(CONCAT_WS(' ',
+                           hepd.first_name,
+                           IFNULL(hepd.middle_name, ''),
+                           IFNULL(hepd.last_name, '')))                       AS emp_name,
+            sm.status_name                                                   AS status_name,
+            sdm.sub_dept_code                                                AS sub_dept_code,
+            sdm.sub_dept_desc                                                AS sub_dept_name,
+            da.attendance_date                                               AS attendance_date,
+            da.whrs                                                          AS working_hours
+        FROM hrms_ed_official_details heod
+        LEFT JOIN hrms_ed_personal_details hepd
+               ON hepd.eb_id = heod.eb_id
+        LEFT JOIN status_mst sm
+               ON sm.status_id = hepd.status_id
+        LEFT JOIN sub_dept_mst sdm
+               ON sdm.sub_dept_id = heod.sub_dept_id
+        LEFT JOIN (
+            SELECT eb_id,
+                   attendance_date,
+                   SUM(working_hours) AS whrs
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id, attendance_date
+        ) da ON da.eb_id = heod.eb_id
+        LEFT JOIN (
+            SELECT eb_id, COUNT(DISTINCT attendance_date) AS attended_days
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id
+        ) ad ON ad.eb_id = heod.eb_id
+        WHERE COALESCE(heod.active, 1) = 1
+          AND heod.branch_id IN :branch_ids
+          AND (:dept_id IS NULL OR sdm.sub_dept_id = :dept_id)
+          AND (:scope = 'all' OR ad.attended_days IS NOT NULL)
+          AND (:less_than = 0 OR COALESCE(ad.attended_days, 0) < :less_than)
+        ORDER BY sdm.sub_dept_code, heod.emp_code
+        """
+    ).bindparams(bindparam("branch_ids", expanding=True))
+    
+
+def get_emp_attendance_dept_list():
+    return text(
+        """
+        SELECT dept_id, dept_desc AS dept_name, branch_id
+        FROM dept_mst
+        WHERE (:branch_count = 0 OR branch_id IN :branch_ids)
+        ORDER BY dept_desc
+        """
+        
+    ).bindparams(bindparam("branch_ids", expanding=True))
+
+
+def get_emp_att_dept_list():
+    return text(
+        """
+        SELECT sub_dept_id dept_id,  sdm.sub_dept_desc  AS dept_name, branch_id
+           from sub_dept_mst sdm 
+            left join dept_mst dm on sdm.dept_id =dm.dept_id
+        WHERE (:branch_count = 0 OR branch_id IN :branch_ids)
+        ORDER BY sdm.sub_dept_desc
+        """
+        
+    ).bindparams(bindparam("branch_ids", expanding=True))
+
+
+
+def get_emp_attendance_fne_list():
+    return text(
+        """
+        SELECT fne_id, fne_name, from_date, to_date
+        FROM fne_master
+        WHERE COALESCE(active, 1) = 1
+          AND (:from_date IS NULL OR to_date   >= :from_date)
+          AND (:to_date   IS NULL OR from_date <= :to_date)
+        ORDER BY from_date
+        """
+    )
+
+
+# ─── Employee Wages Report queries ──────────────────────────────────
+# Per-day wages per employee = (rate / 8) * working_hours
+# rate = most-recent employee_rate_table.rate where rate_date <= attendance_date.
+# Driver = hrms_ed_official_details so all joined employees appear; rows with
+# no attendance in the period have attendance_date IS NULL.
+
+def get_emp_wages_report():
+    return text(
+        """
+        SELECT
+            heod.eb_id                                                       AS eb_id,
+            COALESCE(heod.emp_code, CAST(heod.eb_id AS CHAR))                AS emp_code,
+            TRIM(CONCAT_WS(' ',
+                           hepd.first_name,
+                           IFNULL(hepd.middle_name, ''),
+                           IFNULL(hepd.last_name, '')))                       AS emp_name,
+            sm.status_name                                                   AS status_name,
+            sdm.sub_dept_code                                                AS sub_dept_code,
+            sdm.sub_dept_desc                                                AS sub_dept_name,
+            da.attendance_date                                               AS attendance_date,
+            da.whrs                                                          AS working_hours,
+            (
+                SELECT er.rate
+                FROM employee_rate_table er
+                WHERE er.eb_id = heod.eb_id
+                  AND er.rate_date <= da.attendance_date
+                ORDER BY er.rate_date DESC
+                LIMIT 1
+            )                                                                AS rate
+        FROM hrms_ed_official_details heod
+        LEFT JOIN hrms_ed_personal_details hepd
+               ON hepd.eb_id = heod.eb_id
+        LEFT JOIN status_mst sm
+               ON sm.status_id = hepd.status_id
+        LEFT JOIN sub_dept_mst sdm
+               ON sdm.sub_dept_id = heod.sub_dept_id
+        LEFT JOIN (
+            SELECT eb_id,
+                   attendance_date,
+                   SUM(working_hours) AS whrs
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id, attendance_date
+        ) da ON da.eb_id = heod.eb_id
+        LEFT JOIN (
+            SELECT eb_id, COUNT(DISTINCT attendance_date) AS attended_days
+            FROM daily_attendance
+            WHERE COALESCE(is_active, 1) = 1
+              AND attendance_date BETWEEN :from_date AND :to_date
+              AND branch_id IN :branch_ids
+              AND (:att_type IS NULL OR attendance_type = :att_type)
+            GROUP BY eb_id
+        ) ad ON ad.eb_id = heod.eb_id
+        WHERE COALESCE(heod.active, 1) = 1
+          AND heod.branch_id IN :branch_ids
+          AND (:dept_id IS NULL OR sdm.sub_dept_id = :dept_id)
+          AND (:scope = 'all' OR ad.attended_days IS NOT NULL)
+          AND (:less_than = 0 OR COALESCE(ad.attended_days, 0) < :less_than)
+        ORDER BY sdm.sub_dept_code, heod.emp_code
+        """
+    ).bindparams(bindparam("branch_ids", expanding=True))
