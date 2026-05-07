@@ -77,6 +77,7 @@ from src.hrms.bioAttUpdation import router as hrms_bio_att_router
 from src.hrms.dailyMachineEntry import router as hrms_daily_machine_router
 from src.hrms.manMachine import router as hrms_man_machine_router
 from src.hrms.desigNormsSet import router as hrms_desig_norms_router
+from src.hrms.manMachineMst import router as hrms_man_machine_mst_router
 from src.hrms.empAttendanceReport import router as hrms_emp_attendance_report_router
 from src.hrms.empWagesReport import router as hrms_emp_wages_report_router
 from src.config.cors import add_cors_middleware
@@ -193,6 +194,7 @@ app.include_router(hrms_bio_att_router, prefix="/api/hrmsMasters", tags=["hrms-m
 app.include_router(hrms_daily_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_man_machine_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_desig_norms_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
+app.include_router(hrms_man_machine_mst_router, prefix="/api/hrmsMasters", tags=["hrms-masters"])
 app.include_router(hrms_emp_attendance_report_router, prefix="/api/hrmsReports", tags=["hrms-reports"])
 app.include_router(hrms_emp_wages_report_router, prefix="/api/hrmsReports", tags=["hrms-reports"])
 

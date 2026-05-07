@@ -182,13 +182,57 @@ async def bio_att_list(
         offset = max(page - 1, 0) * limit
 
         params: dict = {"limit": limit, "offset": offset}
-        where = ""
+        clauses: list[str] = []
+
         if search:
-            where = (
-                " WHERE emp_code LIKE :s OR emp_anme LIKE :s "
-                " OR device_name LIKE :s OR department LIKE :s"
+            clauses.append(
+                "(emp_code LIKE :s OR emp_anme LIKE :s "
+                " OR device_name LIKE :s OR department LIKE :s)"
             )
             params["s"] = f"%{search}%"
+
+        # Per-column filters (whitelist -> safe column reference).
+        # Frontend sends `f_<field>` matching DataGrid column field names.
+        bio_filterable: dict[str, str] = {
+            "emp_code":         "emp_code",
+            "emp_anme":         "emp_anme",
+            "bio_id":           "CAST(bio_id AS CHAR)",
+            "log_date":         "CAST(log_date AS CHAR)",
+            "department":       "department",
+            "designation":      "designation",
+            "device_direction": "device_direction",
+            "device_name":      "device_name",
+            "company_name":     "company_name",
+            "employement_type": "employement_type",
+        }
+        for fld, expr in bio_filterable.items():
+            v = request.query_params.get(f"f_{fld}")
+            if v is None:
+                continue
+            v = v.strip()
+            if not v:
+                continue
+            pname = f"f_{fld}"
+            clauses.append(f"{expr} LIKE :{pname}")
+            params[pname] = f"%{v}%"
+
+        # Eb No (popup): exact emp_code match.
+        emp_eq = (request.query_params.get("emp_code_eq") or "").strip()
+        if emp_eq:
+            clauses.append("emp_code = :emp_code_eq")
+            params["emp_code_eq"] = emp_eq
+
+        # Date-range filter: from_date / to_date applied to log_date.
+        from_date = (request.query_params.get("from_date") or "").strip()
+        to_date   = (request.query_params.get("to_date")   or "").strip()
+        if from_date:
+            clauses.append("DATE(log_date) >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            clauses.append("DATE(log_date) <= :to_date")
+            params["to_date"] = to_date
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
         rows = db.execute(
             text(f"""
@@ -203,9 +247,10 @@ async def bio_att_list(
             params,
         ).fetchall()
 
+        count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
         total = db.execute(
             text(f"SELECT COUNT(*) AS cnt FROM bio_attendance_table {where}"),
-            {k: v for k, v in params.items() if k == "s"},
+            count_params,
         ).fetchone()
 
         data = []
@@ -249,24 +294,72 @@ async def daily_att_list(
         offset = max(page - 1, 0) * limit
 
         params: dict = {"limit": limit, "offset": offset}
-        where = ""
+        clauses: list[str] = []
+
         if search:
-            where = (
-                " WHERE CAST(d.eb_id AS CHAR) LIKE :s "
-                " OR o.emp_code LIKE :s "
+            clauses.append(
+                "(o.emp_code LIKE :s "
                 " OR CONCAT_WS(' ', p.first_name, IFNULL(p.middle_name,''), IFNULL(p.last_name,'')) LIKE :s "
                 " OR b.department LIKE :s "
                 " OR b.designation LIKE :s "
                 " OR d.spell_name LIKE :s "
                 " OR d.attendance_type LIKE :s "
                 " OR d.device_name LIKE :s "
-                " OR CAST(d.attendance_date AS CHAR) LIKE :s"
+                " OR CAST(d.attendance_date AS CHAR) LIKE :s)"
             )
             params["s"] = f"%{search}%"
 
+        # Per-column filters (whitelist mapped to qualified SQL expressions).
+        daily_filterable: dict[str, str] = {
+            "daily_att_proc_id": "CAST(d.daily_att_proc_id AS CHAR)",
+            "bio_id":            "CAST(d.bio_id AS CHAR)",
+            "emp_code":          "o.emp_code",
+            "emp_name":          "TRIM(CONCAT_WS(' ', p.first_name, IFNULL(p.middle_name,''), IFNULL(p.last_name,'')))",
+            "department":        "b.department",
+            "designation":       "b.designation",
+            "attendance_date":   "CAST(d.attendance_date AS CHAR)",
+            "spell_name":        "d.spell_name",
+            "attendance_type":   "d.attendance_type",
+            "attendance_source": "d.attendance_source",
+            "check_in":          "CAST(d.check_in AS CHAR)",
+            "check_out":         "CAST(d.check_out AS CHAR)",
+            "Time_duration":     "CAST(d.Time_duration AS CHAR)",
+            "Working_hours":     "CAST(d.Working_hours AS CHAR)",
+            "Ot_hours":          "CAST(d.Ot_hours AS CHAR)",
+            "device_name":       "d.device_name",
+        }
+        for fld, expr in daily_filterable.items():
+            v = request.query_params.get(f"f_{fld}")
+            if v is None:
+                continue
+            v = v.strip()
+            if not v:
+                continue
+            pname = f"f_{fld}"
+            clauses.append(f"{expr} LIKE :{pname}")
+            params[pname] = f"%{v}%"
+
+        # Eb No (popup): exact emp_code match.
+        emp_eq = (request.query_params.get("emp_code_eq") or "").strip()
+        if emp_eq:
+            clauses.append("o.emp_code = :emp_code_eq")
+            params["emp_code_eq"] = emp_eq
+
+        # Date-range filter: from_date / to_date applied to attendance_date.
+        from_date = (request.query_params.get("from_date") or "").strip()
+        to_date   = (request.query_params.get("to_date")   or "").strip()
+        if from_date:
+            clauses.append("d.attendance_date >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            clauses.append("d.attendance_date <= :to_date")
+            params["to_date"] = to_date
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
         rows = db.execute(
             text(f"""
-                SELECT d.daily_att_proc_id, d.eb_id, d.bio_id,
+                SELECT d.daily_att_proc_id, d.bio_id,
                        o.emp_code AS emp_code,
                        TRIM(CONCAT_WS(' ', p.first_name,
                                           IFNULL(p.middle_name,''),
@@ -289,6 +382,7 @@ async def daily_att_list(
             params,
         ).fetchall()
 
+        count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
         total = db.execute(
             text(
                 f"""SELECT COUNT(*) AS cnt
@@ -298,7 +392,7 @@ async def daily_att_list(
                     LEFT JOIN bio_attendance_table b     ON b.bio_att_id = d.bio_id
                     {where}"""
             ),
-            {k: v for k, v in params.items() if k == "s"},
+            count_params,
         ).fetchone()
 
         def _fmt(v):
@@ -863,9 +957,10 @@ UNMATCHED_EMP_CODES_SQL = text(
 )
 
 # 2. Did weekday match a day_off row? (Returns count > 0 if it's a weekly-off day.)
-#    DAYOFWEEK(d) -> 1=Sun..7=Sat  =>  -1 normalises to 0..6 like the spec.
+#    Convention: tbl_offday_mst.off_day uses 1=Sun, 2=Mon, ..., 7=Sat.
+#    MySQL DAYOFWEEK() also returns 1=Sun..7=Sat, so use it directly.
 IS_OFF_DAY_SQL = text(
-    "SELECT COUNT(*) AS cnt FROM tbl_offday_mst WHERE off_day = (DAYOFWEEK(:tran_date) - 1)"
+    "SELECT COUNT(*) AS cnt FROM tbl_offday_mst WHERE off_day = DAYOFWEEK(:tran_date)"
 )
 
 # 3. Wipe re-run rows for the date.
@@ -923,6 +1018,15 @@ INSERT_SPELL_ROW_SQL = text(
 MIN_PAIR_SECONDS = 3600  # 1 hour
 
 
+def _bucket_hours(h: float) -> float:
+    """Bucket hours: >=7 -> 8, [3, 7) -> 4, <3 -> 0."""
+    if h >= 7:
+        return 8.0
+    if h >= 3:
+        return 4.0
+    return 0.0
+
+
 def _parse_hms(s: str) -> dt_time:
     """Parse 'HH:MM:SS' into datetime.time."""
     h, m, sec = (int(x) for x in s.split(":"))
@@ -956,14 +1060,13 @@ def _process_one_spell(
       * Pull every punch (per emp) in [in_from .. spell_end+slack] for the date.
       * The employee belongs to this spell iff their first punch is within
         [in_from .. in_to).
-      * Pair punches: (0,1), (2,3), ... -- 1st=IN, 2nd=OUT, etc.
-      * Working_hours = sum of pair durations that are >= 1 hour.
-      * check_in = first punch, check_out = last punch.
-      * Time_duration = (check_out - check_in) in hours.
-      * If Working_hours > OT_THRESHOLD_HOURS (and not an off day),
-        insert a parallel 'O' row for the overflow.
+      * Total duration = (last_punch - first_punch). Skip if < 1 hour.
+      * Working_hours_raw = min(duration, 8); ot_hours_raw = max(0, duration - 8).
+      * Bucket each: >=7 -> 8, [3, 7) -> 4, <3 -> 0.
+      * Time_duration = working_hours + ot_hours (post-bucket).
+      * On an off day, ot_hours = 0.
 
-    Returns (regular_inserted, ot_inserted).
+    Returns (regular_inserted, 0). OT does not create a separate row.
     """
     in_from_sec = _to_seconds(_parse_hms(in_from))
     in_to_sec   = _to_seconds(_parse_hms(in_to))
@@ -1018,27 +1121,24 @@ def _process_one_spell(
         last_time, _, _, _, last_log_date = punches[-1]
         last_sec = _to_seconds(last_time)
 
-        # Pair the punches -- (0,1), (2,3), ...
-        working_secs = 0
-        for i in range(0, len(punches) - 1, 2):
-            in_t,  _, _, _, _ = punches[i]
-            out_t, _, _, _, _ = punches[i + 1]
-            diff = _to_seconds(out_t) - _to_seconds(in_t)
-            if diff >= MIN_PAIR_SECONDS:
-                working_secs += diff
-
-        if working_secs < MIN_PAIR_SECONDS:
-            # Total qualified working time is less than 1 hour -- skip row.
+        # Total span: last punch - first punch (covers etrack data where
+        # only IN/OUT are recorded, and gives the "full presence" duration).
+        span_secs = max(0, last_sec - first_sec)
+        if span_secs < MIN_PAIR_SECONDS:
+            # Less than 1 hour on site -- skip row.
             continue
 
-        working_hours  = round(working_secs / 3600.0, 2)
-        capped_working = round(min(SPELL_HOURS, working_hours), 2)
-        # OT: only on working days, when working_hours exceeds threshold.
-        if (not is_off_day) and working_hours > OT_THRESHOLD_HOURS:
-            ot_hours = round(working_hours - SPELL_HOURS, 2)
+        total_hours    = round(span_secs / 3600.0, 2)
+        # Working hours = duration capped at 8; OT = anything beyond 8.
+        capped_working = round(min(SPELL_HOURS, total_hours), 2)
+        if is_off_day:
+            ot_raw = 0.0
         else:
-            ot_hours = 0
-        # Time_duration = total of working + OT (always == working_hours by definition).
+            ot_raw = round(max(total_hours - SPELL_HOURS, 0.0), 2)
+        # Bucket both: >=7 -> 8, [3, 7) -> 4, <3 -> 0.
+        capped_working = _bucket_hours(capped_working)
+        ot_hours = _bucket_hours(ot_raw)
+        # Time_duration = total of bucketed working + OT.
         time_duration = round(capped_working + ot_hours, 2)
 
         reg_params = {
@@ -1066,6 +1166,171 @@ def _process_one_spell(
     inserted_ot = 0  # OT no longer creates a separate row.
     print(f"[bio_att_process]   -> rows inserted = {inserted_reg}", flush=True)
     return inserted_reg, inserted_ot
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Etrack-specific processing. Used by /bio_att_etrack_process.
+# May produce ONE OR TWO daily_attendance_process_table rows per (eb_id, date)
+# depending on the first-entry window and last-entry time.
+#
+# Notation (decimal hours-of-day):
+#   first_h = first_punch hour-of-day      e.g. 5:30 -> 5.5
+#   last_h  = last_punch  hour-of-day      e.g. 17:00 -> 17.0
+#   span    = last_h - first_h             (must be >= 1 hour to qualify)
+#
+# Rule 1 — first_h in [5, 9):
+#   eff = last_h - 6
+#   if eff >= 7        -> rec1 {spell:A,  type:R, working:8}
+#   elif eff in [3,7)  -> rec1 {spell:A1, type:R, working:4}
+#   O = eff - working_hours_of_rec1
+#   if O >= 7          -> rec2 {spell:B,  type:O, ot:8}
+#   elif O in [3,7)    -> rec2 {spell:B1, type:O, ot:4}
+#
+# Rule 2 — first_h in [9, 13):
+#   if span >= 3       -> rec1 {spell:A2, type:O, ot:4}
+#   if span > 4:
+#     d1 = last_h - 14
+#     if d1 >= 7       -> rec2 {spell:B,  type:R, working:8}
+#     elif d1 in [3,7) -> rec2 {spell:B1, type:R, working:4}
+#
+# Rule 3 — first_h in [13, 21):
+#   eff = last_h - 14
+#   if eff >= 7        -> rec1 {spell:B,  type:R, working:8}
+#   elif eff in [3,7)  -> rec1 {spell:B1, type:R, working:4}
+#
+# On an off day, the spell + working/ot calculations are unchanged; only the
+# attendance_type is forced to "O" on every row.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ETRACK_SPELL_TIMES: dict[str, tuple[str, str]] = {
+    "A":  ("06:00:00", "14:00:00"),
+    "A1": ("06:00:00", "14:00:00"),
+    "A2": ("09:00:00", "13:00:00"),
+    "B":  ("14:00:00", "22:00:00"),
+    "B1": ("14:00:00", "22:00:00"),
+}
+
+
+def _etrack_records_for_employee(
+    first_h: float, last_h: float, span: float,
+) -> list[dict]:
+    """Apply rules #1/#2/#3 and return a list of {spell, att_type, working, ot}
+    dicts (0..2 entries)."""
+    out: list[dict] = []
+
+    # Rule 1: first entry [5, 9)
+    if 5 <= first_h < 9:
+        eff = last_h - 6
+        rec1_working = 0.0
+        if eff >= 7:
+            out.append({"spell": "A",  "att_type": "R", "working": 8.0, "ot": 0.0})
+            rec1_working = 8.0
+        elif eff >= 3:
+            out.append({"spell": "A1", "att_type": "R", "working": 4.0, "ot": 0.0})
+            rec1_working = 4.0
+        if rec1_working > 0:
+            O = eff - rec1_working
+            if O >= 7:
+                out.append({"spell": "B",  "att_type": "O", "working": 0.0, "ot": 8.0})
+            elif O >= 3:
+                out.append({"spell": "B1", "att_type": "O", "working": 0.0, "ot": 4.0})
+
+    # Rule 2: first entry [9, 13)
+    elif 9 <= first_h < 13:
+        if span >= 3:
+            out.append({"spell": "A2", "att_type": "O", "working": 0.0, "ot": 4.0})
+        if span > 4:
+            d1 = last_h - 14
+            if d1 >= 7:
+                out.append({"spell": "B",  "att_type": "R", "working": 8.0, "ot": 0.0})
+            elif d1 >= 3:
+                out.append({"spell": "B1", "att_type": "R", "working": 4.0, "ot": 0.0})
+
+    # Rule 3: first entry [13, 21)
+    elif 13 <= first_h < 21:
+        eff = last_h - 14
+        if eff >= 7:
+            out.append({"spell": "B",  "att_type": "R", "working": 8.0, "ot": 0.0})
+        elif eff >= 3:
+            out.append({"spell": "B1", "att_type": "R", "working": 4.0, "ot": 0.0})
+
+    return out
+
+
+def _process_etrack_day(
+    db: Session,
+    *,
+    tran_date: str,
+    is_off_day: bool,
+) -> int:
+    """Insert daily_attendance_process_table rows for the day per the etrack
+    rules. Returns total number of rows inserted (across all employees)."""
+    rows = db.execute(
+        FETCH_SPELL_PUNCHES_SQL,
+        {"tran_date": tran_date, "in_from": "00:00:00", "window_end": "23:59:59"},
+    ).fetchall()
+
+    by_emp: dict[int, list[tuple]] = {}
+    for r in rows:
+        m = r._mapping
+        by_emp.setdefault(m["eb_id"], []).append(
+            (m["punch_time"], m["bio_att_log_id"], m["dept_id"], m["desig_id"], m["log_date"])
+        )
+
+    inserted = 0
+    for eb_id, punches in by_emp.items():
+        if len(punches) < 2:
+            continue
+        first_time, first_bio, first_dept, first_desig, first_log_date = punches[0]
+        last_time, _, _, _, last_log_date = punches[-1]
+        first_sec = _to_seconds(first_time)
+        last_sec  = _to_seconds(last_time)
+        span_secs = max(0, last_sec - first_sec)
+        if span_secs < MIN_PAIR_SECONDS:
+            continue
+
+        first_h = first_sec / 3600.0
+        last_h  = last_sec  / 3600.0
+        span    = round(last_h - first_h, 4)
+
+        recs = _etrack_records_for_employee(first_h, last_h, span)
+        if not recs:
+            continue
+
+        for rec in recs:
+            # On an off day, spell + working/ot stay the same, only the
+            # attendance_type is forced to "O".
+            att_type      = "O" if is_off_day else rec["att_type"]
+            working_hours = rec["working"]
+            ot_hours      = rec["ot"]
+            time_duration = round(working_hours + ot_hours, 2)
+            spell_start, spell_end = _ETRACK_SPELL_TIMES.get(
+                rec["spell"], ("00:00:00", "00:00:00"),
+            )
+            db.execute(
+                INSERT_SPELL_ROW_SQL,
+                {
+                    "eb_id": int(eb_id),
+                    "bio_id": int(first_bio) if first_bio is not None else None,
+                    "dept_id": int(first_dept) if first_dept is not None else None,
+                    "desig_id": int(first_desig) if first_desig is not None else None,
+                    "tran_date": tran_date,
+                    "spell_name": rec["spell"],
+                    "attendance_type": att_type,
+                    "check_in": first_log_date,
+                    "check_out": last_log_date,
+                    "time_duration": time_duration,
+                    "working_hours": working_hours,
+                    "ot_hours": ot_hours,
+                    "spell_start": spell_start,
+                    "spell_end": spell_end,
+                    "spell_hours": SPELL_HOURS,
+                },
+            )
+            inserted += 1
+
+    print(f"[bio_att_etrack_process]   -> rows inserted = {inserted}", flush=True)
+    return inserted
 
 
 def _build_unmatched_xlsx(rows) -> bytes:
@@ -1636,15 +1901,43 @@ async def bio_att_etrack(
                 detail=f"Etrack connector not available: {e}",
             )
 
+        # Shift window: > tran_date 05:00:00 .. <= next_date 05:00:00
+        # (a 24-hour shift starting at 5am on the selected date, ending at
+        # 5am the next day — captures night-shift punches that bleed past
+        # midnight).
+        next_date    = tran_date + timedelta(days=1)
+        window_start = datetime.combine(tran_date, dt_time(5, 0, 0))
+        window_end   = datetime.combine(next_date, dt_time(5, 0, 0))
+
         table_name = device_logs_table_name(tran_date)
+        # If the window crosses a month boundary, UNION ALL across both
+        # monthly DeviceLogs tables.
+        cross_month = (
+            next_date.month != tran_date.month
+            or next_date.year != tran_date.year
+        )
+        if cross_month:
+            table_next = device_logs_table_name(next_date)
+            from_clause = (
+                f"FROM (SELECT DeviceLogId, DeviceId, UserId, LogDate, Direction "
+                f"      FROM dbo.{table_name} "
+                f"      UNION ALL "
+                f"      SELECT DeviceLogId, DeviceId, UserId, LogDate, Direction "
+                f"      FROM dbo.{table_next}) dl "
+            )
+            table_label = f"{table_name} + {table_next}"
+        else:
+            from_clause = f"FROM dbo.{table_name} dl "
+            table_label = table_name
+
         sql = (
             f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
             f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
             f"       em.EmployeeName, em.CompanyId "
-            f"FROM dbo.{table_name} dl "
+            f"{from_clause}"
             f"LEFT JOIN dbo.Employees em "
             f"  ON em.EmployeeCodeInDevice = dl.UserId "
-            f"WHERE CAST(dl.LogDate AS DATE) = ? "
+            f"WHERE dl.LogDate > ? AND dl.LogDate <= ? "
             f"  AND em.CompanyId = ?"
         )
 
@@ -1659,12 +1952,12 @@ async def bio_att_etrack(
         try:
             cur = sconn.cursor()
             try:
-                cur.execute(sql, tran_date.isoformat(), company_id)
+                cur.execute(sql, window_start, window_end, company_id)
                 src_rows = cur.fetchall()
             except Exception as e:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Etrack query failed on {table_name}: {e}",
+                    detail=f"Etrack query failed on {table_label}: {e}",
                 )
         finally:
             try:
@@ -2090,17 +2383,8 @@ async def bio_att_etrack_process(
         db.execute(DELETE_DAY_ROWS_SQL, {"tran_date": tran_date})
         db.commit()
 
-        a_reg, _ = _process_one_spell(
-            db, tran_date=tran_date, spell_name="A",
-            in_from=SPELL_A_IN_FROM, in_to=SPELL_A_IN_TO,
-            spell_start=SPELL_A_START, spell_end=SPELL_A_END,
-            is_off_day=is_off_day,
-        )
-        b_reg, _ = _process_one_spell(
-            db, tran_date=tran_date, spell_name="B",
-            in_from=SPELL_B_IN_FROM, in_to=SPELL_B_IN_TO,
-            spell_start=SPELL_B_START, spell_end=SPELL_B_END,
-            is_off_day=is_off_day,
+        inserted = _process_etrack_day(
+            db, tran_date=tran_date, is_off_day=is_off_day,
         )
         db.commit()
 
@@ -2111,9 +2395,7 @@ async def bio_att_etrack_process(
             "is_off_day": is_off_day,
             "resolve": resolve_result,
             "process": {
-                "spell_a_inserted": a_reg,
-                "spell_b_inserted": b_reg,
-                "total_inserted": a_reg + b_reg,
+                "total_inserted": inserted,
             },
         }
 
@@ -2124,5 +2406,242 @@ async def bio_att_etrack_process(
             db.rollback()
         except Exception:
             pass
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+# =============================================================================
+# Wages Register (attwgs) — pivoted shift + wages report
+# =============================================================================
+#
+# Per (employee, attendance_date):
+#   shift_letter  = 'A' if check_in hour in [5..12], 'B' if [13..20]
+#   shift_code    = shift_letter             when working_hours == 8
+#                   shift_letter + '1'       otherwise
+#   rate          = latest employee_rate_table.rate where rate_date <= attendance_date
+#   wages         = (rate / 8) * (working_hours + ot_hours)
+
+_WAGES_REGISTER_SQL = text(
+    """
+                    SELECT
+        d.eb_id                                                          AS eb_id,
+        o.emp_code                                                       AS emp_code,
+        TRIM(CONCAT_WS(' ', p.first_name,
+                            IFNULL(p.middle_name, ''),
+                            IFNULL(p.last_name,  ''))) AS emp_name,
+        sdm.sub_dept_desc                                                    AS department,
+        dm.desig                                                     AS designation,
+        d.attendance_date                                                AS attendance_date,
+        d.spell_name                                                     AS spell_name,
+        d.attendance_type                                                AS attendance_type,
+        d.check_in                                                       AS check_in,
+        d.Working_hours                                                  AS working_hours,
+        d.Ot_hours                                                       AS ot_hours,
+        (
+            SELECT er.rate
+            FROM employee_rate_table er
+            WHERE er.eb_id = d.eb_id
+              AND er.rate_date <= d.attendance_date
+            ORDER BY er.rate_date DESC
+            LIMIT 1
+        )                                                                AS rate
+    FROM daily_attendance_process_table d
+    LEFT JOIN hrms_ed_official_details o ON o.eb_id = d.eb_id
+    LEFT JOIN hrms_ed_personal_details p ON p.eb_id = d.eb_id
+	left join sub_dept_mst sdm on o.sub_dept_id =sdm.sub_dept_id 
+    left join designation_mst dm on dm.designation_id =o.designation_id 
+	WHERE d.attendance_date BETWEEN :from_date AND :to_date
+      AND (:branch_id = 0 OR o.branch_id = :branch_id)
+      AND (:emp_code = '' OR o.emp_code = :emp_code)
+    ORDER BY CAST(o.emp_code AS UNSIGNED), o.emp_code, d.attendance_date
+    """
+)
+ 
+def _shift_letter_from_check_in(check_in) -> str:
+    """A if check_in hour in [5..12], B if in [13..20], else ''."""
+    if check_in is None:
+        return ""
+    if isinstance(check_in, datetime):
+        hour = check_in.hour
+    elif isinstance(check_in, dt_time):
+        hour = check_in.hour
+    elif isinstance(check_in, timedelta):
+        hour = int(check_in.total_seconds() // 3600) % 24
+    else:
+        try:
+            hour = int(str(check_in).split(":")[0])
+        except Exception:
+            return ""
+    if 5 <= hour <= 12:
+        return "A"
+    if 13 <= hour <= 20:
+        return "B"
+    return ""
+
+
+@router.get("/wages_register")
+async def wages_register(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Pivoted wages register: shift code + per-day wages per employee."""
+    qp = request.query_params
+    co_id = qp.get("co_id")
+    if not co_id:
+        raise HTTPException(status_code=400, detail="co_id is required")
+
+    from_raw = qp.get("from_date")
+    to_raw = qp.get("to_date")
+    if not from_raw or not to_raw:
+        raise HTTPException(status_code=400, detail="from_date and to_date are required")
+    try:
+        from_date = datetime.strptime(from_raw, "%Y-%m-%d").date()
+        to_date = datetime.strptime(to_raw, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="dates must be YYYY-MM-DD")
+    if from_date > to_date:
+        raise HTTPException(status_code=400, detail="from_date must be <= to_date")
+
+    branch_raw = qp.get("branch_id") or "0"
+    try:
+        branch_id = int(branch_raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="branch_id must be an integer")
+
+    emp_code = (qp.get("emp_code") or "").strip()
+
+    try:
+        rows = db.execute(
+            _WAGES_REGISTER_SQL,
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "branch_id": branch_id,
+                "emp_code": emp_code,
+            },
+        ).fetchall()
+
+        columns: list[dict] = []
+        d = from_date
+        while d <= to_date:
+            columns.append({
+                "key": d.isoformat(),
+                "label": d.strftime("%a, %b %d"),
+            })
+            d += timedelta(days=1)
+
+        emp_meta:      dict[int, dict] = {}
+        emp_shifts:    dict[int, dict[str, str]] = {}
+        emp_ot_shifts: dict[int, dict[str, str]] = {}
+        emp_wages:     dict[int, dict[str, float]] = {}
+        emp_whrs_by:   dict[int, dict[str, float]] = {}
+        emp_ot_by:     dict[int, dict[str, float]] = {}
+        emp_whrs:      dict[int, float] = {}
+        emp_ot:        dict[int, float] = {}
+        emp_total:     dict[int, float] = {}
+        emp_rate:      dict[int, float] = {}
+        emp_p_days:    dict[int, set[str]] = {}
+        emp_ot_days:   dict[int, set[str]] = {}
+
+        for r in rows:
+            m = r._mapping
+            eb_id = m["eb_id"]
+            if eb_id is None:
+                continue
+            if eb_id not in emp_meta:
+                emp_meta[eb_id] = {
+                    "eb_id": int(eb_id),
+                    "emp_code": m["emp_code"] or "",
+                    "emp_name": m["emp_name"] or "",
+                    "department": m["department"] or "",
+                    "designation": m["designation"] or "",
+                }
+                emp_shifts[eb_id]    = {}
+                emp_ot_shifts[eb_id] = {}
+                emp_wages[eb_id]     = {}
+                emp_whrs_by[eb_id]   = {}
+                emp_ot_by[eb_id]     = {}
+                emp_whrs[eb_id]      = 0.0
+                emp_ot[eb_id]        = 0.0
+                emp_total[eb_id]     = 0.0
+                emp_rate[eb_id]      = float(m["rate"] or 0)
+                emp_p_days[eb_id]    = set()
+                emp_ot_days[eb_id]   = set()
+
+            att_date = m["attendance_date"]
+            if att_date is None:
+                continue
+            if isinstance(att_date, datetime):
+                att_date = att_date.date()
+            key = att_date.isoformat()
+
+            wh = float(m["working_hours"] or 0)
+            ot = float(m["ot_hours"] or 0)
+            rate = float(m["rate"] or 0)
+
+            shift_from_check = _shift_letter_from_check_in(m["check_in"])
+            shift_letter = shift_from_check or (m["spell_name"] or "")
+            if not shift_letter:
+                continue
+
+            # Working hours -> Shift cell; OT hours -> OT cell. Each row of
+            # daily_attendance_process_table can contribute to both. The "1" suffix
+            # marks a partial-bucket value (hours != 8).
+            if wh > 0:
+                shift_code = shift_letter if wh == 8 else f"{shift_letter}1"
+                existing = emp_shifts[eb_id].get(key, "")
+                emp_shifts[eb_id][key] = (
+                    f"{existing} {shift_code}".strip() if existing else shift_code
+                )
+            if ot > 0:
+                ot_code = shift_letter if ot == 8 else f"{shift_letter}1"
+                existing = emp_ot_shifts[eb_id].get(key, "")
+                emp_ot_shifts[eb_id][key] = (
+                    f"{existing} {ot_code}".strip() if existing else ot_code
+                )
+
+            wages = (rate / 8.0) * (wh + ot)
+            emp_wages[eb_id][key] = round(
+                emp_wages[eb_id].get(key, 0.0) + wages, 2
+            )
+            emp_whrs_by[eb_id][key] = round(
+                emp_whrs_by[eb_id].get(key, 0.0) + wh, 2
+            )
+            emp_ot_by[eb_id][key] = round(
+                emp_ot_by[eb_id].get(key, 0.0) + ot, 2
+            )
+            emp_whrs[eb_id]  += wh
+            emp_ot[eb_id]    += ot
+            emp_total[eb_id] += wages
+            if wh > 0:
+                emp_p_days[eb_id].add(key)
+            if ot > 0:
+                emp_ot_days[eb_id].add(key)
+            if rate:
+                emp_rate[eb_id] = rate
+
+        out = []
+        for eb_id, meta in emp_meta.items():
+            out.append({
+                **meta,
+                "rate": round(emp_rate.get(eb_id, 0.0), 2),
+                "shifts":         emp_shifts[eb_id],
+                "ot_shifts":      emp_ot_shifts[eb_id],
+                "wages":          emp_wages[eb_id],
+                "working_hours":  emp_whrs_by[eb_id],
+                "ot_hours":       emp_ot_by[eb_id],
+                "total_working_hours": round(emp_whrs[eb_id], 2),
+                "total_ot_hours":      round(emp_ot[eb_id],   2),
+                "total_wages":         round(emp_total[eb_id], 2),
+                "count_p_days":  len(emp_p_days[eb_id]),
+                "count_ot_days": len(emp_ot_days[eb_id]),
+            })
+        # SQL already ORDER BY CAST(emp_code AS UNSIGNED), so dict-iteration order
+        # of emp_meta preserves the desired numeric sort.
+        return {"columns": columns, "data": out}
+    except HTTPException:
+        raise
+    except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")

@@ -75,9 +75,8 @@ from src.hrms.bioAttUpdation import (
     _ETRACK_PROC_UPDATE_SQL,
     IS_OFF_DAY_SQL,
     DELETE_DAY_ROWS_SQL,
-    _process_one_spell,
-    SPELL_A_IN_FROM, SPELL_A_IN_TO, SPELL_A_START, SPELL_A_END,
-    SPELL_B_IN_FROM, SPELL_B_IN_TO, SPELL_B_START, SPELL_B_END,
+    _process_etrack_day,
+    _bucket_hours,
     # Step 3 SQL / helpers
     FINAL_FETCH_SQL,
     FINAL_INSERT_SQL,
@@ -326,7 +325,7 @@ def step2_etrack_process(
 
     if dry_run:
         log.info("Step 2 | dry-run: skipping DB writes for %s", tran_date)
-        return {"resolved": 0, "updated": 0, "a_inserted": 0, "b_inserted": 0}
+        return {"resolved": 0, "updated": 0, "inserted": 0}
 
     # Resolve eb_id for rows where eb_id IS NULL
     unresolved_rows = db.execute(_ETRACK_PROC_UNRESOLVED_SQL).fetchall()
@@ -398,25 +397,15 @@ def step2_etrack_process(
     db.execute(DELETE_DAY_ROWS_SQL, {"tran_date": tran_date})
     db.commit()
 
-    a_reg, _ = _process_one_spell(
-        db, tran_date=tran_date, spell_name="A",
-        in_from=SPELL_A_IN_FROM, in_to=SPELL_A_IN_TO,
-        spell_start=SPELL_A_START, spell_end=SPELL_A_END,
-        is_off_day=is_off_day,
-    )
-    b_reg, _ = _process_one_spell(
-        db, tran_date=tran_date, spell_name="B",
-        in_from=SPELL_B_IN_FROM, in_to=SPELL_B_IN_TO,
-        spell_start=SPELL_B_START, spell_end=SPELL_B_END,
-        is_off_day=is_off_day,
+    inserted = _process_etrack_day(
+        db, tran_date=tran_date, is_off_day=is_off_day,
     )
     db.commit()
 
     result = {
         **resolve_result,
         "is_off_day": is_off_day,
-        "a_inserted": a_reg,
-        "b_inserted": b_reg,
+        "inserted": inserted,
     }
     log.info("Step 2 | %s result: %s", tran_date, result)
     return result
@@ -474,6 +463,10 @@ def step3_final_process(
             ot = float(m.get("Ot_hours") or 0)
         except Exception:
             ot = 0.0
+
+        # Bucket hours: >=7 -> 8, [3, 7) -> 4, <3 -> 0.
+        wh = _bucket_hours(wh)
+        ot = _bucket_hours(ot)
 
         inserts: list[tuple[str, float]] = []
         if wh > 0 and ot > 0:
