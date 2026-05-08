@@ -1851,15 +1851,23 @@ async def bio_att_etrack(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Transfer one day of punches from the Etrack SQL Server to
+    """Auto-incremental transfer of punches from the Etrack SQL Server to
     bio_attendance_table.
 
-    Body / query params:
-        tran_date  : YYYY-MM-DD (default = today)
-        company_id : Etrack CompanyId to filter on (default = 2)
+    The transfer range is determined automatically from the latest record
+    already in bio_attendance_table:
+        - last_log_date     = MAX(log_date)
+        - last_log_id       = MAX(bio_att_log_id) within last_log_date's month
+                              (DeviceLogIds restart per monthly source table)
 
-    The source table is picked dynamically:
-        DeviceLogs_<month>_<year>   (based on tran_date)
+    The transfer then spans every monthly DeviceLogs_<m>_<y> table from the
+    last log's month up to today's month:
+        - Start month   : DeviceLogId > last_log_id
+        - Later months  : all rows
+    If bio_attendance_table is empty, only today's month is pulled (full).
+
+    Body / query param (optional):
+        company_id : Etrack CompanyId to filter on (default = 2)
 
     De-dup key on the MySQL side: bio_att_log_id (= SQL Server DeviceLogId).
     """
@@ -1870,18 +1878,6 @@ async def bio_att_etrack(
         except Exception:
             body = {}
         qp = request.query_params
-
-        tran_date_raw = (
-            body.get("tran_date") or qp.get("tran_date")
-            or date.today().isoformat()
-        )
-        try:
-            tran_date = datetime.strptime(tran_date_raw, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid tran_date {tran_date_raw!r}, expected YYYY-MM-DD",
-            )
 
         company_id_raw = body.get("company_id") or qp.get("company_id") or "2"
         try:
@@ -1901,46 +1897,66 @@ async def bio_att_etrack(
                 detail=f"Etrack connector not available: {e}",
             )
 
-        # Shift window: > tran_date 05:00:00 .. <= next_date 05:00:00
-        # (a 24-hour shift starting at 5am on the selected date, ending at
-        # 5am the next day — captures night-shift punches that bleed past
-        # midnight).
-        next_date    = tran_date + timedelta(days=1)
-        window_start = datetime.combine(tran_date, dt_time(5, 0, 0))
-        window_end   = datetime.combine(next_date, dt_time(5, 0, 0))
+        # ------------------------------------------------------------------
+        # Determine the auto-incremental start point.
+        # ------------------------------------------------------------------
+        today = date.today()
 
-        table_name = device_logs_table_name(tran_date)
-        # If the window crosses a month boundary, UNION ALL across both
-        # monthly DeviceLogs tables.
-        cross_month = (
-            next_date.month != tran_date.month
-            or next_date.year != tran_date.year
-        )
-        if cross_month:
-            table_next = device_logs_table_name(next_date)
-            from_clause = (
-                f"FROM (SELECT DeviceLogId, DeviceId, UserId, LogDate, Direction "
-                f"      FROM dbo.{table_name} "
-                f"      UNION ALL "
-                f"      SELECT DeviceLogId, DeviceId, UserId, LogDate, Direction "
-                f"      FROM dbo.{table_next}) dl "
+        last_log_row = db.execute(
+            text(
+                "SELECT MAX(log_date) AS max_log_date "
+                "FROM bio_attendance_table"
             )
-            table_label = f"{table_name} + {table_next}"
+        ).mappings().first()
+        last_log_date_dt = last_log_row["max_log_date"] if last_log_row else None
+
+        if last_log_date_dt is None:
+            # No prior data: start from today's month, take everything in it.
+            start_month_date = today.replace(day=1)
+            last_log_id = 0
+            from_log_date_iso: str | None = None
         else:
-            from_clause = f"FROM dbo.{table_name} dl "
-            table_label = table_name
+            last_log_d = (
+                last_log_date_dt.date()
+                if isinstance(last_log_date_dt, datetime)
+                else last_log_date_dt
+            )
+            start_month_date = last_log_d.replace(day=1)
+            id_row = db.execute(
+                text(
+                    "SELECT MAX(bio_att_log_id) AS max_id "
+                    "FROM bio_attendance_table "
+                    "WHERE YEAR(log_date) = :y AND MONTH(log_date) = :m"
+                ),
+                {"y": start_month_date.year, "m": start_month_date.month},
+            ).mappings().first()
+            last_log_id = (
+                int(id_row["max_id"])
+                if id_row and id_row["max_id"] is not None
+                else 0
+            )
+            from_log_date_iso = (
+                last_log_date_dt.isoformat()
+                if hasattr(last_log_date_dt, "isoformat")
+                else str(last_log_date_dt)
+            )
 
-        sql = (
-            f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
-            f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
-            f"       em.EmployeeName, em.CompanyId "
-            f"{from_clause}"
-            f"LEFT JOIN dbo.Employees em "
-            f"  ON em.EmployeeCodeInDevice = dl.UserId "
-            f"WHERE dl.LogDate > ? AND dl.LogDate <= ? "
-            f"  AND em.CompanyId = ?"
-        )
+        # Build the list of months from start_month_date through today.
+        months: list[date] = []
+        cursor_month = start_month_date
+        end_month = today.replace(day=1)
+        while cursor_month <= end_month:
+            months.append(cursor_month)
+            if cursor_month.month == 12:
+                cursor_month = date(cursor_month.year + 1, 1, 1)
+            else:
+                cursor_month = date(
+                    cursor_month.year, cursor_month.month + 1, 1
+                )
 
+        # ------------------------------------------------------------------
+        # Fetch from each monthly DeviceLogs table.
+        # ------------------------------------------------------------------
         try:
             sconn = get_etrack_connection()
         except Exception as e:
@@ -1949,54 +1965,96 @@ async def bio_att_etrack(
                 detail=f"Cannot connect to Etrack SQL Server: {e}",
             )
 
+        total_fetched = 0
+        total_inserted = 0
+        per_table: list[dict] = []
+
         try:
             cur = sconn.cursor()
-            try:
-                cur.execute(sql, window_start, window_end, company_id)
-                src_rows = cur.fetchall()
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Etrack query failed on {table_label}: {e}",
-                )
+            for idx, m_date in enumerate(months):
+                table_name = device_logs_table_name(m_date)
+                is_start_month = (idx == 0)
+
+                if is_start_month and last_log_id > 0:
+                    sql = (
+                        f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
+                        f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
+                        f"       em.EmployeeName, em.CompanyId "
+                        f"FROM dbo.{table_name} dl "
+                        f"LEFT JOIN dbo.Employees em "
+                        f"  ON em.EmployeeCodeInDevice = dl.UserId "
+                        f"WHERE dl.DeviceLogId > ? "
+                        f"  AND em.CompanyId = ?"
+                    )
+                    params_args: tuple = (last_log_id, company_id)
+                else:
+                    sql = (
+                        f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
+                        f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
+                        f"       em.EmployeeName, em.CompanyId "
+                        f"FROM dbo.{table_name} dl "
+                        f"LEFT JOIN dbo.Employees em "
+                        f"  ON em.EmployeeCodeInDevice = dl.UserId "
+                        f"WHERE em.CompanyId = ?"
+                    )
+                    params_args = (company_id,)
+
+                try:
+                    cur.execute(sql, *params_args)
+                    src_rows = cur.fetchall()
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Etrack query failed on {table_name}: {e}",
+                    )
+
+                fetched = len(src_rows)
+                inserted = 0
+
+                for r in src_rows:
+                    direction = (
+                        str(r.Direction).strip().lower()
+                        if r.Direction is not None else None
+                    )
+                    if direction and len(direction) > 10:
+                        direction = direction[:10]
+
+                    params = {
+                        "bio_att_log_id": int(r.DeviceLogId) if r.DeviceLogId is not None else None,
+                        "emp_code": (str(r.EmployeeCode) if r.EmployeeCode is not None else None),
+                        "emp_anme": (str(r.EmployeeName) if r.EmployeeName is not None else None),
+                        "bio_id": int(r.UserId) if r.UserId is not None else None,
+                        "log_date": r.LogDate,
+                        "device_direction": direction,
+                        "device_id": int(r.DeviceId) if r.DeviceId is not None else None,
+                    }
+                    if params["bio_att_log_id"] is None:
+                        continue
+                    try:
+                        res = db.execute(ETRACK_INSERT_SQL, params)
+                        inserted += int(res.rowcount or 0)
+                    except Exception as e:
+                        print(
+                            f"[bio_att_etrack] insert failed for DeviceLogId={params['bio_att_log_id']}: {e}",
+                            flush=True,
+                        )
+
+                total_fetched += fetched
+                total_inserted += inserted
+                per_table.append({
+                    "table": table_name,
+                    "from_log_id": last_log_id if is_start_month else 0,
+                    "fetched": fetched,
+                    "inserted": inserted,
+                })
         finally:
             try:
                 sconn.close()
             except Exception:
                 pass
 
-        fetched = len(src_rows)
-        inserted = 0
-
-        for r in src_rows:
-            # Direction comes through as 'in'/'out' text. Normalise + truncate.
-            direction = (str(r.Direction).strip().lower() if r.Direction is not None else None)
-            if direction and len(direction) > 10:
-                direction = direction[:10]
-
-            params = {
-                "bio_att_log_id": int(r.DeviceLogId) if r.DeviceLogId is not None else None,
-                "emp_code": (str(r.EmployeeCode) if r.EmployeeCode is not None else None),
-                "emp_anme": (str(r.EmployeeName) if r.EmployeeName is not None else None),
-                "bio_id": int(r.UserId) if r.UserId is not None else None,
-                "log_date": r.LogDate,  # pyodbc returns datetime
-                "device_direction": direction,
-                "device_id": int(r.DeviceId) if r.DeviceId is not None else None,
-            }
-            if params["bio_att_log_id"] is None:
-                continue
-            try:
-                res = db.execute(ETRACK_INSERT_SQL, params)
-                inserted += int(res.rowcount or 0)
-            except Exception as e:
-                # Skip the bad row but keep going.
-                print(
-                    f"[bio_att_etrack] insert failed for DeviceLogId={params['bio_att_log_id']}: {e}",
-                    flush=True,
-                )
-
         db.commit()
-        duplicates = max(fetched - inserted, 0)
+        duplicates = max(total_fetched - total_inserted, 0)
 
         # Step 1: back-fill eb_id (match_type='E') and device_id (match_type='B')
         # from tbl_master_bio_link_mst — same approach as the Excel upload flow.
@@ -2025,13 +2083,20 @@ async def bio_att_etrack(
                 pass
             dept_desig = {"errors": ["dept_desig resolve failed"]}
 
+        # First entry of `per_table` corresponds to the start month — keep
+        # `source_table` for backwards-compatibility with existing UI.
+        source_table = per_table[0]["table"] if per_table else ""
+
         return {
             "status": "ok",
-            "tran_date": tran_date.isoformat(),
+            "from_log_date": from_log_date_iso,
+            "from_log_id": last_log_id,
+            "tran_date": today.isoformat(),
             "company_id": company_id,
-            "source_table": table_name,
-            "fetched": fetched,
-            "inserted": inserted,
+            "source_table": source_table,
+            "tables": per_table,
+            "fetched": total_fetched,
+            "inserted": total_inserted,
             "duplicates": duplicates,
             "linked": {
                 "eb_id": link_counts.get("E", 0),

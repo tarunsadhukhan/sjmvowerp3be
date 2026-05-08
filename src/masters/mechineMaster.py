@@ -313,6 +313,13 @@ async def mechine_master_create(
         if not mechine_type_id:
             raise HTTPException(status_code=400, detail="mechine_type_id is required")
 
+        shed_type_raw = payload.get("shed_type")
+        shed_type = (
+            str(shed_type_raw).strip()
+            if shed_type_raw not in (None, "")
+            else None
+        )
+
         new_mechine_master = MachineMst(
             dept_id=dept_id,
             machine_name=mechine_name,
@@ -326,6 +333,7 @@ async def mechine_master_create(
             mech_shr_code=payload.get("mech_shr_code"),
             line_no=_to_int(payload.get("line_no")),
             no_of_mechines=_to_int(payload.get("no_of_mechines")),
+            shed_type=shed_type,
         )
         db.add(new_mechine_master)
         db.commit()
@@ -385,6 +393,12 @@ async def mechine_master_edit(
             machine.line_no = int(payload["line_no"]) if payload["line_no"] not in (None, "") else None
         if "no_of_mechines" in payload:
             machine.no_of_mechines = int(payload["no_of_mechines"]) if payload["no_of_mechines"] not in (None, "") else None
+        if "shed_type" in payload:
+            machine.shed_type = (
+                str(payload["shed_type"]).strip()
+                if payload["shed_type"] not in (None, "")
+                else None
+            )
 
         machine.updated_by = int(user_id) if user_id and str(user_id).isdigit() else machine.updated_by
         machine.updated_date_time = datetime.utcnow()

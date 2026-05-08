@@ -191,6 +191,7 @@ class MachineMst(Base):
     mech_shr_code = Column(String(100), nullable=True)
     line_no = Column(Integer, nullable=True)
     no_of_mechines = Column(Integer, nullable=True)
+    shed_type = Column(String(50), nullable=True)
 
     # relationships
   #  dept = relationship("DeptMst", foreign_keys=[dept_id])

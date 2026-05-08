@@ -591,10 +591,11 @@ def get_mechine_master(co_id: int = None, branch_ids: list = None):
          mm.mech_posting_code,
          mm.mech_shr_code,
          mm.line_no,
-         mm.no_of_mechines
-  from machine_mst mm 
-  left join machine_type_mst mtm on mm.machine_type_id = mtm.machine_type_id  
-  left join dept_mst dm on dm.dept_id = mm.dept_id 
+         mm.no_of_mechines,
+         mm.shed_type
+  from machine_mst mm
+  left join machine_type_mst mtm on mm.machine_type_id = mtm.machine_type_id
+  left join dept_mst dm on dm.dept_id = mm.dept_id
   left join branch_mst bm on bm.branch_id = dm.branch_id
   WHERE (
     :search IS NULL OR
@@ -603,7 +604,8 @@ def get_mechine_master(co_id: int = None, branch_ids: list = None):
     mtm.machine_type_name LIKE :search OR
     dm.dept_code LIKE :search OR
     dm.dept_desc LIKE :search OR
-    bm.branch_name LIKE :search
+    bm.branch_name LIKE :search OR
+    mm.shed_type LIKE :search
   )
     {branch_filter}
   """
@@ -641,7 +643,8 @@ def get_mechine_master_view(co_id: int = None, mechine_master_id = None):
            mm.mech_posting_code,
            mm.mech_shr_code,
            mm.line_no,
-           mm.no_of_mechines
+           mm.no_of_mechines,
+           mm.shed_type
     from machine_mst mm
     left join machine_type_mst mtm on mm.machine_type_id = mtm.machine_type_id
     left join dept_mst dm on dm.dept_id = mm.dept_id
