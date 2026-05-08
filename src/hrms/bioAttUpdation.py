@@ -1835,12 +1835,8 @@ ETRACK_INSERT_SQL = text(
     INSERT INTO bio_attendance_table
         (bio_att_log_id, emp_code, emp_anme, bio_id, log_date,
          device_direction, device_id)
-    SELECT :bio_att_log_id, :emp_code, :emp_anme, :bio_id, :log_date,
-           :device_direction, :device_id
-    WHERE NOT EXISTS (
-        SELECT 1 FROM bio_attendance_table b
-        WHERE b.bio_att_log_id = :bio_att_log_id
-    )
+    VALUES (:bio_att_log_id, :emp_code, :emp_anme, :bio_id, :log_date,
+            :device_direction, :device_id)
     """
 )
 
@@ -1851,23 +1847,26 @@ async def bio_att_etrack(
     db: Session = Depends(get_tenant_db),
     token_data: dict = Depends(get_current_user_with_refresh),
 ):
-    """Auto-incremental transfer of punches from the Etrack SQL Server to
-    bio_attendance_table.
+    """Transfer of punches from the Etrack SQL Server to bio_attendance_table.
 
-    The transfer range is determined automatically from the latest record
-    already in bio_attendance_table:
-        - last_log_date     = MAX(log_date)
-        - last_log_id       = MAX(bio_att_log_id) within last_log_date's month
-                              (DeviceLogIds restart per monthly source table)
+    Two modes:
 
-    The transfer then spans every monthly DeviceLogs_<m>_<y> table from the
-    last log's month up to today's month:
-        - Start month   : DeviceLogId > last_log_id
-        - Later months  : all rows
-    If bio_attendance_table is empty, only today's month is pulled (full).
+    1. Single-day mode — when `tran_date` is supplied:
+           Fetches every row whose CONVERT(DATE, dl.LogDate) = tran_date from
+           that day's monthly DeviceLogs_<m>_<y> table. No lower bound from
+           prior records is applied — the entire selected day is pulled.
+
+    2. Auto-incremental mode — when `tran_date` is omitted:
+           The transfer range starts from MAX(log_date) in bio_attendance_table
+           and spans every monthly DeviceLogs_<m>_<y> table from that month up
+           to today's month, capped at dl.LogDate < (today + 1).
+               - Start month  : dl.LogDate > last_log_date
+               - Later months : all rows (still capped at today + 1)
+           If bio_attendance_table is empty, only today's month is pulled.
 
     Body / query param (optional):
         company_id : Etrack CompanyId to filter on (default = 2)
+        tran_date  : YYYY-MM-DD — switches to single-day mode
 
     De-dup key on the MySQL side: bio_att_log_id (= SQL Server DeviceLogId).
     """
@@ -1885,6 +1884,21 @@ async def bio_att_etrack(
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid company_id")
 
+        # Optional override for the upper bound of the transfer range. When
+        # omitted or blank, falls back to today.
+        tran_date_raw = body.get("tran_date") or qp.get("tran_date")
+        tran_date_override: date | None = None
+        if tran_date_raw:
+            try:
+                tran_date_override = datetime.strptime(
+                    str(tran_date_raw), "%Y-%m-%d",
+                ).date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid tran_date {tran_date_raw!r}, expected YYYY-MM-DD",
+                )
+
         # Lazy import so the rest of the module still works without pyodbc.
         try:
             from src.hrms.etrack_conn import (
@@ -1900,7 +1914,7 @@ async def bio_att_etrack(
         # ------------------------------------------------------------------
         # Determine the auto-incremental start point.
         # ------------------------------------------------------------------
-        today = date.today()
+        today = tran_date_override or date.today()
 
         last_log_row = db.execute(
             text(
@@ -1911,48 +1925,62 @@ async def bio_att_etrack(
         last_log_date_dt = last_log_row["max_log_date"] if last_log_row else None
 
         if last_log_date_dt is None:
-            # No prior data: start from today's month, take everything in it.
+            # No prior data: start from selected day's month, take everything
+            # in it (still capped at end_exclusive below).
             start_month_date = today.replace(day=1)
-            last_log_id = 0
+            last_log_dt: datetime | None = None
             from_log_date_iso: str | None = None
         else:
-            last_log_d = (
-                last_log_date_dt.date()
-                if isinstance(last_log_date_dt, datetime)
-                else last_log_date_dt
-            )
+            if isinstance(last_log_date_dt, datetime):
+                last_log_dt = last_log_date_dt
+                last_log_d = last_log_date_dt.date()
+            else:
+                last_log_dt = datetime.combine(last_log_date_dt, dt_time.min)
+                last_log_d = last_log_date_dt
             start_month_date = last_log_d.replace(day=1)
-            id_row = db.execute(
-                text(
-                    "SELECT MAX(bio_att_log_id) AS max_id "
-                    "FROM bio_attendance_table "
-                    "WHERE YEAR(log_date) = :y AND MONTH(log_date) = :m"
-                ),
-                {"y": start_month_date.year, "m": start_month_date.month},
-            ).mappings().first()
-            last_log_id = (
-                int(id_row["max_id"])
-                if id_row and id_row["max_id"] is not None
-                else 0
-            )
             from_log_date_iso = (
                 last_log_date_dt.isoformat()
                 if hasattr(last_log_date_dt, "isoformat")
                 else str(last_log_date_dt)
             )
 
-        # Build the list of months from start_month_date through today.
+        # When a specific tran_date is supplied, fetch only that single day
+        # from its monthly table, filtered by dl.DeviceLogId > last_id_for_day
+        # so we incrementally pick up new punches for that date.
+        # Otherwise, build the list of months from start_month_date through
+        # today and let the per-month filters (last_log_dt + end_exclusive)
+        # define the range.
+        single_day_mode = tran_date_override is not None
+        last_log_id_for_day = 0
+        if single_day_mode:
+            id_row = db.execute(
+                text(
+                    "SELECT MAX(bio_att_log_id) AS max_id "
+                    "FROM bio_attendance_table "
+                    "WHERE DATE(log_date) = :d"
+                ),
+                {"d": today},
+            ).mappings().first()
+            last_log_id_for_day = (
+                int(id_row["max_id"])
+                if id_row and id_row["max_id"] is not None
+                else 0
+            )
+
         months: list[date] = []
-        cursor_month = start_month_date
-        end_month = today.replace(day=1)
-        while cursor_month <= end_month:
-            months.append(cursor_month)
-            if cursor_month.month == 12:
-                cursor_month = date(cursor_month.year + 1, 1, 1)
-            else:
-                cursor_month = date(
-                    cursor_month.year, cursor_month.month + 1, 1
-                )
+        if single_day_mode:
+            months.append(today.replace(day=1))
+        else:
+            cursor_month = start_month_date
+            end_month = today.replace(day=1)
+            while cursor_month <= end_month:
+                months.append(cursor_month)
+                if cursor_month.month == 12:
+                    cursor_month = date(cursor_month.year + 1, 1, 1)
+                else:
+                    cursor_month = date(
+                        cursor_month.year, cursor_month.month + 1, 1
+                    )
 
         # ------------------------------------------------------------------
         # Fetch from each monthly DeviceLogs table.
@@ -1969,13 +1997,37 @@ async def bio_att_etrack(
         total_inserted = 0
         per_table: list[dict] = []
 
+        # Upper-bound LogDate (exclusive) — caps the transfer at the end of
+        # the selected day (tran_date_override) or today.
+        end_exclusive = today + timedelta(days=1)
+
+        # ------------------------------------------------------------------
+        # CSV dump of every row fetched from SQL Server (raw, before any
+        # transformation). One file per request under exports/etrack/.
+        # ------------------------------------------------------------------
+        co_id_for_path = (qp.get("co_id") or "unknown").replace("/", "_")
+        csv_dir = os.path.join("exports", "etrack")
+        os.makedirs(csv_dir, exist_ok=True)
+        csv_filename = (
+            f"{co_id_for_path}_{today.isoformat()}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        csv_path = os.path.abspath(os.path.join(csv_dir, csv_filename))
+        csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow([
+            "DeviceLogId", "DeviceId", "UserId", "LogDate", "Direction",
+            "EmployeeId", "EmployeeCode", "EmployeeName", "CompanyId",
+            "source_table",
+        ])
+
         try:
             cur = sconn.cursor()
             for idx, m_date in enumerate(months):
                 table_name = device_logs_table_name(m_date)
                 is_start_month = (idx == 0)
 
-                if is_start_month and last_log_id > 0:
+                if single_day_mode:
                     sql = (
                         f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
                         f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
@@ -1983,10 +2035,24 @@ async def bio_att_etrack(
                         f"FROM dbo.{table_name} dl "
                         f"LEFT JOIN dbo.Employees em "
                         f"  ON em.EmployeeCodeInDevice = dl.UserId "
-                        f"WHERE dl.DeviceLogId > ? "
-                        f"  AND em.CompanyId = ?"
+                        f"WHERE em.CompanyId = ? "
+                        f"  AND dl.DeviceLogId > ? "
+                        f"  AND CONVERT(DATE, dl.LogDate) = ?"
                     )
-                    params_args: tuple = (last_log_id, company_id)
+                    params_args: tuple = (company_id, last_log_id_for_day, today)
+                elif is_start_month and last_log_dt is not None:
+                    sql = (
+                        f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
+                        f"       dl.Direction, em.EmployeeId, em.EmployeeCode, "
+                        f"       em.EmployeeName, em.CompanyId "
+                        f"FROM dbo.{table_name} dl "
+                        f"LEFT JOIN dbo.Employees em "
+                        f"  ON em.EmployeeCodeInDevice = dl.UserId "
+                        f"WHERE dl.LogDate > ? "
+                        f"  AND em.CompanyId = ? "
+                        f"  AND dl.LogDate < ?"
+                    )
+                    params_args = (last_log_dt, company_id, end_exclusive)
                 else:
                     sql = (
                         f"SELECT dl.DeviceLogId, dl.DeviceId, dl.UserId, dl.LogDate, "
@@ -1995,10 +2061,10 @@ async def bio_att_etrack(
                         f"FROM dbo.{table_name} dl "
                         f"LEFT JOIN dbo.Employees em "
                         f"  ON em.EmployeeCodeInDevice = dl.UserId "
-                        f"WHERE em.CompanyId = ?"
+                        f"WHERE em.CompanyId = ? "
+                        f"  AND dl.LogDate < ?"
                     )
-                    params_args = (company_id,)
-
+                    params_args = (company_id, end_exclusive)
                 try:
                     cur.execute(sql, *params_args)
                     src_rows = cur.fetchall()
@@ -2007,49 +2073,88 @@ async def bio_att_etrack(
                         status_code=500,
                         detail=f"Etrack query failed on {table_name}: {e}",
                     )
-
+                print(sql)
+                print(f"[bio_att_etrack] Executed on {table_name} with params {params_args}", flush=True)
                 fetched = len(src_rows)
+                print(f"[bio_att_etrack]  == {table_name}: fetched {fetched} row(s)", flush=True)
                 inserted = 0
+                BATCH_SIZE = 500
+                batch: list[dict] = []
+
+                def _flush_batch() -> int:
+                    if not batch:
+                        return 0
+                    try:
+                        res = db.execute(ETRACK_INSERT_SQL, batch)
+                        flushed = int(res.rowcount or 0)
+                        if flushed < 0:
+                            flushed = len(batch)
+                    except Exception as e:
+                        print(
+                            f"[bio_att_etrack] batch insert failed ({len(batch)} rows) on "
+                            f"{table_name}: {e}. Falling back to row-by-row.",
+                            flush=True,
+                        )
+                        flushed = 0
+                        for p in batch:
+                            try:
+                                r2 = db.execute(ETRACK_INSERT_SQL, p)
+                                flushed += int(r2.rowcount or 0)
+                            except Exception as e2:
+                                print(
+                                    f"[bio_att_etrack] insert failed for "
+                                    f"DeviceLogId={p['bio_att_log_id']}: {e2}",
+                                    flush=True,
+                                )
+                    batch.clear()
+                    return flushed
 
                 for r in src_rows:
-                    direction = (
-                        str(r.Direction).strip().lower()
-                        if r.Direction is not None else None
-                    )
-                    if direction and len(direction) > 10:
-                        direction = direction[:10]
+                    # CSV: dump every fetched row as-is (raw values).
+                    csv_writer.writerow([
+                        r.DeviceLogId, r.DeviceId, r.UserId, r.LogDate,
+                        r.Direction, r.EmployeeId, r.EmployeeCode,
+                        r.EmployeeName, r.CompanyId, table_name,
+                    ])
 
                     params = {
-                        "bio_att_log_id": int(r.DeviceLogId) if r.DeviceLogId is not None else None,
-                        "emp_code": (str(r.EmployeeCode) if r.EmployeeCode is not None else None),
-                        "emp_anme": (str(r.EmployeeName) if r.EmployeeName is not None else None),
-                        "bio_id": int(r.UserId) if r.UserId is not None else None,
+                        "bio_att_log_id": r.DeviceLogId,
+                        "emp_code": r.EmployeeCode,
+                        "emp_anme": r.EmployeeName,
+                        "bio_id": r.UserId,
                         "log_date": r.LogDate,
-                        "device_direction": direction,
-                        "device_id": int(r.DeviceId) if r.DeviceId is not None else None,
+                        "device_direction": r.Direction,
+                        "device_id": r.DeviceId,
                     }
                     if params["bio_att_log_id"] is None:
                         continue
-                    try:
-                        res = db.execute(ETRACK_INSERT_SQL, params)
-                        inserted += int(res.rowcount or 0)
-                    except Exception as e:
-                        print(
-                            f"[bio_att_etrack] insert failed for DeviceLogId={params['bio_att_log_id']}: {e}",
-                            flush=True,
-                        )
+                    batch.append(params)
+                    if len(batch) >= BATCH_SIZE:
+                        inserted += _flush_batch()
 
+                inserted += _flush_batch()
+                print(f"[bio_att_etrack] {table_name}: inserted {inserted} row(s)", flush=True)
                 total_fetched += fetched
                 total_inserted += inserted
+                if single_day_mode:
+                    per_from = today.isoformat()
+                elif is_start_month:
+                    per_from = from_log_date_iso
+                else:
+                    per_from = None
                 per_table.append({
                     "table": table_name,
-                    "from_log_id": last_log_id if is_start_month else 0,
+                    "from_log_date": per_from,
                     "fetched": fetched,
                     "inserted": inserted,
                 })
         finally:
             try:
                 sconn.close()
+            except Exception:
+                pass
+            try:
+                csv_file.close()
             except Exception:
                 pass
 
@@ -2089,8 +2194,9 @@ async def bio_att_etrack(
 
         return {
             "status": "ok",
-            "from_log_date": from_log_date_iso,
-            "from_log_id": last_log_id,
+            "from_log_date": (
+                today.isoformat() if single_day_mode else from_log_date_iso
+            ),
             "tran_date": today.isoformat(),
             "company_id": company_id,
             "source_table": source_table,
@@ -2098,6 +2204,7 @@ async def bio_att_etrack(
             "fetched": total_fetched,
             "inserted": total_inserted,
             "duplicates": duplicates,
+            "csv_path": csv_path,
             "linked": {
                 "eb_id": link_counts.get("E", 0),
                 "device_id": link_counts.get("B", 0),
@@ -2301,6 +2408,497 @@ def _resolve_dept_desig(db: Session) -> dict:
     result["fallback_official"] = fallback_official
     result["no_source"] = no_source
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bprocess-specific processing. Used by /bio_att_bprocess.
+# Variant of etrack with different shift rules — cross-midnight C/C1 spell.
+#
+# Rule 1 — first_h in [5, 9]:
+#   eff = last_h - 6
+#   if eff >= 7        -> rec1 {spell:A,  type:R, working:8}
+#   elif eff in [3,7)  -> rec1 {spell:A1, type:R, working:4}
+#   O = eff - rec1.working
+#   if O >= 7          -> rec2 {spell:B,  type:O, ot:8}
+#   elif O in [3,7)    -> rec2 {spell:B1, type:O, ot:4}
+#
+# Rule 2 — first_h in (9, 13]:
+#   if span >= 3       -> rec1 {spell:A2, type:O, ot:4}
+#   if span > 4:
+#     d1 = last_h - 14
+#     if d1 >= 7       -> rec2 {spell:B,  type:R, working:8}
+#     elif d1 in [3,7) -> rec2 {spell:B1, type:R, working:4}
+#     OB = d1 - rec2.working
+#     if OB >= 7       -> rec3 {spell:C,  type:O, ot:8}
+#     elif OB in [3,7) -> rec3 {spell:C1, type:O, ot:4}
+#
+# Rule 3 — first_h > 21 AND last on next day in [00:00, 05:00]:
+#   last_ext = last_h + 24      (last on tran_date+1)
+#   eff = last_ext - 22
+#   if eff >= 7        -> rec1 {spell:C,  type:R, working:8}
+#   elif eff in [3,7)  -> rec1 {spell:C1, type:R, working:4}
+#   OC = eff - rec1.working
+#   if OC >= 7         -> rec2 {spell:A,  type:O, ot:8}
+#   elif OC in [3,7)   -> rec2 {spell:A1, type:O, ot:4}
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BPROCESS_SPELL_TIMES: dict[str, tuple[str, str]] = {
+    "A":  ("06:00:00", "14:00:00"),
+    "A1": ("06:00:00", "14:00:00"),
+    "A2": ("09:00:00", "13:00:00"),
+    "B":  ("14:00:00", "22:00:00"),
+    "B1": ("14:00:00", "22:00:00"),
+    "C":  ("22:00:00", "06:00:00"),
+    "C1": ("22:00:00", "06:00:00"),
+}
+
+FETCH_BPROCESS_PUNCHES_SQL = text(
+    """
+    SELECT b.eb_id,
+           b.bio_att_log_id,
+           b.dept_id,
+           b.desig_id,
+           DATE(b.log_date)   AS punch_date,
+           TIME(b.log_date)   AS punch_time,
+           b.log_date         AS log_date,
+           b.device_direction AS device_direction
+    FROM bio_attendance_table b
+    WHERE b.eb_id     IS NOT NULL
+      AND b.dept_id   IS NOT NULL
+      AND b.desig_id  IS NOT NULL
+      AND b.device_id IS NOT NULL
+      AND (
+            DATE(b.log_date) = :tran_date
+         OR (DATE(b.log_date) = DATE_ADD(:tran_date, INTERVAL 1 DAY)
+             AND TIME(b.log_date) <= '06:00:00')
+      )
+    ORDER BY b.eb_id, b.log_date
+    """
+)
+
+
+def _bprocess_records_for_employee(
+    first_h: float, last_h: float, span: float, last_h_extended: float,
+) -> list[dict]:
+    out: list[dict] = []
+
+    # Rule 1: first entry [5, 9]
+    if 5 <= first_h <= 9:
+        eff = last_h - 6
+        rec1_working = 0.0
+        if eff >= 7:
+            out.append({"spell": "A",  "att_type": "R", "working": 8.0, "ot": 0.0})
+            rec1_working = 8.0
+        elif eff >= 3:
+            out.append({"spell": "A1", "att_type": "R", "working": 4.0, "ot": 0.0})
+            rec1_working = 4.0
+        if rec1_working > 0:
+            O = eff - rec1_working
+            if O >= 7:
+                out.append({"spell": "B",  "att_type": "O", "working": 0.0, "ot": 8.0})
+            elif O >= 3:
+                out.append({"spell": "B1", "att_type": "O", "working": 0.0, "ot": 4.0})
+
+    # Rule 2: first entry (9, 13]
+    elif 9 < first_h <= 13:
+        if span >= 3:
+            out.append({"spell": "A2", "att_type": "O", "working": 0.0, "ot": 4.0})
+        if span > 4:
+            d1 = last_h - 14
+            rec2_working = 0.0
+            if d1 >= 7:
+                out.append({"spell": "B",  "att_type": "R", "working": 8.0, "ot": 0.0})
+                rec2_working = 8.0
+            elif d1 >= 3:
+                out.append({"spell": "B1", "att_type": "R", "working": 4.0, "ot": 0.0})
+                rec2_working = 4.0
+            if rec2_working > 0:
+                OB = d1 - rec2_working
+                if OB >= 7:
+                    out.append({"spell": "C",  "att_type": "O", "working": 0.0, "ot": 8.0})
+                elif OB >= 3:
+                    out.append({"spell": "C1", "att_type": "O", "working": 0.0, "ot": 4.0})
+
+    # Rule 3: first entry > 21 with cross-midnight last
+    elif first_h > 21 and last_h_extended >= 24:
+        eff = last_h_extended - 22
+        rec1_working = 0.0
+        if eff >= 7:
+            out.append({"spell": "C",  "att_type": "R", "working": 8.0, "ot": 0.0})
+            rec1_working = 8.0
+        elif eff >= 3:
+            out.append({"spell": "C1", "att_type": "R", "working": 4.0, "ot": 0.0})
+            rec1_working = 4.0
+        if rec1_working > 0:
+            OC = eff - rec1_working
+            if OC >= 7:
+                out.append({"spell": "A",  "att_type": "O", "working": 0.0, "ot": 8.0})
+            elif OC >= 3:
+                out.append({"spell": "A1", "att_type": "O", "working": 0.0, "ot": 4.0})
+
+    return out
+
+
+# Step 1 — prior night-shift OUT carryover.
+# If yesterday's first punch was after 21:00, that employee is a night-shift
+# worker, and their OUT happens on tran_date in [00:00..06:00]. Mark the LAST
+# such punch as 'out' so it doesn't get treated as today's first IN.
+_MARK_PRIOR_NIGHT_OUT_SQL = text(
+    """
+    UPDATE bio_attendance_table b
+    JOIN (
+        SELECT t.eb_id, MAX(t.log_date) AS edge_log
+        FROM bio_attendance_table t
+        JOIN (
+            SELECT eb_id, MIN(log_date) AS first_log
+            FROM bio_attendance_table
+            WHERE eb_id IS NOT NULL
+              AND DATE(log_date) = DATE_SUB(:tran_date, INTERVAL 1 DAY)
+              AND (device_direction IS NULL OR device_direction <> 'out')
+            GROUP BY eb_id
+        ) y ON t.eb_id = y.eb_id
+        WHERE DATE(t.log_date) = :tran_date
+          AND TIME(t.log_date) <= '06:00:00'
+          AND HOUR(y.first_log) > 21
+        GROUP BY t.eb_id
+    ) m ON b.eb_id = m.eb_id AND b.log_date = m.edge_log
+    SET b.device_direction = 'out'
+    WHERE DATE(b.log_date) = :tran_date
+    """
+)
+
+# Step 2 — first IN of tran_date: earliest punch NOT already marked 'out'.
+_MARK_FIRST_IN_SQL = text(
+    """
+    UPDATE bio_attendance_table b
+    JOIN (
+        SELECT eb_id, MIN(log_date) AS edge_log
+        FROM bio_attendance_table
+        WHERE eb_id IS NOT NULL
+          AND DATE(log_date) = :tran_date
+          AND (device_direction IS NULL OR device_direction <> 'out')
+        GROUP BY eb_id
+    ) m ON b.eb_id = m.eb_id AND b.log_date = m.edge_log
+    SET b.device_direction = 'in'
+    WHERE DATE(b.log_date) = :tran_date
+    """
+)
+
+# Step 3 — day-shift OUT: last punch on tran_date when the first IN's hour
+# is <= 21. The first-IN row itself is excluded so a single-punch day stays
+# as 'in' rather than being flipped to 'out'.
+_MARK_LAST_OUT_DAY_SQL = text(
+    """
+    UPDATE bio_attendance_table b
+    JOIN (
+        SELECT p.eb_id, MAX(p.log_date) AS edge_log
+        FROM bio_attendance_table p
+        JOIN (
+            SELECT eb_id, MIN(log_date) AS first_in
+            FROM bio_attendance_table
+            WHERE eb_id IS NOT NULL
+              AND DATE(log_date) = :tran_date
+              AND (device_direction IS NULL OR device_direction <> 'out')
+            GROUP BY eb_id
+        ) f ON p.eb_id = f.eb_id
+        WHERE DATE(p.log_date) = :tran_date
+          AND HOUR(f.first_in) <= 21
+          AND p.log_date <> f.first_in
+        GROUP BY p.eb_id
+    ) m ON b.eb_id = m.eb_id AND b.log_date = m.edge_log
+    SET b.device_direction = 'out'
+    WHERE DATE(b.log_date) = :tran_date
+    """
+)
+
+# Step 4 — night-shift OUT: for employees whose first IN on tran_date is
+# after 21:00, the OUT is the LAST punch on tran_date+1 within [00:00..06:00].
+_MARK_LAST_OUT_NIGHT_SQL = text(
+    """
+    UPDATE bio_attendance_table b
+    JOIN (
+        SELECT n.eb_id, MAX(n.log_date) AS edge_log
+        FROM bio_attendance_table n
+        JOIN (
+            SELECT eb_id, MIN(log_date) AS first_in
+            FROM bio_attendance_table
+            WHERE eb_id IS NOT NULL
+              AND DATE(log_date) = :tran_date
+              AND (device_direction IS NULL OR device_direction <> 'out')
+            GROUP BY eb_id
+        ) f ON n.eb_id = f.eb_id
+        WHERE DATE(n.log_date) = DATE_ADD(:tran_date, INTERVAL 1 DAY)
+          AND TIME(n.log_date) <= '06:00:00'
+          AND HOUR(f.first_in) > 21
+        GROUP BY n.eb_id
+    ) m ON b.eb_id = m.eb_id AND b.log_date = m.edge_log
+    SET b.device_direction = 'out'
+    WHERE DATE(b.log_date) = DATE_ADD(:tran_date, INTERVAL 1 DAY)
+    """
+)
+
+
+def _process_bprocess_day(
+    db: Session,
+    *,
+    tran_date: str,
+    is_off_day: bool,
+) -> int:
+    """Insert daily_attendance_process_table rows per the Bprocess rules.
+    Punches from tran_date+1 [00:00..06:00] feed the night-shift Rule 3."""
+    # Marking pipeline (order matters):
+    #   1. Carry over yesterday's night-shift OUT into today's [00:00..06:00].
+    #   2. Mark today's first IN as the earliest punch NOT already 'out'.
+    #   3. Mark today's day-shift OUT (last punch when first IN <= 21).
+    #   4. Mark night-shift OUT on tran_date+1 (when first IN > 21).
+    db.execute(_MARK_PRIOR_NIGHT_OUT_SQL, {"tran_date": tran_date})
+    db.execute(_MARK_FIRST_IN_SQL, {"tran_date": tran_date})
+    db.execute(_MARK_LAST_OUT_DAY_SQL, {"tran_date": tran_date})
+    db.execute(_MARK_LAST_OUT_NIGHT_SQL, {"tran_date": tran_date})
+
+    rows = db.execute(
+        FETCH_BPROCESS_PUNCHES_SQL, {"tran_date": tran_date},
+    ).fetchall()
+
+    by_emp: dict[int, list[tuple]] = {}
+    for r in rows:
+        m = r._mapping
+        by_emp.setdefault(m["eb_id"], []).append((
+            str(m["punch_date"]), m["punch_time"], m["bio_att_log_id"],
+            m["dept_id"], m["desig_id"], m["log_date"],
+            m["device_direction"],
+        ))
+
+    inserted = 0
+    for eb_id, punches in by_emp.items():
+        day0 = [p for p in punches if p[0] == tran_date]
+        day1 = [p for p in punches if p[0] != tran_date]
+        if not day0:
+            continue
+
+        # Skip leading day0 rows already marked 'out' — those are the prior
+        # night shift's exit punches that landed in today's date.
+        first_idx = 0
+        while (
+            first_idx < len(day0)
+            and (day0[first_idx][6] or "").lower() == "out"
+        ):
+            first_idx += 1
+        if first_idx >= len(day0):
+            continue
+        day0 = day0[first_idx:]
+
+        first_pdate, first_time, first_bio, first_dept, first_desig, first_log_date, _ = day0[0]
+        first_sec = _to_seconds(first_time)
+        first_h   = first_sec / 3600.0
+
+        # Pick last punch + extended hour based on which rule will fire.
+        if first_h > 21 and day1:
+            last_pdate, last_time, _, _, _, last_log_date, _ = day1[-1]
+            last_sec = _to_seconds(last_time)
+            last_h   = last_sec / 3600.0
+            last_h_extended = last_h + 24.0
+            total_secs = (last_sec + 24 * 3600) - first_sec
+        else:
+            last_pdate, last_time, _, _, _, last_log_date, _ = day0[-1]
+            last_sec = _to_seconds(last_time)
+            last_h   = last_sec / 3600.0
+            last_h_extended = last_h
+            total_secs = max(0, last_sec - first_sec)
+
+        if total_secs < MIN_PAIR_SECONDS:
+            continue
+
+        span = round(last_h_extended - first_h, 4)
+
+        recs = _bprocess_records_for_employee(first_h, last_h, span, last_h_extended)
+        if not recs:
+            continue
+
+        for rec in recs:
+            att_type      = "O" if is_off_day else rec["att_type"]
+            working_hours = rec["working"]
+            ot_hours      = rec["ot"]
+            time_duration = round(working_hours + ot_hours, 2)
+            spell_start, spell_end = _BPROCESS_SPELL_TIMES.get(
+                rec["spell"], ("00:00:00", "00:00:00"),
+            )
+            db.execute(
+                INSERT_SPELL_ROW_SQL,
+                {
+                    "eb_id": int(eb_id),
+                    "bio_id": int(first_bio) if first_bio is not None else None,
+                    "dept_id": int(first_dept) if first_dept is not None else None,
+                    "desig_id": int(first_desig) if first_desig is not None else None,
+                    "tran_date": tran_date,
+                    "spell_name": rec["spell"],
+                    "attendance_type": att_type,
+                    "check_in": first_log_date,
+                    "check_out": last_log_date,
+                    "time_duration": time_duration,
+                    "working_hours": working_hours,
+                    "ot_hours": ot_hours,
+                    "spell_start": spell_start,
+                    "spell_end": spell_end,
+                    "spell_hours": SPELL_HOURS,
+                },
+            )
+            inserted += 1
+
+    print(f"[bio_att_bprocess]   -> rows inserted = {inserted}", flush=True)
+    return inserted
+
+
+@router.post("/bio_att_bprocess")
+async def bio_att_bprocess(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Same orchestration as /bio_att_etrack_process — resolve eb_id /
+    dept_id / desig_id on bio_attendance_table, then build daily rows — but
+    using the Bprocess rules (Rules #1/#2/#3 above, including cross-midnight
+    C/C1 spell)."""
+    co_id = request.query_params.get("co_id")
+    if not co_id:
+        raise HTTPException(status_code=400, detail="co_id is required")
+
+    try:
+        body: dict = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        qp = request.query_params
+
+        tran_date_raw = body.get("tran_date") or qp.get("tran_date")
+        if not tran_date_raw:
+            raise HTTPException(status_code=400, detail="tran_date is required")
+        try:
+            datetime.strptime(tran_date_raw, "%Y-%m-%d")
+            tran_date: str = tran_date_raw
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tran_date {tran_date_raw!r}, expected YYYY-MM-DD",
+            )
+
+        branch_id_raw = body.get("branch_id") or qp.get("branch_id")
+        if branch_id_raw in (None, ""):
+            raise HTTPException(status_code=400, detail="branch_id is required")
+        try:
+            branch_id = int(branch_id_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="branch_id must be an integer")
+
+        unresolved_rows = db.execute(_ETRACK_PROC_UNRESOLVED_SQL).fetchall()
+
+        resolve_result = {
+            "resolved": 0,
+            "updated": 0,
+            "from_daily_attendance": 0,
+            "fallback_official": 0,
+            "no_source": 0,
+        }
+
+        if unresolved_rows:
+            emp_eb_map: dict[str, int] = {
+                str(r.emp_code): int(r.eb_id)
+                for r in unresolved_rows
+                if r.eb_id is not None
+            }
+
+            if emp_eb_map:
+                unique_eb_ids = list(set(emp_eb_map.values()))
+
+                da_rows = db.execute(
+                    _ETRACK_PROC_LAST_DAILY_ATT_SQL,
+                    {"eb_ids": tuple(unique_eb_ids)},
+                ).fetchall()
+                da_map: dict[int, tuple] = {
+                    int(r.eb_id): (r.worked_department_id, r.worked_designation_id)
+                    for r in da_rows
+                    if r.worked_department_id is not None
+                }
+
+                missing_eb_ids = [eid for eid in unique_eb_ids if eid not in da_map]
+                official_map: dict[int, tuple] = {}
+                if missing_eb_ids:
+                    off_rows = db.execute(
+                        _ETRACK_PROC_OFFICIAL_SQL,
+                        {"eb_ids": tuple(missing_eb_ids)},
+                    ).fetchall()
+                    official_map = {
+                        int(r.eb_id): (r.dept_id, r.desig_id)
+                        for r in off_rows
+                    }
+
+                updated = 0
+                fallback_official = 0
+                no_source = 0
+
+                for emp_code, eb_id in emp_eb_map.items():
+                    if eb_id in da_map:
+                        dept_id, desig_id = da_map[eb_id]
+                    elif eb_id in official_map:
+                        dept_id, desig_id = official_map[eb_id]
+                        fallback_official += 1
+                    else:
+                        no_source += 1
+                        continue
+
+                    res = db.execute(
+                        _ETRACK_PROC_UPDATE_SQL,
+                        {
+                            "eb_id": eb_id,
+                            "dept_id": dept_id,
+                            "desig_id": desig_id,
+                            "emp_code": emp_code,
+                        },
+                    )
+                    updated += int(res.rowcount or 0)
+
+                db.commit()
+
+                resolve_result = {
+                    "resolved": len(emp_eb_map),
+                    "updated": updated,
+                    "from_daily_attendance": len(da_map),
+                    "fallback_official": fallback_official,
+                    "no_source": no_source,
+                }
+
+        is_off_row = db.execute(IS_OFF_DAY_SQL, {"tran_date": tran_date}).fetchone()
+        is_off_day = bool(is_off_row and int(is_off_row.cnt) > 0)
+
+        db.execute(DELETE_DAY_ROWS_SQL, {"tran_date": tran_date})
+        db.commit()
+
+        inserted = _process_bprocess_day(
+            db, tran_date=tran_date, is_off_day=is_off_day,
+        )
+        db.commit()
+
+        return {
+            "status": "ok",
+            "tran_date": tran_date,
+            "branch_id": branch_id,
+            "is_off_day": is_off_day,
+            "resolve": resolve_result,
+            "process": {
+                "total_inserted": inserted,
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 @router.post("/bio_att_etrack_process")
