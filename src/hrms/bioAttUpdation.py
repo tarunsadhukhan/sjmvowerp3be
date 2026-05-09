@@ -2439,10 +2439,80 @@ def _resolve_dept_desig(db: Session) -> dict:
 
 _BPROCESS_SPELL_TIMES: dict[str, tuple[str, str]] = {
     "A":  ("06:00:00", "14:00:00"),
+    "A1": ("06:00:00", "14:00:00"),
+    "A2": ("09:00:00", "13:00:00"),
     "GS": ("10:00:00", "18:00:00"),
     "B":  ("14:00:00", "22:00:00"),
+    "B1": ("14:00:00", "22:00:00"),
+    "B2": ("17:00:00", "22:00:00"),
     "C":  ("22:00:00", "06:00:00"),
+    "C1": ("22:00:00", "06:00:00"),
+    "C2": ("00:00:00", "06:00:00"),
+    "O":  ("00:00:00", "00:00:00"),
 }
+
+
+def _minutes_bucket(mins: int) -> int:
+    """Bucket per spec: >420 -> 8, [180, 420] -> 4, (0, 180) -> 0, <=0 -> -1."""
+    if mins <= 0:
+        return -1
+    if mins > 420:
+        return 8
+    if mins >= 180:
+        return 4
+    return 0
+
+
+def _spell_label_for_b_atten(
+    shift: str, kind: str, bucket: int, intime_h: float,
+) -> str:
+    """Spell label per spellcalculation.txt. `kind` is 'R' or 'O'."""
+    if shift == "A":
+        if kind == "R":
+            if bucket == 8:
+                return "A"
+            if bucket == 4:
+                return "A1" if intime_h < 9 else "A2"
+            return "A"
+        # OT
+        if bucket == 8:
+            return "B"
+        if bucket == 4:
+            return "B1"
+        return "O"
+    if shift == "B":
+        if kind == "R":
+            if bucket == 8:
+                return "B"
+            if bucket == 4:
+                return "B1" if intime_h < 17 else "B2"
+            return "B"
+        # OT
+        if bucket == 8:
+            return "C"
+        if bucket == 4:
+            return "C1"
+        return "O"
+    if shift == "C":
+        if kind == "R":
+            if bucket == 8:
+                return "C"
+            if bucket == 4:
+                if 0 <= intime_h <= 4:
+                    return "C2"
+                return "C1"
+            return "C"
+        # OT — split by intime band.
+        if bucket == 8 and intime_h > 21:
+            return "A"
+        if bucket == 4:
+            if intime_h < 19:
+                return "B2"
+            if intime_h > 21:
+                return "A1"
+        return "O"
+    # GS / unknown shifts — keep simple labels.
+    return shift if kind == "R" else "O"
 
 
 def _bprocess_shift_for(first_h: float) -> str | None:
@@ -2562,7 +2632,7 @@ FETCH_BPROCESS_PUNCHES_SQL = text(
       AND (
             DATE(b.log_date) = :tran_date
          OR (DATE(b.log_date) = DATE_ADD(:tran_date, INTERVAL 1 DAY)
-             AND TIME(b.log_date) <= '06:00:00')
+             AND TIME(b.log_date) <= '08:00:00')
       )
     ORDER BY b.eb_id, b.log_date
     """
@@ -3020,6 +3090,153 @@ async def bio_att_bprocess(
             "process": {
                 "total_inserted": inserted,
             },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+@router.post("/bio_att_b_atten")
+async def bio_att_b_atten(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    token_data: dict = Depends(get_current_user_with_refresh),
+):
+    """Project rows from `daily_attendance_basic` into
+    `daily_attendance_process_table` for the given tran_date.
+
+    Use this when the basic table has already been populated/edited and you
+    want spell rows refreshed without re-running the full bprocess pipeline.
+
+    Required body params:
+        tran_date : YYYY-MM-DD
+    """
+    co_id = request.query_params.get("co_id")
+    if not co_id:
+        raise HTTPException(status_code=400, detail="co_id is required")
+
+    try:
+        body: dict = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        qp = request.query_params
+
+        tran_date_raw = body.get("tran_date") or qp.get("tran_date")
+        if not tran_date_raw:
+            raise HTTPException(status_code=400, detail="tran_date is required")
+        try:
+            datetime.strptime(tran_date_raw, "%Y-%m-%d")
+            tran_date: str = tran_date_raw
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tran_date {tran_date_raw!r}, expected YYYY-MM-DD",
+            )
+
+        # Off-day flag drives attendance_type R vs O.
+        off_row = db.execute(IS_OFF_DAY_SQL, {"tran_date": tran_date}).first()
+        is_off_day = bool(off_row[0]) if off_row else False
+
+        # Wipe existing spell rows for the date so this is idempotent.
+        db.execute(DELETE_DAY_ROWS_SQL, {"tran_date": tran_date})
+
+        basic_rows = db.execute(
+            text(
+                """
+                SELECT eb_id, bio_id, dept_id, desig_id, shift,
+                       actual_in, actual_out,
+                       work_dur_minutes, ot_minutes, total_dur_minutes
+                FROM daily_attendance_basic
+                WHERE tran_date = :tran_date
+                """
+            ),
+            {"tran_date": tran_date},
+        ).fetchall()
+
+        inserted = 0
+        for r in basic_rows:
+            m = r._mapping
+            shift = m["shift"]
+            actual_in = m["actual_in"]
+            intime_h = (
+                actual_in.hour + actual_in.minute / 60.0 + actual_in.second / 3600.0
+                if isinstance(actual_in, datetime) else 0.0
+            )
+            work_min = int(m["work_dur_minutes"] or 0)
+            ot_min   = int(m["ot_minutes"] or 0)
+
+            common_base = {
+                "eb_id":     int(m["eb_id"]),
+                "bio_id":    int(m["bio_id"]) if m["bio_id"] is not None else None,
+                "dept_id":   int(m["dept_id"]) if m["dept_id"] is not None else None,
+                "desig_id":  int(m["desig_id"]) if m["desig_id"] is not None else None,
+                "tran_date": tran_date,
+                "check_in":   actual_in,
+                "check_out":  m["actual_out"],
+                "spell_hours": SPELL_HOURS,
+            }
+
+            # ── R (working-hours) row ──
+            r_bucket = _minutes_bucket(work_min)
+            if r_bucket >= 0:
+                spell = _spell_label_for_b_atten(shift, "R", r_bucket, intime_h)
+                spell_start, spell_end = _BPROCESS_SPELL_TIMES.get(
+                    spell, ("00:00:00", "00:00:00"),
+                )
+                db.execute(
+                    INSERT_SPELL_ROW_SQL,
+                    {
+                        **common_base,
+                        "spell_name":      spell,
+                        "attendance_type": "R",
+                        "time_duration":   r_bucket,
+                        "working_hours":   r_bucket,
+                        "ot_hours":        0,
+                        "spell_start":     spell_start,
+                        "spell_end":       spell_end,
+                    },
+                )
+                inserted += 1
+
+            # ── O (overtime) row ──
+            o_bucket = _minutes_bucket(ot_min)
+            if o_bucket >= 0:
+                spell = _spell_label_for_b_atten(shift, "O", o_bucket, intime_h)
+                spell_start, spell_end = _BPROCESS_SPELL_TIMES.get(
+                    spell, ("00:00:00", "00:00:00"),
+                )
+                db.execute(
+                    INSERT_SPELL_ROW_SQL,
+                    {
+                        **common_base,
+                        "spell_name":      spell,
+                        "attendance_type": "O",
+                        "time_duration":   o_bucket,
+                        "working_hours":   o_bucket,
+                        "ot_hours":        0,
+                        "spell_start":     spell_start,
+                        "spell_end":       spell_end,
+                    },
+                )
+                inserted += 1
+
+        db.commit()
+
+        return {
+            "status": "ok",
+            "tran_date": tran_date,
+            "is_off_day": is_off_day,
+            "basic_rows": len(basic_rows),
+            "inserted": inserted,
         }
 
     except HTTPException:
