@@ -2411,50 +2411,142 @@ def _resolve_dept_desig(db: Session) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Bprocess-specific processing. Used by /bio_att_bprocess.
-# Variant of etrack with different shift rules — cross-midnight C/C1 spell.
+# Bprocess processing. Used by /bio_att_bprocess.
 #
-# Rule 1 — first_h in [5, 9]:
-#   eff = last_h - 6
-#   if eff >= 7        -> rec1 {spell:A,  type:R, working:8}
-#   elif eff in [3,7)  -> rec1 {spell:A1, type:R, working:4}
-#   O = eff - rec1.working
-#   if O >= 7          -> rec2 {spell:B,  type:O, ot:8}
-#   elif O in [3,7)    -> rec2 {spell:B1, type:O, ot:4}
+# Mirrors eSSL Daily Attendance Detailed Report:
+#   Shift   | Sched In | Sched Out | First-IN band
+#   --------+----------+-----------+--------------
+#   A       | 06:00    | 14:00     | [04:00, 09:00)
+#   GS      | 10:00    | 18:00     | [09:00, 13:00)
+#   B       | 14:00    | 22:00     | [13:00, 18:00)
+#   C       | 22:00    | 06:00 (+1)| [21:00, 24:00)  — last OUT on tran_date+1
+#   NS      | -        | -         | no punches → Absent
 #
-# Rule 2 — first_h in (9, 13]:
-#   if span >= 3       -> rec1 {spell:A2, type:O, ot:4}
-#   if span > 4:
-#     d1 = last_h - 14
-#     if d1 >= 7       -> rec2 {spell:B,  type:R, working:8}
-#     elif d1 in [3,7) -> rec2 {spell:B1, type:R, working:4}
-#     OB = d1 - rec2.working
-#     if OB >= 7       -> rec3 {spell:C,  type:O, ot:8}
-#     elif OB in [3,7) -> rec3 {spell:C1, type:O, ot:4}
+# Per employee/day:
+#   - actual_in        = first IN on tran_date
+#   - actual_out       = last OUT (on tran_date for A/B/GS; on tran_date+1 for C)
+#   - total_dur        = actual_out - actual_in (minutes)
+#   - work_dur         = min(8h, total_dur)  -- 8h regular cap
+#   - ot               = max(0, total_dur - 8h)
+#   - late_by          = max(0, actual_in - sched_in)
+#   - early_going_by   = max(0, sched_out - actual_out)
+#   - status           = "Present" / "Present (No OutPunch)" / "Absent"
 #
-# Rule 3 — first_h > 21 AND last on next day in [00:00, 05:00]:
-#   last_ext = last_h + 24      (last on tran_date+1)
-#   eff = last_ext - 22
-#   if eff >= 7        -> rec1 {spell:C,  type:R, working:8}
-#   elif eff in [3,7)  -> rec1 {spell:C1, type:R, working:4}
-#   OC = eff - rec1.working
-#   if OC >= 7         -> rec2 {spell:A,  type:O, ot:8}
-#   elif OC in [3,7)   -> rec2 {spell:A1, type:O, ot:4}
+# When only an IN exists (No OutPunch):
+#   actual_out = scheduled out, work_dur = sched_out - actual_in (capped at 8h),
+#   ot = 0, status = "Present (No OutPunch)".
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BPROCESS_SPELL_TIMES: dict[str, tuple[str, str]] = {
     "A":  ("06:00:00", "14:00:00"),
-    "A1": ("06:00:00", "14:00:00"),
-    "A2": ("09:00:00", "13:00:00"),
+    "GS": ("10:00:00", "18:00:00"),
     "B":  ("14:00:00", "22:00:00"),
-    "B1": ("14:00:00", "22:00:00"),
     "C":  ("22:00:00", "06:00:00"),
-    "C1": ("22:00:00", "06:00:00"),
 }
+
+
+def _bprocess_shift_for(first_h: float) -> str | None:
+    """Map first-IN hour to the eSSL shift label, or None for 'NS'/no shift."""
+    if 4 <= first_h < 9:
+        return "A"
+    if 9 <= first_h < 13:
+        return "GS"
+    if 13 <= first_h < 18:
+        return "B"
+    if first_h >= 21:
+        return "C"
+    return None
+
+
+_REGULAR_WORK_SECONDS = 8 * 3600  # eSSL regular cap (8 hours)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# daily_attendance_basic — eSSL-style daily basic report row per employee/day.
+# Created lazily (CREATE TABLE IF NOT EXISTS) to avoid a separate migration.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CREATE_DAILY_BASIC_SQL = text(
+    """
+    CREATE TABLE IF NOT EXISTS daily_attendance_basic (
+        id                  INT AUTO_INCREMENT PRIMARY KEY,
+        eb_id               INT       NOT NULL,
+        emp_code            VARCHAR(32) NULL,
+        bio_id              INT       NULL,
+        dept_id             INT       NULL,
+        desig_id            INT       NULL,
+        tran_date           DATE      NOT NULL,
+        shift               VARCHAR(8) NOT NULL,
+        sched_in_time       TIME      NULL,
+        sched_out_time      TIME      NULL,
+        actual_in           DATETIME  NULL,
+        actual_out          DATETIME  NULL,
+        work_dur_minutes    INT       NOT NULL DEFAULT 0,
+        ot_minutes          INT       NOT NULL DEFAULT 0,
+        total_dur_minutes   INT       NOT NULL DEFAULT 0,
+        late_by_minutes     INT       NOT NULL DEFAULT 0,
+        early_going_minutes INT       NOT NULL DEFAULT 0,
+        status              VARCHAR(64) NOT NULL,
+        punch_records       TEXT      NULL,
+        created_at          DATETIME  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_eb_date (eb_id, tran_date)
+    )
+    """
+)
+
+_DELETE_DAILY_BASIC_SQL = text(
+    "DELETE FROM daily_attendance_basic WHERE tran_date = :tran_date"
+)
+
+_INSERT_DAILY_BASIC_SQL = text(
+    """
+    INSERT INTO daily_attendance_basic
+        (eb_id, emp_code, bio_id, dept_id, desig_id, tran_date, shift,
+         sched_in_time, sched_out_time, actual_in, actual_out,
+         work_dur_minutes, ot_minutes, total_dur_minutes,
+         late_by_minutes, early_going_minutes, status, punch_records)
+    VALUES
+        (:eb_id, :emp_code, :bio_id, :dept_id, :desig_id, :tran_date, :shift,
+         :sched_in_time, :sched_out_time, :actual_in, :actual_out,
+         :work_dur_minutes, :ot_minutes, :total_dur_minutes,
+         :late_by_minutes, :early_going_minutes, :status, :punch_records)
+    """
+)
+
+
+def _format_punch_records(
+    relevant_punches: list[tuple],
+    *,
+    no_out_punch: bool,
+    sched_out_str: str,
+) -> str:
+    """Format an employee's punches as a single comma-separated string,
+    mirroring the eSSL 'Punch Records' column.
+
+    Each entry is "HH:MM:direction(dev_<device_id>)". When there is no out
+    punch, an "(SE)" sentinel record is appended at the scheduled out time.
+    """
+    parts: list[str] = []
+    for p in relevant_punches:
+        log_dt = p[5]  # log_date
+        direction = (p[6] or "").lower() or "in"
+        if isinstance(log_dt, datetime):
+            ts = log_dt.strftime("%H:%M:%S")
+        elif isinstance(log_dt, str):
+            ts = log_dt[-8:] if len(log_dt) >= 8 else log_dt
+        else:
+            ts = str(log_dt)
+        # device_id isn't carried in the tuple — keep the format compact.
+        parts.append(f"{ts}:{direction}")
+    if no_out_punch:
+        # System-emitted out at scheduled end (matches eSSL "(SE)").
+        parts.append(f"{sched_out_str}:out(SE)")
+    return ",".join(parts)
 
 FETCH_BPROCESS_PUNCHES_SQL = text(
     """
     SELECT b.eb_id,
+           b.emp_code,
            b.bio_att_log_id,
            b.dept_id,
            b.desig_id,
@@ -2475,68 +2567,6 @@ FETCH_BPROCESS_PUNCHES_SQL = text(
     ORDER BY b.eb_id, b.log_date
     """
 )
-
-
-def _bprocess_records_for_employee(
-    first_h: float, last_h: float, span: float, last_h_extended: float,
-) -> list[dict]:
-    out: list[dict] = []
-
-    # Rule 1: first entry [5, 9]
-    if 5 <= first_h <= 9:
-        eff = last_h - 6
-        rec1_working = 0.0
-        if eff >= 7:
-            out.append({"spell": "A",  "att_type": "R", "working": 8.0, "ot": 0.0})
-            rec1_working = 8.0
-        elif eff >= 3:
-            out.append({"spell": "A1", "att_type": "R", "working": 4.0, "ot": 0.0})
-            rec1_working = 4.0
-        if rec1_working > 0:
-            O = eff - rec1_working
-            if O >= 7:
-                out.append({"spell": "B",  "att_type": "O", "working": 0.0, "ot": 8.0})
-            elif O >= 3:
-                out.append({"spell": "B1", "att_type": "O", "working": 0.0, "ot": 4.0})
-
-    # Rule 2: first entry (9, 13]
-    elif 9 < first_h <= 13:
-        if span >= 3:
-            out.append({"spell": "A2", "att_type": "O", "working": 0.0, "ot": 4.0})
-        if span > 4:
-            d1 = last_h - 14
-            rec2_working = 0.0
-            if d1 >= 7:
-                out.append({"spell": "B",  "att_type": "R", "working": 8.0, "ot": 0.0})
-                rec2_working = 8.0
-            elif d1 >= 3:
-                out.append({"spell": "B1", "att_type": "R", "working": 4.0, "ot": 0.0})
-                rec2_working = 4.0
-            if rec2_working > 0:
-                OB = d1 - rec2_working
-                if OB >= 7:
-                    out.append({"spell": "C",  "att_type": "O", "working": 0.0, "ot": 8.0})
-                elif OB >= 3:
-                    out.append({"spell": "C1", "att_type": "O", "working": 0.0, "ot": 4.0})
-
-    # Rule 3: first entry > 21 with cross-midnight last
-    elif first_h > 21 and last_h_extended >= 24:
-        eff = last_h_extended - 22
-        rec1_working = 0.0
-        if eff >= 7:
-            out.append({"spell": "C",  "att_type": "R", "working": 8.0, "ot": 0.0})
-            rec1_working = 8.0
-        elif eff >= 3:
-            out.append({"spell": "C1", "att_type": "R", "working": 4.0, "ot": 0.0})
-            rec1_working = 4.0
-        if rec1_working > 0:
-            OC = eff - rec1_working
-            if OC >= 7:
-                out.append({"spell": "A",  "att_type": "O", "working": 0.0, "ot": 8.0})
-            elif OC >= 3:
-                out.append({"spell": "A1", "att_type": "O", "working": 0.0, "ot": 4.0})
-
-    return out
 
 
 # Step 1 — prior night-shift OUT carryover.
@@ -2644,8 +2674,15 @@ def _process_bprocess_day(
     tran_date: str,
     is_off_day: bool,
 ) -> int:
-    """Insert daily_attendance_process_table rows per the Bprocess rules.
-    Punches from tran_date+1 [00:00..06:00] feed the night-shift Rule 3."""
+    """Insert eSSL-style daily rows for each employee with punches on tran_date.
+
+    Writes:
+      - daily_attendance_process_table : one spell row (A/B/C/GS).
+      - daily_attendance_basic         : one detailed row mirroring the eSSL
+                                         Daily Attendance Detailed Report.
+
+    Punches from tran_date+1 [00:00..06:00] feed the night-shift (C) OUT.
+    """
     # Marking pipeline (order matters):
     #   1. Carry over yesterday's night-shift OUT into today's [00:00..06:00].
     #   2. Mark today's first IN as the earliest punch NOT already 'out'.
@@ -2656,13 +2693,20 @@ def _process_bprocess_day(
     db.execute(_MARK_LAST_OUT_DAY_SQL, {"tran_date": tran_date})
     db.execute(_MARK_LAST_OUT_NIGHT_SQL, {"tran_date": tran_date})
 
+    # Ensure target table exists; wipe rows for this tran_date for re-run.
+    db.execute(_CREATE_DAILY_BASIC_SQL)
+    db.execute(_DELETE_DAILY_BASIC_SQL, {"tran_date": tran_date})
+
     rows = db.execute(
         FETCH_BPROCESS_PUNCHES_SQL, {"tran_date": tran_date},
     ).fetchall()
 
     by_emp: dict[int, list[tuple]] = {}
+    emp_codes: dict[int, str | None] = {}
     for r in rows:
         m = r._mapping
+        if m["eb_id"] not in emp_codes:
+            emp_codes[m["eb_id"]] = m["emp_code"]
         by_emp.setdefault(m["eb_id"], []).append((
             str(m["punch_date"]), m["punch_time"], m["bio_att_log_id"],
             m["dept_id"], m["desig_id"], m["log_date"],
@@ -2671,6 +2715,7 @@ def _process_bprocess_day(
 
     inserted = 0
     for eb_id, punches in by_emp.items():
+        emp_code = emp_codes.get(eb_id)
         day0 = [p for p in punches if p[0] == tran_date]
         day1 = [p for p in punches if p[0] != tran_date]
         if not day0:
@@ -2692,58 +2737,145 @@ def _process_bprocess_day(
         first_sec = _to_seconds(first_time)
         first_h   = first_sec / 3600.0
 
-        # Pick last punch + extended hour based on which rule will fire.
-        if first_h > 21 and day1:
-            last_pdate, last_time, _, _, _, last_log_date, _ = day1[-1]
-            last_sec = _to_seconds(last_time)
-            last_h   = last_sec / 3600.0
-            last_h_extended = last_h + 24.0
-            total_secs = (last_sec + 24 * 3600) - first_sec
+        # ---- Step 1: pick OUT punch ----
+        # Priority: if next day's first record is 'out' AND the resulting
+        # span (first_in -> that punch) is < 17h, that punch is today's OUT.
+        # Cross-midnight cases (any first_h) are caught here.
+        no_out_punch = False
+        last_sec: int | None = None
+        last_log_date = None
+        crosses_midnight = False
+
+        if day1 and (day1[0][6] or "").lower() == "out":
+            cand_sec = _to_seconds(day1[0][1]) + 24 * 3600
+            if cand_sec - first_sec < 17 * 3600:
+                last_sec = cand_sec
+                last_log_date = day1[0][5]
+                crosses_midnight = True
+
+        # ---- Step 2: classify shift ----
+        # Cross-midnight overrides band detection → always Shift C.
+        if crosses_midnight:
+            shift = "C"
         else:
-            last_pdate, last_time, _, _, _, last_log_date, _ = day0[-1]
-            last_sec = _to_seconds(last_time)
-            last_h   = last_sec / 3600.0
-            last_h_extended = last_h
-            total_secs = max(0, last_sec - first_sec)
+            shift = _bprocess_shift_for(first_h)
+            if shift is None:
+                continue  # No matching shift band → treat as NS, skip.
 
-        if total_secs < MIN_PAIR_SECONDS:
-            continue
+        sched_in_str, sched_out_str = _BPROCESS_SPELL_TIMES[shift]
+        sched_in_sec = _to_seconds(_parse_hms(sched_in_str))
+        sched_out_sec = _to_seconds(_parse_hms(sched_out_str))
+        if shift == "C":  # OUT is on next day → 06:00 + 24h.
+            sched_out_sec += 24 * 3600
 
-        span = round(last_h_extended - first_h, 4)
+        # ---- Step 3: fall back to shift-specific OUT when priority didn't hit. ----
+        if last_sec is None:
+            if shift == "C":
+                if day1:
+                    _, last_time, _, _, _, last_log_date, _ = day1[-1]
+                    last_sec = _to_seconds(last_time) + 24 * 3600
+                elif len(day0) > 1:
+                    _, last_time, _, _, _, last_log_date, _ = day0[-1]
+                    last_sec = _to_seconds(last_time)
+                else:
+                    # No OUT punch found — synthesize at scheduled out time.
+                    no_out_punch = True
+                    last_sec = sched_out_sec
+                    last_log_date = None
+            else:
+                if len(day0) > 1:
+                    _, last_time, _, _, _, last_log_date, _ = day0[-1]
+                    last_sec = _to_seconds(last_time)
+                else:
+                    no_out_punch = True
+                    last_sec = sched_out_sec
+                    last_log_date = None
 
-        recs = _bprocess_records_for_employee(first_h, last_h, span, last_h_extended)
-        if not recs:
-            continue
+        total_secs = max(0, last_sec - first_sec)
 
-        for rec in recs:
-            att_type      = "O" if is_off_day else rec["att_type"]
-            working_hours = rec["working"]
-            ot_hours      = rec["ot"]
-            time_duration = round(working_hours + ot_hours, 2)
-            spell_start, spell_end = _BPROCESS_SPELL_TIMES.get(
-                rec["spell"], ("00:00:00", "00:00:00"),
-            )
-            db.execute(
-                INSERT_SPELL_ROW_SQL,
-                {
-                    "eb_id": int(eb_id),
-                    "bio_id": int(first_bio) if first_bio is not None else None,
-                    "dept_id": int(first_dept) if first_dept is not None else None,
-                    "desig_id": int(first_desig) if first_desig is not None else None,
-                    "tran_date": tran_date,
-                    "spell_name": rec["spell"],
-                    "attendance_type": att_type,
-                    "check_in": first_log_date,
-                    "check_out": last_log_date,
-                    "time_duration": time_duration,
-                    "working_hours": working_hours,
-                    "ot_hours": ot_hours,
-                    "spell_start": spell_start,
-                    "spell_end": spell_end,
-                    "spell_hours": SPELL_HOURS,
-                },
-            )
-            inserted += 1
+        # eSSL Work/OT split.
+        if no_out_punch:
+            # No OUT punch — use sched_out as boundary; whole span is Work
+            # (no OT credit because there's no actual out-time to verify).
+            work_secs = total_secs
+            ot_secs   = 0
+        else:
+            work_secs = min(_REGULAR_WORK_SECONDS, total_secs)
+            ot_secs   = max(0, total_secs - _REGULAR_WORK_SECONDS)
+
+        late_by_secs       = max(0, first_sec - sched_in_sec)
+        early_going_secs   = (
+            0 if no_out_punch else max(0, sched_out_sec - last_sec)
+        )
+
+        if no_out_punch:
+            status = "Present (No OutPunch)"
+        else:
+            status = "Off Day Present" if is_off_day else "Present"
+
+        # ---- daily_attendance_process_table (one spell row) ----
+        att_type      = "O" if is_off_day else "R"
+        working_hours = round(work_secs / 3600.0, 2)
+        ot_hours      = round(ot_secs / 3600.0, 2)
+        time_duration = round(working_hours + ot_hours, 2)
+        spell_start, spell_end = _BPROCESS_SPELL_TIMES[shift]
+        db.execute(
+            INSERT_SPELL_ROW_SQL,
+            {
+                "eb_id":           int(eb_id),
+                "bio_id":          int(first_bio) if first_bio is not None else None,
+                "dept_id":         int(first_dept) if first_dept is not None else None,
+                "desig_id":        int(first_desig) if first_desig is not None else None,
+                "tran_date":       tran_date,
+                "spell_name":      shift,
+                "attendance_type": att_type,
+                "check_in":        first_log_date,
+                "check_out":       last_log_date,
+                "time_duration":   time_duration,
+                "working_hours":   working_hours,
+                "ot_hours":        ot_hours,
+                "spell_start":     spell_start,
+                "spell_end":       spell_end,
+                "spell_hours":     SPELL_HOURS,
+            },
+        )
+
+        # ---- daily_attendance_basic (eSSL detailed-report row) ----
+        # Build the punch_records string from today's relevant punches +
+        # any next-day punch we used for the OUT (cross-midnight / shift C).
+        relevant_punches = list(day0)
+        if crosses_midnight or shift == "C":
+            relevant_punches.extend(day1)
+        punch_records_str = _format_punch_records(
+            relevant_punches,
+            no_out_punch=no_out_punch,
+            sched_out_str=sched_out_str,
+        )
+
+        db.execute(
+            _INSERT_DAILY_BASIC_SQL,
+            {
+                "eb_id":               int(eb_id),
+                "emp_code":            emp_code,
+                "bio_id":              int(first_bio) if first_bio is not None else None,
+                "dept_id":             int(first_dept) if first_dept is not None else None,
+                "desig_id":            int(first_desig) if first_desig is not None else None,
+                "tran_date":           tran_date,
+                "shift":               shift,
+                "sched_in_time":       sched_in_str,
+                "sched_out_time":      sched_out_str,
+                "actual_in":           first_log_date,
+                "actual_out":          last_log_date,
+                "work_dur_minutes":    work_secs // 60,
+                "ot_minutes":          ot_secs // 60,
+                "total_dur_minutes":   total_secs // 60,
+                "late_by_minutes":     late_by_secs // 60,
+                "early_going_minutes": early_going_secs // 60,
+                "status":              status,
+                "punch_records":       punch_records_str,
+            },
+        )
+        inserted += 1
 
     print(f"[bio_att_bprocess]   -> rows inserted = {inserted}", flush=True)
     return inserted
