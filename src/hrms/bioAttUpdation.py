@@ -2451,7 +2451,7 @@ def _bprocess_shift_for(first_h: float) -> str | None:
         return "A"
     if 9 <= first_h < 13:
         return "GS"
-    if 13 <= first_h < 18:
+    if 13 <= first_h < 21:
         return "B"
     if first_h >= 21:
         return "C"
