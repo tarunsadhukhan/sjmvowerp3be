@@ -915,3 +915,79 @@ class JuteSqcMorrahWt(Base):
     updated_date_time: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, server_default=func.current_timestamp()
     )
+
+
+# =============================================================================
+# JUTE RECEIVED (LEGACY FLAT TABLE)
+# =============================================================================
+
+class TblJuteReceived(Base):
+    """Flat jute receipt table.
+
+    One row per receipt line. Used by the date-wise jute summary report
+    (Purchase column) — weight is summed by recv_date and branch_id.
+    """
+    __tablename__ = "tbl_jute_received"
+
+    tbl_jute_rcv_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recv_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    no_of_bales: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+
+# =============================================================================
+# DAILY SPERDER (LEGACY FLAT TABLE)
+# =============================================================================
+
+class TblDailySperder(Base):
+    """Daily sperder production / issue table.
+
+    One row per machine-spell-quality entry. Used by the date-wise jute
+    summary report (Issue column) — issue weight in kg = SUM(issue) * 60.
+    """
+    __tablename__ = "tbl_daily_sperder"
+
+    tbl_daily_sprd_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mc_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    production: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    issue: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    bin_no: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_date_time: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP, nullable=True, server_default=func.current_timestamp()
+    )
+    tran_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    spell_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    sprd_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+
+
+# =============================================================================
+# ASSORTING ENTRY (ISSUE SOURCE)
+# =============================================================================
+
+class AssortingEntry(Base):
+    """Assorting entry (issue) flat table.
+
+    One row per selector-trolly entry. Used by the jute summary / details /
+    day-wise reports as the issue source — `net_wt` is taken as the issue
+    weight directly (no multiplier), grouped by `tran_date` and joined to
+    quality via `jute_quality_id`.
+
+    Note: this table has no branch_id column, so issue is not branch-scoped.
+    """
+    __tablename__ = "assorting_entry"
+
+    tbl_daily_sel_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tran_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    selector_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    jute_quality_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    trolly_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    gross_weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tare_wt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    net_wt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

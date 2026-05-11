@@ -2002,24 +2002,23 @@ async def bio_att_etrack(
         end_exclusive = today + timedelta(days=1)
 
         # ------------------------------------------------------------------
-        # CSV dump of every row fetched from SQL Server (raw, before any
-        # transformation). One file per request under exports/etrack/.
+        # CSV dump (DISABLED). One file per request under exports/etrack/.
         # ------------------------------------------------------------------
-        co_id_for_path = (qp.get("co_id") or "unknown").replace("/", "_")
-        csv_dir = os.path.join("exports", "etrack")
-        os.makedirs(csv_dir, exist_ok=True)
-        csv_filename = (
-            f"{co_id_for_path}_{today.isoformat()}_"
-            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        )
-        csv_path = os.path.abspath(os.path.join(csv_dir, csv_filename))
-        csv_file = open(csv_path, "w", newline="", encoding="utf-8")
-        csv_writer = csv.writer(csv_file)
-        csv_writer.writerow([
-            "DeviceLogId", "DeviceId", "UserId", "LogDate", "Direction",
-            "EmployeeId", "EmployeeCode", "EmployeeName", "CompanyId",
-            "source_table",
-        ])
+        # co_id_for_path = (qp.get("co_id") or "unknown").replace("/", "_")
+        # csv_dir = os.path.join("exports", "etrack")
+        # os.makedirs(csv_dir, exist_ok=True)
+        # csv_filename = (
+        #     f"{co_id_for_path}_{today.isoformat()}_"
+        #     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # )
+        # csv_path = os.path.abspath(os.path.join(csv_dir, csv_filename))
+        # csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+        # csv_writer = csv.writer(csv_file)
+        # csv_writer.writerow([
+        #     "DeviceLogId", "DeviceId", "UserId", "LogDate", "Direction",
+        #     "EmployeeId", "EmployeeCode", "EmployeeName", "CompanyId",
+        #     "source_table",
+        # ])
 
         try:
             cur = sconn.cursor()
@@ -2110,12 +2109,12 @@ async def bio_att_etrack(
                     return flushed
 
                 for r in src_rows:
-                    # CSV: dump every fetched row as-is (raw values).
-                    csv_writer.writerow([
-                        r.DeviceLogId, r.DeviceId, r.UserId, r.LogDate,
-                        r.Direction, r.EmployeeId, r.EmployeeCode,
-                        r.EmployeeName, r.CompanyId, table_name,
-                    ])
+                    # CSV: dump every fetched row as-is (raw values). DISABLED.
+                    # csv_writer.writerow([
+                    #     r.DeviceLogId, r.DeviceId, r.UserId, r.LogDate,
+                    #     r.Direction, r.EmployeeId, r.EmployeeCode,
+                    #     r.EmployeeName, r.CompanyId, table_name,
+                    # ])
 
                     params = {
                         "bio_att_log_id": r.DeviceLogId,
@@ -2153,10 +2152,10 @@ async def bio_att_etrack(
                 sconn.close()
             except Exception:
                 pass
-            try:
-                csv_file.close()
-            except Exception:
-                pass
+            # try:
+            #     csv_file.close()
+            # except Exception:
+            #     pass
 
         db.commit()
         duplicates = max(total_fetched - total_inserted, 0)
@@ -2204,7 +2203,7 @@ async def bio_att_etrack(
             "fetched": total_fetched,
             "inserted": total_inserted,
             "duplicates": duplicates,
-            "csv_path": csv_path,
+            # "csv_path": csv_path,  # CSV dump disabled
             "linked": {
                 "eb_id": link_counts.get("E", 0),
                 "device_id": link_counts.get("B", 0),

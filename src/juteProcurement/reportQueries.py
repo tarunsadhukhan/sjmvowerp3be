@@ -173,6 +173,195 @@ def get_jute_stock_report_query():
     return text(sql)
 
 
+def get_jute_summary_report_query():
+    """
+    Date-wise jute stock summary for a given branch and date range.
+
+    Sources:
+      - Purchase: tbl_jute_received  (recv_date, weight, branch_id) — flat table.
+      - Issue:    assorting_entry (tran_date, net_wt, jute_quality_id) — flat
+                  table; net_wt is taken as the issue weight directly. Note: this
+                  table has no branch_id column, so the issue side is NOT
+                  branch-scoped.
+
+    For each date in [from_date, to_date], returns:
+      - opening: cumulative purchases - cumulative issues before that date
+      - purchase: total received weight on that date
+      - issue:    total issue weight on that date (sum of net_wt)
+      - closing:  opening + purchase - issue
+
+    Parameters: :branch_id (int), :from_date ('YYYY-MM-DD'), :to_date ('YYYY-MM-DD')
+    """
+    sql = """
+                  WITH RECURSIVE date_series AS (
+            SELECT CAST(:from_date AS DATE) AS dt
+            UNION ALL
+            SELECT DATE_ADD(dt, INTERVAL 1 DAY)
+            FROM date_series
+            WHERE dt < CAST(:to_date AS DATE)
+        ),
+        historical_open AS (
+            SELECT
+                COALESCE((
+                    SELECT SUM(r.weight)
+                    FROM tbl_jute_received r
+                    WHERE r.branch_id = :branch_id
+                      AND r.recv_date < :from_date
+                ), 0)
+                -
+                COALESCE((
+                    SELECT SUM(s.net_wt)
+                    FROM assorting_entry s
+                    WHERE s.entry_date < :from_date
+                ), 0) AS opening_bal
+        ),
+        daily_receipt AS (
+            SELECT r.recv_date AS dt,
+                   ROUND(COALESCE(SUM(r.weight), 0), 3) AS wt
+            FROM tbl_jute_received r
+            WHERE r.branch_id = :branch_id
+              AND r.recv_date BETWEEN :from_date AND :to_date
+            GROUP BY r.recv_date
+        ),
+        daily_issue AS (
+            SELECT s.entry_date AS dt,
+                   ROUND(COALESCE(SUM(s.net_wt), 0), 3) AS wt
+            FROM assorting_entry s
+            WHERE s.entry_date BETWEEN :from_date AND :to_date
+            GROUP BY s.entry_date
+        ),
+        daily AS (
+            SELECT
+                ds.dt,
+                COALESCE(dr.wt, 0) AS rcv,
+                COALESCE(di.wt, 0) AS iss
+            FROM date_series ds
+            LEFT JOIN daily_receipt dr ON dr.dt = ds.dt
+            LEFT JOIN daily_issue di ON di.dt = ds.dt
+        )
+        SELECT
+            DATE_FORMAT(d.dt, '%d-%m-%Y') AS report_date,
+            ROUND(
+                ho.opening_bal
+                + SUM(d.rcv - d.iss) OVER (ORDER BY d.dt)
+                - (d.rcv - d.iss),
+                3
+            ) AS opening,
+            d.rcv AS purchase,
+            d.iss AS issue,
+            ROUND(
+                ho.opening_bal + SUM(d.rcv - d.iss) OVER (ORDER BY d.dt),
+                3
+            ) AS closing
+        FROM daily d
+        CROSS JOIN historical_open ho
+        ORDER BY d.dt
+    """
+    print('summary report query:', sql )
+    return text(sql)
+
+
+def get_jute_details_report_query():
+    """
+    Date-wise + quality-wise jute report.
+
+    Returns one row per (date, quality) for a given branch and date range,
+    showing opening, purchase, issue and closing weights per quality.
+
+    Sources (same as summary report):
+      - tbl_jute_received  (recv_date, quality_id, weight, branch_id) for Purchase.
+      - assorting_entry (entry_date, jute_quality_id, net_wt) for Issue;
+        net_wt is taken as the issue weight directly. Note: this table has no
+        branch_id column, so the issue side is NOT branch-scoped.
+
+    Opening / closing use a running balance per quality:
+        opening[quality, day]  = hist_open[quality]
+                                + SUM(rcv - iss) OVER (PARTITION BY quality ORDER BY day) - (rcv - iss)
+        closing[quality, day]  = opening + purchase - issue
+
+    Only (date, quality) pairs with activity in the range are returned —
+    frontend can compute per-day totals across qualities.
+
+    Parameters: :branch_id (int), :from_date ('YYYY-MM-DD'), :to_date ('YYYY-MM-DD')
+    """
+    sql = """
+                WITH daily_receipt AS (
+            SELECT r.recv_date AS dt,
+                   r.quality_id,
+                   ROUND(COALESCE(SUM(r.weight), 0), 3) AS wt
+            FROM tbl_jute_received r
+            WHERE r.branch_id = :branch_id
+              AND r.recv_date BETWEEN :from_date AND :to_date
+              AND r.quality_id IS NOT NULL
+            GROUP BY r.recv_date, r.quality_id
+        ),
+        daily_issue AS (
+            SELECT s.entry_date AS dt,
+                   s.quality_id  AS quality_id,
+                   ROUND(COALESCE(SUM(s.net_wt), 0), 3) AS wt
+            FROM assorting_entry s
+            WHERE s.entry_date BETWEEN :from_date AND :to_date
+              AND s.quality_id IS NOT NULL
+            GROUP BY s.entry_date, s.quality_id
+        ),
+        day_quality AS (
+            SELECT dt, quality_id FROM daily_receipt
+            UNION
+            SELECT dt, quality_id FROM daily_issue
+        ),
+        hist_open AS (
+            SELECT quality_id, SUM(bal) AS opening_bal
+            FROM (
+                SELECT r.quality_id, SUM(r.weight) AS bal
+                FROM tbl_jute_received r
+                WHERE r.branch_id = :branch_id
+                  AND r.recv_date < :from_date
+                  AND r.quality_id IS NOT NULL
+                GROUP BY r.quality_id
+                UNION ALL
+                SELECT s.quality_id AS quality_id, -SUM(s.net_wt) AS bal
+                FROM assorting_entry s
+                WHERE s.entry_date < :from_date
+                  AND s.quality_id IS NOT NULL
+                GROUP BY s.quality_id
+            ) x
+            GROUP BY quality_id
+        ),
+        all_days AS (
+            SELECT
+                dq.dt,
+                dq.quality_id,
+                COALESCE(dr.wt, 0) AS rcv,
+                COALESCE(di.wt, 0) AS iss
+            FROM day_quality dq
+            LEFT JOIN daily_receipt dr ON dr.dt = dq.dt AND dr.quality_id = dq.quality_id
+            LEFT JOIN daily_issue di ON di.dt = dq.dt AND di.quality_id = dq.quality_id
+        )
+        SELECT
+            DATE_FORMAT(ad.dt, '%d-%m-%Y') AS report_date,
+            ad.quality_id,
+            COALESCE(jqm.jute_quality, CONCAT('Quality #', ad.quality_id)) AS quality_name,
+            ROUND(
+                COALESCE(ho.opening_bal, 0)
+                + SUM(ad.rcv - ad.iss) OVER (PARTITION BY ad.quality_id ORDER BY ad.dt)
+                - (ad.rcv - ad.iss),
+                3
+            ) AS opening,
+            ad.rcv AS purchase,
+            ad.iss AS issue,
+            ROUND(
+                COALESCE(ho.opening_bal, 0)
+                + SUM(ad.rcv - ad.iss) OVER (PARTITION BY ad.quality_id ORDER BY ad.dt),
+                3
+            ) AS closing
+        FROM all_days ad
+        LEFT JOIN hist_open ho ON ho.quality_id = ad.quality_id
+        LEFT JOIN jute_quality_mst jqm ON jqm.jute_qlty_id = ad.quality_id
+        ORDER BY ad.dt, quality_name
+    """
+    return text(sql)
+
+
 def get_batch_cost_report_query():
     """
     Query to calculate yarn quality-wise planned vs actual jute issue
