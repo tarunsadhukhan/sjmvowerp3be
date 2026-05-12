@@ -62,6 +62,8 @@ from src.juteProcurement.issue import router as jute_issue_router
 from src.juteProcurement.batchDailyAssign import router as batch_daily_assign_router
 from src.juteProcurement.reports import router as jute_reports_router
 from src.juteProduction.reports import router as spreader_reports_router
+from src.juteProduction.drawingReports import router as drawing_reports_router
+from src.juteProduction.spinningReports import router as spinning_reports_router
 from src.juteSQC.morrahWeight import router as morrah_wt_router
 from src.sales.quotation import router as quotation_router
 from src.sales.salesOrder import router as sales_order_router
@@ -170,6 +172,8 @@ app.include_router(jute_issue_router, prefix="/api/juteIssue", tags=["jute-procu
 app.include_router(batch_daily_assign_router, prefix="/api/batchDailyAssign", tags=["jute-procurement-batch-daily-assign"])
 app.include_router(jute_reports_router, prefix="/api/juteReports", tags=["jute-procurement-reports"])
 app.include_router(spreader_reports_router, prefix="/api/spreaderReports", tags=["jute-production-spreader-reports"])
+app.include_router(drawing_reports_router, prefix="/api/drawingReports", tags=["jute-production-drawing-reports"])
+app.include_router(spinning_reports_router, prefix="/api/spinningReports", tags=["jute-production-spinning-reports"])
 
 # Jute SQC routers
 app.include_router(morrah_wt_router, prefix="/api/juteSQC", tags=["jute-sqc-morrah-weight"])
