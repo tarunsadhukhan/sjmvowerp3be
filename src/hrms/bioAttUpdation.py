@@ -903,7 +903,7 @@ async def bio_att_temp_count(
 #       - tbl_offday_mst.day_off stores int 0..6 (Sun..Sat).
 #       - If the attendance_date weekday matches a day_off row -> off day.
 #       - Off day spell row: attendance_type = 'O'
-#       - Working day spell row: attendance_type = 'P'
+#       - Working day spell row: attendance_type = 'R'
 #   * Overtime split:
 #       - Only on working days.
 #       - If raw duration > 8.5h, additionally insert one row with
@@ -1568,7 +1568,7 @@ FINAL_INSERT_SQL = text(
        working_hours, idle_hours, spell, spell_hours,
        is_active, update_date_time)
     VALUES
-      (:attendance_date, :attendance_source, :attendance_type, 3,
+      (:attendance_date, :attendance_source, :attendance_type, 'P',
        :eb_id, :bio_id, :branch_id, 1,
        :worked_department_id, :worked_designation_id,
        :entry_time, :exit_time,
@@ -1687,6 +1687,25 @@ async def bio_att_final_process(
         raise HTTPException(status_code=400, detail="branch_id must be an integer")
 
     try:
+        # Per-employee off-day set — eb_ids whose weekly off matches
+        # DAYOFWEEK(tran_date). Any daily_attendance row written for one of
+        # these employees on this date gets attendance_type forced to 'O'.
+        off_eb_rows = db.execute(
+            text(
+                "SELECT eb_id FROM tbl_offday_mst "
+                "WHERE off_day = DAYOFWEEK(:tran_date) AND eb_id IS NOT NULL"
+            ),
+            {"tran_date": tran_date},
+        ).fetchall()
+        off_eb_ids: set[int] = {
+            int(r._mapping["eb_id"]) for r in off_eb_rows
+        }
+        print(
+            f"[bio_att_final_process] off-day eb_ids count = {len(off_eb_ids)} "
+            f"for tran_date={tran_date}",
+            flush=True,
+        )
+
         _log_sql("FINAL_FETCH_SQL", FINAL_FETCH_SQL, {"tran_date": tran_date})
         rows = db.execute(FINAL_FETCH_SQL, {"tran_date": tran_date}).fetchall()
         print(f"[bio_att_final_process] fetched {len(rows)} row(s)", flush=True)
@@ -1745,10 +1764,10 @@ async def bio_att_final_process(
 
             inserts: list[tuple[str, float]] = []
             if wh > 0 and ot > 0:
-                inserts.append(("P", wh))
+                inserts.append(("R", wh))
                 inserts.append(("O", ot))
             elif wh > 0:
-                inserts.append(("P", wh))
+                inserts.append(("R", wh))
             elif ot > 0:
                 inserts.append(("O", ot))
             else:
@@ -1760,14 +1779,19 @@ async def bio_att_final_process(
                 )
                 continue
 
+            eb_id_val = m.get("eb_id")
+            emp_off_day = (
+                eb_id_val is not None and int(eb_id_val) in off_eb_ids
+            )
             for att_type, hours in inserts:
+                effective_att_type = "O" if emp_off_day else att_type
                 params = {
                     **base_params,
-                    "attendance_type": att_type,
+                    "attendance_type": effective_att_type,
                     "working_hours": hours,
                 }
                 _log_sql(
-                    f"FINAL_INSERT_SQL [eb_id={m.get('eb_id')} spell={spell} type={att_type}]",
+                    f"FINAL_INSERT_SQL [eb_id={m.get('eb_id')} spell={spell} type={effective_att_type}]",
                     FINAL_INSERT_SQL, params,
                 )
                 ins_res = db.execute(FINAL_INSERT_SQL, params)
@@ -3196,7 +3220,7 @@ async def bio_att_b_atten(
                     {
                         **common_base,
                         "spell_name":      spell,
-                        "attendance_type": "R",
+                        "attendance_type": "O" if is_off_day else "R",
                         "time_duration":   r_bucket,
                         "working_hours":   r_bucket,
                         "ot_hours":        0,
@@ -3590,45 +3614,62 @@ async def wages_register(
             wh = float(m["working_hours"] or 0)
             ot = float(m["ot_hours"] or 0)
             rate = float(m["rate"] or 0)
+            att_type = (m["attendance_type"] or "").upper()
 
             shift_from_check = _shift_letter_from_check_in(m["check_in"])
             shift_letter = shift_from_check or (m["spell_name"] or "")
             if not shift_letter:
                 continue
 
-            # Working hours -> Shift cell; OT hours -> OT cell. Each row of
-            # daily_attendance_process_table can contribute to both. The "1" suffix
-            # marks a partial-bucket value (hours != 8).
-            if wh > 0:
-                shift_code = shift_letter if wh == 8 else f"{shift_letter}1"
-                existing = emp_shifts[eb_id].get(key, "")
-                emp_shifts[eb_id][key] = (
-                    f"{existing} {shift_code}".strip() if existing else shift_code
-                )
-            if ot > 0:
-                ot_code = shift_letter if ot == 8 else f"{shift_letter}1"
-                existing = emp_ot_shifts[eb_id].get(key, "")
-                emp_ot_shifts[eb_id][key] = (
-                    f"{existing} {ot_code}".strip() if existing else ot_code
-                )
+            # Route hours to the Shift vs OT cell by attendance_type, not by
+            # which numeric column holds the value. _process_b_atten stores OT
+            # rows with working_hours > 0 and ot_hours = 0 but attendance_type
+            # = 'O' — those must land in the OT cell, not the Shift cell.
+            #
+            # The "1" suffix marks a partial bucket (hours != 8).
+            if att_type == "O":
+                hrs = wh + ot
+                if hrs > 0:
+                    code = shift_letter if hrs == 8 else f"{shift_letter}1"
+                    existing = emp_ot_shifts[eb_id].get(key, "")
+                    emp_ot_shifts[eb_id][key] = (
+                        f"{existing} {code}".strip() if existing else code
+                    )
+                    emp_ot_by[eb_id][key] = round(
+                        emp_ot_by[eb_id].get(key, 0.0) + hrs, 2
+                    )
+                    emp_ot[eb_id]    += hrs
+                    emp_ot_days[eb_id].add(key)
+            else:
+                # Regular ('R' or unset): wh -> Shift cell, ot -> OT cell.
+                if wh > 0:
+                    code = shift_letter if wh == 8 else f"{shift_letter}1"
+                    existing = emp_shifts[eb_id].get(key, "")
+                    emp_shifts[eb_id][key] = (
+                        f"{existing} {code}".strip() if existing else code
+                    )
+                    emp_whrs_by[eb_id][key] = round(
+                        emp_whrs_by[eb_id].get(key, 0.0) + wh, 2
+                    )
+                    emp_whrs[eb_id]  += wh
+                    emp_p_days[eb_id].add(key)
+                if ot > 0:
+                    code = shift_letter if ot == 8 else f"{shift_letter}1"
+                    existing = emp_ot_shifts[eb_id].get(key, "")
+                    emp_ot_shifts[eb_id][key] = (
+                        f"{existing} {code}".strip() if existing else code
+                    )
+                    emp_ot_by[eb_id][key] = round(
+                        emp_ot_by[eb_id].get(key, 0.0) + ot, 2
+                    )
+                    emp_ot[eb_id]    += ot
+                    emp_ot_days[eb_id].add(key)
 
             wages = (rate / 8.0) * (wh + ot)
             emp_wages[eb_id][key] = round(
                 emp_wages[eb_id].get(key, 0.0) + wages, 2
             )
-            emp_whrs_by[eb_id][key] = round(
-                emp_whrs_by[eb_id].get(key, 0.0) + wh, 2
-            )
-            emp_ot_by[eb_id][key] = round(
-                emp_ot_by[eb_id].get(key, 0.0) + ot, 2
-            )
-            emp_whrs[eb_id]  += wh
-            emp_ot[eb_id]    += ot
             emp_total[eb_id] += wages
-            if wh > 0:
-                emp_p_days[eb_id].add(key)
-            if ot > 0:
-                emp_ot_days[eb_id].add(key)
             if rate:
                 emp_rate[eb_id] = rate
 

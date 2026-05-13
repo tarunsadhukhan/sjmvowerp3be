@@ -71,9 +71,9 @@ def get_spinning_production_eff_query():
             g.quality                                          AS quality_name,
             sm.spell_id                                        AS spell_id,
             COALESCE(sm.spell_name, CONCAT('Shift ', g.spell)) AS spell_name,
-            SUM(g.mcs)                                         AS frames,
-            ROUND(SUM(g.weight), 2)                            AS production,
-            ROUND(SUM(g.tarprod), 2)                           AS tarprod
+            COALESCE(SUM(g.mcs), 0)                            AS frames,
+            ROUND(COALESCE(SUM(g.weight), 0), 2)               AS production,
+            ROUND(COALESCE(SUM(g.tarprod), 0), 2)              AS tarprod
         FROM (
             SELECT
                 ddt.mc_id,
@@ -163,9 +163,9 @@ def get_spinning_mc_date_query():
             DATE_FORMAT(g.doff_date, '%d-%m-%Y')                    AS report_date,
             g.mc_id                                                 AS mc_id,
             COALESCE(mm.machine_name, CONCAT('Machine #', g.mc_id)) AS mc_name,
-            SUM(g.mcs)                                              AS frames,
-            ROUND(SUM(g.weight), 2)                                 AS production,
-            ROUND(SUM(g.tarprod), 2)                                AS tarprod
+            COALESCE(SUM(g.mcs), 0)                                 AS frames,
+            ROUND(COALESCE(SUM(g.weight), 0), 2)                    AS production,
+            ROUND(COALESCE(SUM(g.tarprod), 0), 2)                   AS tarprod
         FROM (
             SELECT
                 ddt.mc_id,
@@ -241,24 +241,55 @@ def get_spinning_emp_date_query():
 
 def get_spinning_frame_running_query():
     """
-    One row per frame, aggregated over the date range.
+    One row per (date, machine). Frontend pivots into date columns with
+    Hrs / Eff% sub-columns + an Overall group on the right. A "Total" row
+    is appended at the bottom that sums across machines.
 
-    Expected projection:
-        frame_id          int
-        frame_name        string
-        running_hours     numeric  — actual running hours
-        total_hours       numeric  — scheduled / available hours
-        eff               numeric  — running_hours / total_hours * 100
+    Source:
+      - tbl_daily_vvfd_transaction.mc_runs_time   raw run time
+      - machine_mst.machine_name                  display name
+
+    Running hours formula:
+        running_hours = SUM(mc_runs_time / 8)
+        (mc_runs_time is logged in minutes; dividing by 8 gives the
+         frame-equivalent hours used by the VVFD bookkeeping.)
+
+    Total hours: assumed 24 (one full day per machine) so eff% =
+    running / 24 * 100. Change the divisor below if a different schedule
+    (e.g. 16h for 2-shift, 8h for 1-shift) is the real denominator.
+
+    Projection per (date, machine):
+        report_date    string (dd-mm-YYYY)
+        mc_id          int
+        mc_name        string
+        running_hours  numeric  — SUM(mc_runs_time / 8)
+        total_hours    numeric  — fixed 24 per (date, machine)
+
+    Parameters: :branch_id (currently unused — tbl_daily_vvfd_transaction
+                may not have a branch column; add a filter if it does),
+                :from_date, :to_date ('YYYY-MM-DD')
     """
     sql = """
         SELECT
-            CAST(NULL AS UNSIGNED)        AS frame_id,
-            CAST(NULL AS CHAR)            AS frame_name,
-            0.0                            AS running_hours,
-            0.0                            AS total_hours,
-            0.0                            AS eff
-        WHERE 1 = 0
+            DATE_FORMAT(tdvt.tran_date, '%d-%m-%Y')                     AS report_date,
+            tdvt.mc_id                                                  AS mc_id,
+            COALESCE(mm.machine_name, CONCAT('Machine #', tdvt.mc_id))  AS mc_name,
+            ROUND(COALESCE(SUM(tdvt.mc_runs_time ), 0), 2)           AS running_hours,
+            ROUND(COALESCE(SUM(tdvt.mc_runs_time/8 ), 0), 2)                                                           AS total_hours
+        FROM tbl_daily_vvfd_transaction tdvt
+        LEFT JOIN machine_mst mm ON mm.machine_id = tdvt.mc_id
+        WHERE tdvt.tran_date BETWEEN :from_date AND :to_date
+        GROUP BY tdvt.mc_id, mm.machine_name, tdvt.tran_date
+        ORDER BY mm.machine_name, tdvt.tran_date
     """
+    sql="""select mc_id,machine_name mc_name,DATE_FORMAT(tran_date, '%d-%m-%Y') as report_date,sum(running_hours) running_hours,
+            sum(spellhrs) as total_hours from (
+            select mc_id,mm.machine_name,tran_date,tdvt.spell_id,(tdvt.mc_runs_time) running_hours,8 spellhrs  from tbl_daily_vvfd_transaction tdvt
+            left join machine_mst mm on mm.machine_id =tdvt.mc_id
+              WHERE tdvt.tran_date BETWEEN :from_date AND :to_date
+            ) g
+            group by mc_id,machine_name ,tran_date
+            """
     return text(sql)
 
 
